@@ -36,6 +36,35 @@ build/release/sora run build/sim/20260630 --scenario tests/scenarios/test_eba202
 #   add --parameters <file> to use customer risk parameters (plans/09_risk_parameters.md)
 ```
 
+### Vera-derived risk parameters (SORA-DS)
+
+For the CPPBank product demonstration, the starting-point risk parameters (`plans/09_risk_parameters.md`'s
+"external parameter file", source 1) are derived by `baselcalculator` ("Vera") from the same accounting book
+this repository maps, rather than hand-authored or calibrated. `tools/New-SoraDataset.ps1` runs the whole
+chain in one PowerShell 7 script - generate a CSV book, run `bcal_cli`, convert its `risk_parameters.csv` to
+`sim_risk_parameter` format, and (optionally) map and run Sora against it:
+
+```powershell
+pwsh tools/New-SoraDataset.ps1 `
+  -GeneratorRepo <cppbankrawaccgen checkout> -VeraRepo <baselcalculator checkout> `
+  -OutRoot F:/CPPBank/sora/20260630 -Seed 27 -Scale 1.0 -ReportingDate 2026-06-30 `
+  -RunSora -Scenario tests/scenarios/test_eba2025.yaml -SoraExe build/release/sora.exe `
+  -Package -CpuAffinityPercent 25
+```
+
+Pass `-DryRun` to print every command without running it (see `tools/Test-NewSoraDataset.Smoke.ps1`), and
+`-SkipGenerate`/`-SkipVera` to reuse an already-generated book or Vera output. The conversion step alone is
+also available directly:
+
+```sh
+sora-tools vera-params <bcal_cli --out-dir>/risk_parameters.csv -o sim_risk_parameter.csv --report report.json
+```
+
+It maps Vera's per-exposure PD/LGD (`pd12m_pit`, `lgd_ifrs9`, `lgd_s3`, `lrlt`) onto the SIM columns by
+`declared_stage`, passes `ccf`/`pd_reg`/`lgd_reg` through unchanged, and never fabricates a value: anything
+it cannot place is left empty and counted, never defaulted or clamped. See
+`python/sora_tools/vera_params.py` and `plans/09_risk_parameters.md`.
+
 ## Core use cases
 
 Sora can model stresses such as:
@@ -72,7 +101,7 @@ The primary target is the EBA EU-wide stress test credit-risk methodology: the 2
 |---|---|---|
 | Bank data in the Sora Input Model (SIM) | Customer, mapped with SQL | Documented schema in `schemas/sim/`. The reference source is `tests/data/20260630.7z`, mapped by `mappings/cppbank/`. See `plans/10_input_model_and_mapping.md`. |
 | Macro scenario | `docs/` (ESRB/ECB xlsx) | Converted to a normalised CSV by `tools/scenario_import` |
-| Starting-point PD / TR / LGD / LR | Customer model output, or `sora calibrate` | Not present in the dataset. See `plans/09_risk_parameters.md`. |
+| Starting-point PD / TR / LGD / LR | Customer model output, or `sora calibrate` | Not present in the dataset itself. For the CPPBank demo it is derived by `baselcalculator` ("Vera") from the same book and converted with `sora-tools vera-params` (`tools/New-SoraDataset.ps1`). See `plans/09_risk_parameters.md`. |
 | Satellite models | Customer | Macro → parameter sensitivities per segment (synthetic in tests) |
 | ECB benchmark parameters | Customer (received from ECB, confidential) | Loaded in Sora's benchmark format (synthetic in tests) |
 

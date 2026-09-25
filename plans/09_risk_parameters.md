@@ -59,6 +59,37 @@ For development and testing, all customer inputs are replaced by **synthetic equ
 
 Every parameter records its source (`external`, `derived`, `benchmark`) and the observation count. Both are reported in the output.
 
+#### Vera-derived (source 1, for the CPPBank product demonstration)
+
+For the joint `cppbankrawaccgen` / `baselcalculator` ("Vera") / Sora demonstration (SORA-DS), source 1's
+`risk_parameters.csv` is not hand-authored: it is Vera's own per-exposure output from the same accounting
+book this repository maps (`bcal_cli --book-dir <book> --out-dir <dir>`, one row per credit exposure - see
+`baselcalculator`'s `MAPPING.md` and `docs/LINEAGE.md` for how it derives PD/LGD/EAD/CCF, owner ruling
+2026-08-26). Vera is the model owner here, not Sora: `cppbankrawaccgen` never emits PD, LGD, EAD, CCF, a
+default flag or a default date (its `quarantine.py`), so a bank's own book stays the source of accounting
+FACTS and Vera stays the source of the MODEL that turns them into parameters. This is still "source 1" in
+the priority list above, functioning exactly like any other customer-supplied external file - Sora applies
+no special treatment to it once converted.
+
+`sora-tools vera-params` (`python/sora_tools/vera_params.py`) converts Vera's export to `sim_risk_parameter`:
+
+| sim_risk_parameter | from Vera's risk_parameters.csv | condition |
+|---|---|---|
+| `level`, `key` | `exposure`, `contract_id` | always |
+| `pd12m_s1`, `lgd_s1` | `pd12m_pit`, `lgd_ifrs9` | `declared_stage = stage1` |
+| `pd12m_s2`, `lgd_s2`, `lrlt_s2` | `pd12m_pit`, `lgd_ifrs9`, `lrlt` | `declared_stage = stage2` |
+| `lgd_s3` | `lgd_s3` | `declared_stage = stage3`, or `poci` with `is_defaulted` |
+| `ccf`, `pd_reg`, `lgd_reg` | same-named columns | always, independent of stage |
+| `tr1_2`, `tr2_1`, `tr3_1`, `tr3_2` | - | never: Vera's per-exposure export carries no transition-rate column; these stay empty and fall through to `sora calibrate` (source 2) via the field-wise precedence rule above |
+| `scenario`, `year`, `source` | `actual`, `0`, `external` | always |
+
+The converter never fabricates or defaults a value: a field it cannot place is left empty (never `0`,
+never clamped) and counted by reason code in its report, and it re-runs Vera's own PAR-010 range and
+stage-outflow checks (`sora::check_parameters`, `RPA-002`/`RPA-003` below) per row *before* Sora does, so
+one out-of-range exposure drops only that value rather than the whole run refusing with "no results
+written". `tools/New-SoraDataset.ps1` runs the whole chain (generate the book, run `bcal_cli`, convert,
+validate, optionally map and run Sora).
+
 ### Parameter file format
 
 ```text

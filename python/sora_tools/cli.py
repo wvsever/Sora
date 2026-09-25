@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from . import docs
 from .mapping import MappingError, run_mapping
 from .schema import lint, load_schema
 from .validate import MODULE_TABLES, validate
+from .vera_params import VeraParamsError, convert as convert_vera_params
 
 
 def _schema(args):
@@ -73,6 +75,19 @@ def cmd_scenario_import(args) -> int:
     return 0
 
 
+def cmd_vera_params(args) -> int:
+    try:
+        stats = convert_vera_params(args.input, args.output, extras_csv=args.extras,
+                                    scenario=args.scenario, year=args.year)
+    except VeraParamsError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    print(stats.to_text())
+    if args.report:
+        Path(args.report).write_text(json.dumps(stats.to_dict(), indent=2) + "\n")
+    return 1 if (args.strict and stats.has_range_violations) else 0
+
+
 def cmd_calculator_stub(args) -> int:
     from .calculator_stub import serve
     server = serve(args.mode, args.host, args.port, args.latency)
@@ -123,6 +138,16 @@ def main(argv: list[str] | None = None) -> int:
     si.add_argument("workbooks", nargs="+", help="macro-financial scenario and/or real GVA workbooks")
     si.add_argument("-o", "--output", required=True)
     si.set_defaults(func=cmd_scenario_import)
+
+    vp = sub.add_parser("vera-params", help="convert Vera's risk_parameters.csv (bcal_cli --out-dir) to sim_risk_parameter")
+    vp.add_argument("input", help="Vera's risk_parameters.csv")
+    vp.add_argument("-o", "--output", required=True, help="output sim_risk_parameter CSV path")
+    vp.add_argument("--extras", help="optional side CSV: is_defaulted/default_date/default_trigger/dpd/ead per contract")
+    vp.add_argument("--scenario", default="actual")
+    vp.add_argument("--year", type=int, default=0)
+    vp.add_argument("--report", help="write the conversion report as JSON")
+    vp.add_argument("--strict", action="store_true", help="exit 1 if any PAR-010 pre-check value was dropped")
+    vp.set_defaults(func=cmd_vera_params)
 
     c = sub.add_parser("calculator-stub", help="run the stub regulatory calculator (REST, for tests and demos)")
     c.add_argument("--mode", choices=["fixed", "formula", "faults"], default="formula")

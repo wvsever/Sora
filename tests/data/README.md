@@ -123,4 +123,26 @@ The archive is not extracted by the build. Tests extract it into the build tree 
 python tools/extract_testdata.py            # uses 7z if installed, else py7zr
 ```
 
+## How the archive is regenerated
+
+`20260630.7z` is produced by `cppbankrawaccgen` (a separate repository) run at `--scale 1.0 --seed 27` with
+`--format csv`, `--with-group-entities`, `--with-group-portfolios`, `--check-identities` and
+`--validate-output`, then staged into this layout and compressed. `tools/New-SoraDataset.ps1` runs that
+generation step (plus the Vera risk-parameter derivation described in `plans/09_risk_parameters.md`) and can
+build a fresh archive with `-Package`:
+
+```powershell
+pwsh tools/New-SoraDataset.ps1 -GeneratorRepo <cppbankrawaccgen checkout> -VeraRepo <baselcalculator checkout> `
+  -OutRoot <out> -Seed 27 -Scale 1.0 -ReportingDate 2026-06-30 -SkipVera -Package
+```
+
+`-Package` stages the generated book with `robocopy /XD`, excluding `wire/` (a directory Vera reads that
+this dataset has no use for) and, by default, the GL tables (`journal_line`, `journal_entry`, `gl_balance` -
+`tools/extract_testdata.py`'s own default, about 70% of the volume; pass `-IncludeGlTables` to keep them),
+then archives the staged tree with `7z`. Every run also writes `pipeline_manifest.json` next to the archive:
+the generator's git SHA and exact command line, seed, scale and timings, so a regenerated archive's
+provenance never has to be reconstructed from memory. Regenerating the archive is a full re-run at scale
+1.0 (tens of minutes, see the generator's own docs) - it is not a quick edit, and `-SkipVera` avoids running
+`bcal_cli` when only the book (not the risk parameters) needs regenerating.
+
 The reference mapping `mappings/cppbank/` turns the export into a SIM dataset (see `python/README.md`).
