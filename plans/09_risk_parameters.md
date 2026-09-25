@@ -37,11 +37,25 @@ Observed monthly loan stage transitions (all segments): S1→S2 2.29%, S1→S3 0
 
 ## Design
 
+### Who supplies what
+
+Sora is vendor software. The customer (the institution) runs it on its own data. Anything that is model output or supervisory material is a **customer input**. Sora defines the format and the validation, and never ships the content:
+
+| Input | Owner | Sora's role |
+|---|---|---|
+| Bank dataset | Customer | Input format, mapping, validation |
+| Starting-point PD/TR/LGD/LR | Customer (IFRS 9 / IRB models) | Import format, checks, optional derivation (`sora calibrate`) |
+| Satellite model coefficients / projected parameters | Customer | Import format, evaluation engine |
+| ECB benchmark parameters | ECB → customer, confidential, per exercise | Import format and application rules (10% rule, portfolio level, no adjustment) |
+| Macro / market scenarios | EBA / ESRB / ECB, public | Converter (`tools/scenario_import`) |
+
+For development and testing, all customer inputs are replaced by **synthetic equivalents** generated in-house: the reference dataset, derived parameters, synthetic satellite coefficients and a synthetic benchmark file. Their format matches the real inputs exactly. Real customer or supervisory content is never committed.
+
 ### Parameter sources, in priority order
 
-1. **External parameter file** (`risk_parameters.csv`): the institution's own IFRS 9 / IRB model output, per contract or per segment. This is the production path, and the only one acceptable for a real EBA submission.
-2. **Derived starting point**: `sora calibrate` estimates the parameters from the history tables above. This is the default for the reference dataset.
-3. **Benchmark fallback**: user-supplied benchmark tables (e.g. ECB benchmark PD/TR and LGD/LR per portfolio and country) for segments with no model or insufficient data. The EBA 10% coverage rule is applied per pivot asset class.
+1. **External parameter file** (`risk_parameters.csv`): the customer's own IFRS 9 / IRB model output, per contract or per segment. This is the production path, and the only one acceptable for a real EBA submission.
+2. **Derived starting point**: `sora calibrate` estimates the parameters from the history tables above. It is used for the reference dataset, for demos and onboarding, and as a challenger or plausibility check against the customer's parameters in production.
+3. **Benchmark fallback**: customer-loaded benchmark tables (e.g. the ECB benchmark PD/TR and LGD/LR per portfolio and country) for segments with no model or insufficient data. The EBA 10% coverage rule is applied per pivot asset class. The benchmark file format is Sora's own. The customer maps the ECB-provided files into it, or a per-exercise import adapter is added once a customer can share the layout (not the values).
 
 Every parameter records its source (`external`, `derived`, `benchmark`) and the observation count. Both are reported in the output.
 
@@ -112,10 +126,10 @@ Validating the engine needs expected results. None are included in the test data
 
 1. **Hand-computed unit cases** for each EBA box formula (Boxes 3–9), using a few segments with round numbers.
 2. **An independent reference implementation** (Python/DuckDB script under `tools/reference/`) that computes the calibrated parameters and the 3-year provision projection on `ref-1x`. Its output is committed as golden CSVs under `tests/golden/20260630/`.
-3. **Optional real reference results**: if the institution can supply its own starting-point parameters and a previously submitted CR_SCEN template, it is used as an end-to-end regression case.
+3. **Customer acceptance runs**: at onboarding, the customer runs Sora next to its existing stress-test process and compares the CR_SCEN output. This happens on the customer's premises. Only anonymised differences come back as regression cases, never data.
 
 ## Open questions
 
-- Are institution IFRS 9 PD/LGD/CCF values available for this dataset, or is derivation from the history the intended approach?
-- Are the ECB benchmark parameters available to load as the benchmark fallback?
-- Should IRB REA (PDreg, LGDreg, ELBE) be in scope in phase 1, or only IFRS 9 provisions?
+- Is the format of `tests/data` (the synthetic generator output) Sora's canonical input format, or do customers deliver in another layout that needs a mapping layer?
+- Which EBA exercises must be supported at the same time (2025 final, 2027 draft, later)? This decides how the methodology is versioned.
+- Should IRB/STA REA (PDreg, LGDreg, ELBE, output floor) be in scope in phase 1, or only IFRS 9 provisions?

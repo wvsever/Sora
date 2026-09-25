@@ -2,6 +2,8 @@
 
 Sora is a high-performance C++ engine for applying deterministic stress scenarios to large banking and financial datasets.
 
+Sora is a product for credit institutions (our customers). Customers run it on their own data, with their own risk models and supervisory inputs. The repository contains only the engine, formats, tools and synthetic test data.
+
 Its purpose is to transform a coherent baseline dataset into one or more stressed states while preserving accounting, contractual, and portfolio-level consistency as far as the configured scenario model allows.
 
 The design priorities are:
@@ -51,8 +53,9 @@ The primary target is the EBA EU-wide stress test credit-risk methodology: the 2
 |---|---|---|
 | Bank dataset | `tests/data/20260630.7z` (reference) | Hive-partitioned CSV, 54 tables, see `tests/data/README.md` |
 | Macro scenario | `docs/` (ESRB/ECB xlsx) | Converted to a normalised CSV by `tools/scenario_import` |
-| Starting-point PD / TR / LGD / LR | External file or `sora calibrate` | Not present in the dataset. See `plans/09_risk_parameters.md`. |
-| Satellite models / benchmarks | External | Macro → parameter sensitivities per segment |
+| Starting-point PD / TR / LGD / LR | Customer model output, or `sora calibrate` | Not present in the dataset. See `plans/09_risk_parameters.md`. |
+| Satellite models | Customer | Macro → parameter sensitivities per segment (synthetic in tests) |
+| ECB benchmark parameters | Customer (received from ECB, confidential) | Loaded in Sora's benchmark format (synthetic in tests) |
 
 ## Example scenario
 

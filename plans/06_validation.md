@@ -73,9 +73,9 @@ The test data has no expected outputs. Correctness rests on three layers:
    - the CR_SCEN-style aggregates
 
    Its outputs are committed as `tests/golden/20260630/*.csv`. The engine must match them within 1 cent per segment and year. Changes to golden files require review.
-3. **External reference (optional).** If the institution provides real starting-point parameters and a previously submitted CR_SCEN template, that pair becomes an end-to-end regression case.
+3. **Customer acceptance (on premises).** At onboarding, the customer runs Sora next to its current process on its own data, parameters and benchmarks, and compares the CR_SCEN output. Real data never enters this repository.
 
-A fixed test scenario (`tests/scenarios/test_adverse.yaml` plus macro CSV) is committed alongside the golden files. The golden results do not depend on the confidential satellite models.
+A fixed test scenario (`tests/scenarios/test_adverse.yaml` plus macro CSV) is committed alongside the golden files. The golden results depend only on synthetic inputs: the reference dataset, synthetic satellite coefficients and a synthetic ECB-style benchmark file (`tests/params/synthetic_benchmarks.csv`). The benchmark application rules (10% coverage, portfolio level, no adjustment) can therefore be tested without the confidential ECB values.
 
 ## Failure policy
 

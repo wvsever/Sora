@@ -12,7 +12,8 @@ Translate scenario definitions into fast immutable runtime rules. The primary ta
 | Sector GVA | "Real GVA by sector" xlsx | Annual GVA per country × NACE sector |
 | Market risk scenario | ECB market risk scenario xlsx | Instantaneous shocks to rates, spreads, FX, equity, commodities |
 | Corrections | ESRB corrigendum xlsx / letter | Patches to the published scenario |
-| Satellite models / benchmarks | Institution or ECB (not in repo) | Macro → PD/TR, LGD/LR per segment |
+| Satellite models | Customer (not in repo; synthetic for tests) | Macro → PD/TR, LGD/LR per segment |
+| ECB benchmark parameters | ECB → customer, confidential (not in repo; synthetic for tests) | Stressed PD/TR, LGD/LR per portfolio, country, scenario and year |
 | Starting-point parameters | `09_risk_parameters.md` | PD, TR, LGD, LR at the reference date |
 
 The xlsx files are not read by the engine. A converter (`tools/scenario_import`) turns them into a normalised long CSV. This keeps spreadsheet parsing out of the core:
