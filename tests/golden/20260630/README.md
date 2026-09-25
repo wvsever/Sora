@@ -1,0 +1,29 @@
+# Golden results: reference dataset 2026-06-30
+
+Expected outputs for the C++ engine, produced by the independent reference implementation
+(`tools/reference/sora_reference.py`) from:
+
+- the SIM dataset of the reference mapping (`mappings/cppbank` on `tests/data/20260630.7z`)
+- the fixed test scenario `tests/scenarios/test_eba2025.yaml` (EBA 2025 macro paths, synthetic satellite coefficients)
+
+| File | Content |
+|---|---|
+| `segments.csv` | Segments and starting-point stocks (EUR): exposure and provisions per stage |
+| `parameters.csv` | Calibrated starting-point parameters (`actual`, year 0) and projected parameters per scenario and year, in the `sim_risk_parameter` layout. `calibration_levels` shows which hierarchy level each part came from. |
+| `projection.csv` | Stage flows, exposures, provisions per component (EBA Boxes 3–9) and impairment per segment, scenario and year |
+| `summary.json` | Totals |
+
+The results are **synthetic and not realistic** (see `tests/data/DATASET_ISSUES.md`, DS-016). They exist to
+check that the engine computes the same numbers.
+
+Regenerate after an intended change, and review the diff:
+
+```sh
+python tools/extract_testdata.py
+sora-tools map mappings/cppbank --export build/testdata/20260630 -o build/sim/20260630
+python tools/reference/sora_reference.py --sim build/sim/20260630 \
+    --scenario tests/scenarios/test_eba2025.yaml --out tests/golden/20260630
+```
+
+Engine tolerance: money is compared per segment, scenario and year to 1 cent, or a relative 1e-12
+(whichever is larger). Parameters are compared to 1e-9.

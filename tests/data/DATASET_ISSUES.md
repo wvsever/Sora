@@ -28,6 +28,8 @@ Status: `open` until the generator is fixed. When it is, remove the workaround a
 | DS-013 | Low | Counterparty | 9 counterparties have `legal_form = natural_person` but NULL `is_natural_person`. | `counterparty` | `coalesce(is_natural_person, legal_form = 'natural_person')`. | open |
 | DS-014 | Low | NACE | NACE codes only at division level (`A01`, `G47`). No group/class, and no NACE Rev. 2.1. CR_SECTOR needs section level plus the energy-intensive manufacturing split of C. | `counterparty.nace_code` | Section derived from the first letter. | open |
 | DS-015 | Low | Default flag proxies | Loans have no days-past-due field. DPD must be derived from `contract_arrears` (oldest unpaid instalment). | `contract_loan`, `contract_arrears` | DPD derived in `sim_exposure.sql`. | open |
+| DS-016 | High | Stage transitions | Month-on-month stage churn is far too high. Loans move S1→S2 at 2.29% and S2→S3 at 7.56% per month. Annualised, that is a 12-month PD of ≈4.7% from stage 1 and ≈36.5% from stage 2 (all-portfolio). A projection calibrated on it produces impairments of several times the starting allowance even in the baseline. | `sora_reference.py` calibration, level ALL\|ALL\|ALL | None. The golden results use it as is. They are consistent but not realistic. | open |
+| DS-017 | Medium | History coverage | Debt securities and small sectors have too few stage-history observations for segment-level calibration (fall back to all-portfolio rates, dominated by retail loans). | `calibration_levels` column in `tests/golden/20260630/parameters.csv` | Hierarchical fallback. | open |
 
 ## Wishlist for the generator (not errors)
 

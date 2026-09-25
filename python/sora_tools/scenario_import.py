@@ -7,6 +7,9 @@ Supported workbooks (EBA EU-wide stress test layout, 2025 onwards):
 Every sheet has a header row with column groups ("Baseline growth (%)", "Adverse rate (%)", ...) and a
 row of years under it. Derived columns ("Cumulative growth ...", "Level of deviation ...") are skipped.
 
+Country keys are ISO 3166 alpha-2 (the ESRB's UK becomes GB). Aggregates keep the ESRB codes:
+EA (euro area), EU, WR (world), AS (Asia), LA (Latin America).
+
 Output columns: scenario, variable, measure, unit, key, tenor, sector, year, value.
 Provenance (source files, SHA-256, sheets) is written to `<output>.meta.json`.
 """
@@ -34,6 +37,10 @@ MACRO_SHEETS = {
     "Itraxx": "itraxx",
     "Exchange rates": "fx_rate",
 }
+# Variables whose rows are keyed by country (ISO 3166 alpha-2, or ESRB aggregates EA, EU, WR, AS, LA).
+COUNTRY_KEYED = {"real_gdp", "hicp", "unemployment_rate", "residential_property_prices",
+                 "commercial_property_prices", "long_term_rate", "real_gva"}
+KEY_OVERRIDES = {"UK": "GB"}   # ESRB uses UK; SIM uses ISO 3166 (GB)
 FIELDS = ["scenario", "variable", "measure", "unit", "key", "tenor", "sector", "year", "value"]
 
 
@@ -98,6 +105,10 @@ def parse_sheet(rows: list[tuple], variable: str, source: str, sheet: str, secto
             key, tenor = r[1], None
         if key is None or (variable == "swap_rate" and tenor is None):
             continue                       # unlabeled rows (checksums, footers)
+        if variable in COUNTRY_KEYED:
+            if not (isinstance(key, str) and re.fullmatch(r"[A-Z]{2}", key.strip())):
+                continue                   # helper rows (e.g. column-number rows in the GVA sheets)
+            key = KEY_OVERRIDES.get(key.strip(), key.strip())
         for j, v in values.items():
             if v is None:
                 continue

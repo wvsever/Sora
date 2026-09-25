@@ -125,6 +125,12 @@ adverse,commercial_property_prices,growth,pct,FR,,,2027,-7.497965967
 baseline,commercial_property_prices,growth,pct,FR,,,2025,0.683358328
 baseline,commercial_property_prices,growth,pct,FR,,,2026,0.541902565
 baseline,commercial_property_prices,growth,pct,FR,,,2027,0.904817304
+adverse,commercial_property_prices,growth,pct,GB,,,2025,-7.925405819
+adverse,commercial_property_prices,growth,pct,GB,,,2026,-20.148136486
+adverse,commercial_property_prices,growth,pct,GB,,,2027,-17.159757958
+baseline,commercial_property_prices,growth,pct,GB,,,2025,1.813249908
+baseline,commercial_property_prices,growth,pct,GB,,,2026,0.731195596
+baseline,commercial_property_prices,growth,pct,GB,,,2027,1.216713243
 adverse,commercial_property_prices,growth,pct,GR,,,2025,-6.145112919
 adverse,commercial_property_prices,growth,pct,GR,,,2026,-15.554168546
 adverse,commercial_property_prices,growth,pct,GR,,,2027,-10.191989747
@@ -275,12 +281,6 @@ adverse,commercial_property_prices,growth,pct,TR,,,2027,-8.519513256
 baseline,commercial_property_prices,growth,pct,TR,,,2025,4.321697956
 baseline,commercial_property_prices,growth,pct,TR,,,2026,2.657416148
 baseline,commercial_property_prices,growth,pct,TR,,,2027,7.996599402
-adverse,commercial_property_prices,growth,pct,UK,,,2025,-7.925405819
-adverse,commercial_property_prices,growth,pct,UK,,,2026,-20.148136486
-adverse,commercial_property_prices,growth,pct,UK,,,2027,-17.159757958
-baseline,commercial_property_prices,growth,pct,UK,,,2025,1.813249908
-baseline,commercial_property_prices,growth,pct,UK,,,2026,0.731195596
-baseline,commercial_property_prices,growth,pct,UK,,,2027,1.216713243
 adverse,commercial_property_prices,growth,pct,US,,,2025,-18.786833169
 adverse,commercial_property_prices,growth,pct,US,,,2026,-19.943312646
 adverse,commercial_property_prices,growth,pct,US,,,2027,-6.701938267
@@ -675,6 +675,13 @@ baseline,hicp,growth,pct,FR,,,2025,1.579749222
 baseline,hicp,growth,pct,FR,,,2026,1.651050676
 baseline,hicp,growth,pct,FR,,,2027,1.912082303
 historical,hicp,growth,pct,FR,,,2024,2.364551779
+adverse,hicp,growth,pct,GB,,,2025,4.591425478
+adverse,hicp,growth,pct,GB,,,2026,2.530901615
+adverse,hicp,growth,pct,GB,,,2027,1.481767916
+baseline,hicp,growth,pct,GB,,,2025,2.000000000
+baseline,hicp,growth,pct,GB,,,2026,2.000000000
+baseline,hicp,growth,pct,GB,,,2027,2.000000000
+historical,hicp,growth,pct,GB,,,2024,2.470000000
 adverse,hicp,growth,pct,GR,,,2025,4.359180525
 adverse,hicp,growth,pct,GR,,,2026,3.944016286
 adverse,hicp,growth,pct,GR,,,2027,2.914794503
@@ -850,13 +857,6 @@ baseline,hicp,growth,pct,TR,,,2025,24.000000000
 baseline,hicp,growth,pct,TR,,,2026,17.202665253
 baseline,hicp,growth,pct,TR,,,2027,15.270814951
 historical,hicp,growth,pct,TR,,,2024,43.000000000
-adverse,hicp,growth,pct,UK,,,2025,4.591425478
-adverse,hicp,growth,pct,UK,,,2026,2.530901615
-adverse,hicp,growth,pct,UK,,,2027,1.481767916
-baseline,hicp,growth,pct,UK,,,2025,2.000000000
-baseline,hicp,growth,pct,UK,,,2026,2.000000000
-baseline,hicp,growth,pct,UK,,,2027,2.000000000
-historical,hicp,growth,pct,UK,,,2024,2.470000000
 adverse,hicp,growth,pct,US,,,2025,5.662896221
 adverse,hicp,growth,pct,US,,,2026,3.444495526
 adverse,hicp,growth,pct,US,,,2027,1.815876411
@@ -1067,6 +1067,14 @@ baseline,long_term_rate,level,pct,FR,,,2026,3.327816750
 baseline,long_term_rate,level,pct,FR,,,2027,3.468558250
 starting_point,long_term_rate,level,pct,FR,,,2024,3.024045455
 starting_point_average,long_term_rate,level,pct,FR,,,2024,2.976145914
+adverse,long_term_rate,level,pct,GB,,,2025,5.975000000
+adverse,long_term_rate,level,pct,GB,,,2026,5.877419485
+adverse,long_term_rate,level,pct,GB,,,2027,5.729239492
+baseline,long_term_rate,level,pct,GB,,,2025,4.175000000
+baseline,long_term_rate,level,pct,GB,,,2026,4.207500000
+baseline,long_term_rate,level,pct,GB,,,2027,4.180000000
+starting_point,long_term_rate,level,pct,GB,,,2024,4.428100000
+starting_point_average,long_term_rate,level,pct,GB,,,2024,4.120941406
 adverse,long_term_rate,level,pct,GR,,,2025,5.887716750
 adverse,long_term_rate,level,pct,GR,,,2026,5.496310000
 adverse,long_term_rate,level,pct,GR,,,2027,5.240895820
@@ -1099,14 +1107,6 @@ baseline,long_term_rate,level,pct,HU,,,2026,7.040000000
 baseline,long_term_rate,level,pct,HU,,,2027,7.060000000
 starting_point,long_term_rate,level,pct,HU,,,2024,6.516470588
 starting_point_average,long_term_rate,level,pct,HU,,,2024,6.574367347
-adverse,long_term_rate,level,pct,High (weighted average),,,2025,6.373449600
-adverse,long_term_rate,level,pct,High (weighted average),,,2026,5.951531069
-adverse,long_term_rate,level,pct,High (weighted average),,,2027,5.679291281
-baseline,long_term_rate,level,pct,High (weighted average),,,2025,3.793449600
-baseline,long_term_rate,level,pct,High (weighted average),,,2026,3.946871069
-baseline,long_term_rate,level,pct,High (weighted average),,,2027,4.121670461
-starting_point,long_term_rate,level,pct,High (weighted average),,,2024,3.581412473
-starting_point_average,long_term_rate,level,pct,High (weighted average),,,2024,3.814776909
 adverse,long_term_rate,level,pct,IE,,,2025,3.799708500
 adverse,long_term_rate,level,pct,IE,,,2026,3.803258250
 adverse,long_term_rate,level,pct,IE,,,2027,3.807742975
@@ -1171,14 +1171,6 @@ baseline,long_term_rate,level,pct,LV,,,2026,3.101446750
 baseline,long_term_rate,level,pct,LV,,,2027,3.148104750
 starting_point,long_term_rate,level,pct,LV,,,2024,3.069230000
 starting_point_average,long_term_rate,level,pct,LV,,,2024,3.289339030
-adverse,long_term_rate,level,pct,Low  (weighted average),,,2025,3.641469649
-adverse,long_term_rate,level,pct,Low  (weighted average),,,2026,3.609642317
-adverse,long_term_rate,level,pct,Low  (weighted average),,,2027,3.602752839
-baseline,long_term_rate,level,pct,Low  (weighted average),,,2025,2.541469649
-baseline,long_term_rate,level,pct,Low  (weighted average),,,2026,2.626792317
-baseline,long_term_rate,level,pct,Low  (weighted average),,,2027,2.724576364
-starting_point,long_term_rate,level,pct,Low  (weighted average),,,2024,2.387879259
-starting_point_average,long_term_rate,level,pct,Low  (weighted average),,,2024,2.523830751
 adverse,long_term_rate,level,pct,MO,,,2025,3.579245848
 adverse,long_term_rate,level,pct,MO,,,2026,3.084423479
 adverse,long_term_rate,level,pct,MO,,,2027,2.942781310
@@ -1211,14 +1203,6 @@ baseline,long_term_rate,level,pct,MZ,,,2026,14.804123269
 baseline,long_term_rate,level,pct,MZ,,,2027,14.244482946
 starting_point,long_term_rate,level,pct,MZ,,,2024,15.730000000
 starting_point_average,long_term_rate,level,pct,MZ,,,2024,15.730000000
-adverse,long_term_rate,level,pct,Medium  (weighted average),,,2025,5.479955591
-adverse,long_term_rate,level,pct,Medium  (weighted average),,,2026,5.160647172
-adverse,long_term_rate,level,pct,Medium  (weighted average),,,2027,4.959655235
-baseline,long_term_rate,level,pct,Medium  (weighted average),,,2025,3.569955591
-baseline,long_term_rate,level,pct,Medium  (weighted average),,,2026,3.670847172
-baseline,long_term_rate,level,pct,Medium  (weighted average),,,2027,3.797611235
-starting_point,long_term_rate,level,pct,Medium  (weighted average),,,2024,3.456130416
-starting_point_average,long_term_rate,level,pct,Medium  (weighted average),,,2024,3.427930224
 adverse,long_term_rate,level,pct,NL,,,2025,3.732591500
 adverse,long_term_rate,level,pct,NL,,,2026,3.719050000
 adverse,long_term_rate,level,pct,NL,,,2027,3.704501725
@@ -1307,14 +1291,6 @@ baseline,long_term_rate,level,pct,SK,,,2026,3.364446750
 baseline,long_term_rate,level,pct,SK,,,2027,3.411104750
 starting_point,long_term_rate,level,pct,SK,,,2024,3.127238095
 starting_point_average,long_term_rate,level,pct,SK,,,2024,3.408885827
-adverse,long_term_rate,level,pct,Spread High- Low,,,2025,2.731979950
-adverse,long_term_rate,level,pct,Spread High- Low,,,2026,2.341888752
-adverse,long_term_rate,level,pct,Spread High- Low,,,2027,2.076538442
-baseline,long_term_rate,level,pct,Spread High- Low,,,2025,1.251979950
-baseline,long_term_rate,level,pct,Spread High- Low,,,2026,1.320078752
-baseline,long_term_rate,level,pct,Spread High- Low,,,2027,1.397094097
-starting_point,long_term_rate,level,pct,Spread High- Low,,,2024,1.193533214
-starting_point_average,long_term_rate,level,pct,Spread High- Low,,,2024,1.290946159
 adverse,long_term_rate,level,pct,TR,,,2025,36.698722157
 adverse,long_term_rate,level,pct,TR,,,2026,22.757758890
 adverse,long_term_rate,level,pct,TR,,,2027,19.294611107
@@ -1331,14 +1307,6 @@ baseline,long_term_rate,level,pct,UA,,,2026,7.599608294
 baseline,long_term_rate,level,pct,UA,,,2027,7.294624034
 starting_point,long_term_rate,level,pct,UA,,,2024,8.861022427
 starting_point_average,long_term_rate,level,pct,UA,,,2024,8.861022427
-adverse,long_term_rate,level,pct,UK,,,2025,5.975000000
-adverse,long_term_rate,level,pct,UK,,,2026,5.877419485
-adverse,long_term_rate,level,pct,UK,,,2027,5.729239492
-baseline,long_term_rate,level,pct,UK,,,2025,4.175000000
-baseline,long_term_rate,level,pct,UK,,,2026,4.207500000
-baseline,long_term_rate,level,pct,UK,,,2027,4.180000000
-starting_point,long_term_rate,level,pct,UK,,,2024,4.428100000
-starting_point_average,long_term_rate,level,pct,UK,,,2024,4.120941406
 adverse,long_term_rate,level,pct,US,,,2025,5.717941667
 adverse,long_term_rate,level,pct,US,,,2026,5.696824996
 adverse,long_term_rate,level,pct,US,,,2027,5.747895889
@@ -1510,6 +1478,13 @@ baseline,real_gdp,growth,pct,FR,,,2025,0.893288585
 baseline,real_gdp,growth,pct,FR,,,2026,1.262637110
 baseline,real_gdp,growth,pct,FR,,,2027,1.254289832
 historical,real_gdp,growth,pct,FR,,,2024,1.117070205
+adverse,real_gdp,growth,pct,GB,,,2025,-4.464817590
+adverse,real_gdp,growth,pct,GB,,,2026,-4.527287773
+adverse,real_gdp,growth,pct,GB,,,2027,-1.313012883
+baseline,real_gdp,growth,pct,GB,,,2025,1.483647653
+baseline,real_gdp,growth,pct,GB,,,2026,1.537819813
+baseline,real_gdp,growth,pct,GB,,,2027,1.456410704
+historical,real_gdp,growth,pct,GB,,,2024,1.082981892
 adverse,real_gdp,growth,pct,GR,,,2025,-1.433256624
 adverse,real_gdp,growth,pct,GR,,,2026,-4.264381283
 adverse,real_gdp,growth,pct,GR,,,2027,-0.501773023
@@ -1685,13 +1660,6 @@ baseline,real_gdp,growth,pct,TR,,,2025,2.699506215
 baseline,real_gdp,growth,pct,TR,,,2026,3.243519968
 baseline,real_gdp,growth,pct,TR,,,2027,3.401697744
 historical,real_gdp,growth,pct,TR,,,2024,3.008395851
-adverse,real_gdp,growth,pct,UK,,,2025,-4.464817590
-adverse,real_gdp,growth,pct,UK,,,2026,-4.527287773
-adverse,real_gdp,growth,pct,UK,,,2027,-1.313012883
-baseline,real_gdp,growth,pct,UK,,,2025,1.483647653
-baseline,real_gdp,growth,pct,UK,,,2026,1.537819813
-baseline,real_gdp,growth,pct,UK,,,2027,1.456410704
-historical,real_gdp,growth,pct,UK,,,2024,1.082981892
 adverse,real_gdp,growth,pct,US,,,2025,-5.054689359
 adverse,real_gdp,growth,pct,US,,,2026,-2.453754283
 adverse,real_gdp,growth,pct,US,,,2027,4.280464339
@@ -1706,13 +1674,6 @@ baseline,real_gdp,growth,pct,WR,,,2025,3.855110645
 baseline,real_gdp,growth,pct,WR,,,2026,4.205533212
 baseline,real_gdp,growth,pct,WR,,,2027,3.905449073
 historical,real_gdp,growth,pct,WR,,,2024,2.123790350
-adverse,real_gva,growth,pct,2,,A,2025,6.000000000
-adverse,real_gva,growth,pct,2,,A,2026,7.000000000
-adverse,real_gva,growth,pct,2,,A,2027,8.000000000
-baseline,real_gva,growth,pct,2,,A,2025,3.000000000
-baseline,real_gva,growth,pct,2,,A,2026,4.000000000
-baseline,real_gva,growth,pct,2,,A,2027,5.000000000
-historical,real_gva,growth,pct,2,,A,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,A,2025,-4.257116200
 adverse,real_gva,growth,pct,AT,,A,2026,-5.993187283
 adverse,real_gva,growth,pct,AT,,A,2027,0.770247956
@@ -1916,13 +1877,6 @@ baseline,real_gva,growth,pct,SK,,A,2025,2.655180194
 baseline,real_gva,growth,pct,SK,,A,2026,2.333099914
 baseline,real_gva,growth,pct,SK,,A,2027,2.883738242
 historical,real_gva,growth,pct,SK,,A,2024,3.062284402
-adverse,real_gva,growth,pct,2,,B,2025,6.000000000
-adverse,real_gva,growth,pct,2,,B,2026,7.000000000
-adverse,real_gva,growth,pct,2,,B,2027,8.000000000
-baseline,real_gva,growth,pct,2,,B,2025,3.000000000
-baseline,real_gva,growth,pct,2,,B,2026,4.000000000
-baseline,real_gva,growth,pct,2,,B,2027,5.000000000
-historical,real_gva,growth,pct,2,,B,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,B,2025,-3.435637587
 adverse,real_gva,growth,pct,AT,,B,2026,-4.809207978
 adverse,real_gva,growth,pct,AT,,B,2027,0.848797183
@@ -2126,13 +2080,6 @@ baseline,real_gva,growth,pct,SK,,B,2025,2.652874223
 baseline,real_gva,growth,pct,SK,,B,2026,2.343001484
 baseline,real_gva,growth,pct,SK,,B,2027,2.868127186
 historical,real_gva,growth,pct,SK,,B,2024,-43.345373207
-adverse,real_gva,growth,pct,2,,C_high,2025,6.000000000
-adverse,real_gva,growth,pct,2,,C_high,2026,7.000000000
-adverse,real_gva,growth,pct,2,,C_high,2027,8.000000000
-baseline,real_gva,growth,pct,2,,C_high,2025,3.000000000
-baseline,real_gva,growth,pct,2,,C_high,2026,4.000000000
-baseline,real_gva,growth,pct,2,,C_high,2027,5.000000000
-historical,real_gva,growth,pct,2,,C_high,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,C_high,2025,-5.014792543
 adverse,real_gva,growth,pct,AT,,C_high,2026,-5.301700601
 adverse,real_gva,growth,pct,AT,,C_high,2027,0.525968841
@@ -2336,13 +2283,6 @@ baseline,real_gva,growth,pct,SK,,C_high,2025,2.630255305
 baseline,real_gva,growth,pct,SK,,C_high,2026,2.309536684
 baseline,real_gva,growth,pct,SK,,C_high,2027,2.849709155
 historical,real_gva,growth,pct,SK,,C_high,2024,3.257286634
-adverse,real_gva,growth,pct,2,,C_low,2025,6.000000000
-adverse,real_gva,growth,pct,2,,C_low,2026,7.000000000
-adverse,real_gva,growth,pct,2,,C_low,2027,8.000000000
-baseline,real_gva,growth,pct,2,,C_low,2025,3.000000000
-baseline,real_gva,growth,pct,2,,C_low,2026,4.000000000
-baseline,real_gva,growth,pct,2,,C_low,2027,5.000000000
-historical,real_gva,growth,pct,2,,C_low,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,C_low,2025,-3.255696320
 adverse,real_gva,growth,pct,AT,,C_low,2026,-3.824230439
 adverse,real_gva,growth,pct,AT,,C_low,2027,1.178174622
@@ -2546,13 +2486,6 @@ baseline,real_gva,growth,pct,SK,,C_low,2025,2.524530983
 baseline,real_gva,growth,pct,SK,,C_low,2026,2.198960666
 baseline,real_gva,growth,pct,SK,,C_low,2027,2.746396414
 historical,real_gva,growth,pct,SK,,C_low,2024,-2.950692853
-adverse,real_gva,growth,pct,2,,D,2025,6.000000000
-adverse,real_gva,growth,pct,2,,D,2026,7.000000000
-adverse,real_gva,growth,pct,2,,D,2027,8.000000000
-baseline,real_gva,growth,pct,2,,D,2025,3.000000000
-baseline,real_gva,growth,pct,2,,D,2026,4.000000000
-baseline,real_gva,growth,pct,2,,D,2027,5.000000000
-historical,real_gva,growth,pct,2,,D,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,D,2025,-3.259898798
 adverse,real_gva,growth,pct,AT,,D,2026,-4.395986144
 adverse,real_gva,growth,pct,AT,,D,2027,1.282652351
@@ -2756,13 +2689,6 @@ baseline,real_gva,growth,pct,SK,,D,2025,2.652806231
 baseline,real_gva,growth,pct,SK,,D,2026,2.326964365
 baseline,real_gva,growth,pct,SK,,D,2027,2.879008850
 historical,real_gva,growth,pct,SK,,D,2024,-14.422869984
-adverse,real_gva,growth,pct,2,,E,2025,6.000000000
-adverse,real_gva,growth,pct,2,,E,2026,7.000000000
-adverse,real_gva,growth,pct,2,,E,2027,8.000000000
-baseline,real_gva,growth,pct,2,,E,2025,3.000000000
-baseline,real_gva,growth,pct,2,,E,2026,4.000000000
-baseline,real_gva,growth,pct,2,,E,2027,5.000000000
-historical,real_gva,growth,pct,2,,E,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,E,2025,-3.233494084
 adverse,real_gva,growth,pct,AT,,E,2026,-4.691369315
 adverse,real_gva,growth,pct,AT,,E,2027,0.966344433
@@ -2966,13 +2892,6 @@ baseline,real_gva,growth,pct,SK,,E,2025,2.652766584
 baseline,real_gva,growth,pct,SK,,E,2026,2.339300900
 baseline,real_gva,growth,pct,SK,,E,2027,2.869937827
 historical,real_gva,growth,pct,SK,,E,2024,-21.501757785
-adverse,real_gva,growth,pct,2,,F,2025,6.000000000
-adverse,real_gva,growth,pct,2,,F,2026,7.000000000
-adverse,real_gva,growth,pct,2,,F,2027,8.000000000
-baseline,real_gva,growth,pct,2,,F,2025,3.000000000
-baseline,real_gva,growth,pct,2,,F,2026,4.000000000
-baseline,real_gva,growth,pct,2,,F,2027,5.000000000
-historical,real_gva,growth,pct,2,,F,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,F,2025,-2.161335536
 adverse,real_gva,growth,pct,AT,,F,2026,-2.520886719
 adverse,real_gva,growth,pct,AT,,F,2027,0.592587767
@@ -3176,13 +3095,6 @@ baseline,real_gva,growth,pct,SK,,F,2025,1.859022110
 baseline,real_gva,growth,pct,SK,,F,2026,1.503822354
 baseline,real_gva,growth,pct,SK,,F,2027,2.107487741
 historical,real_gva,growth,pct,SK,,F,2024,2.650764830
-adverse,real_gva,growth,pct,2,,G,2025,6.000000000
-adverse,real_gva,growth,pct,2,,G,2026,7.000000000
-adverse,real_gva,growth,pct,2,,G,2027,8.000000000
-baseline,real_gva,growth,pct,2,,G,2025,3.000000000
-baseline,real_gva,growth,pct,2,,G,2026,4.000000000
-baseline,real_gva,growth,pct,2,,G,2027,5.000000000
-historical,real_gva,growth,pct,2,,G,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,G,2025,-3.082214772
 adverse,real_gva,growth,pct,AT,,G,2026,-3.817004819
 adverse,real_gva,growth,pct,AT,,G,2027,1.053490121
@@ -3386,13 +3298,6 @@ baseline,real_gva,growth,pct,SK,,G,2025,1.567701082
 baseline,real_gva,growth,pct,SK,,G,2026,1.188990734
 baseline,real_gva,growth,pct,SK,,G,2027,1.827343289
 historical,real_gva,growth,pct,SK,,G,2024,8.611790636
-adverse,real_gva,growth,pct,2,,H,2025,6.000000000
-adverse,real_gva,growth,pct,2,,H,2026,7.000000000
-adverse,real_gva,growth,pct,2,,H,2027,8.000000000
-baseline,real_gva,growth,pct,2,,H,2025,3.000000000
-baseline,real_gva,growth,pct,2,,H,2026,4.000000000
-baseline,real_gva,growth,pct,2,,H,2027,5.000000000
-historical,real_gva,growth,pct,2,,H,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,H,2025,-3.975514977
 adverse,real_gva,growth,pct,AT,,H,2026,-4.926915987
 adverse,real_gva,growth,pct,AT,,H,2027,0.752325445
@@ -3596,13 +3501,6 @@ baseline,real_gva,growth,pct,SK,,H,2025,2.395782382
 baseline,real_gva,growth,pct,SK,,H,2026,2.066569603
 baseline,real_gva,growth,pct,SK,,H,2027,2.623688773
 historical,real_gva,growth,pct,SK,,H,2024,11.410393755
-adverse,real_gva,growth,pct,2,,I,2025,6.000000000
-adverse,real_gva,growth,pct,2,,I,2026,7.000000000
-adverse,real_gva,growth,pct,2,,I,2027,8.000000000
-baseline,real_gva,growth,pct,2,,I,2025,3.000000000
-baseline,real_gva,growth,pct,2,,I,2026,4.000000000
-baseline,real_gva,growth,pct,2,,I,2027,5.000000000
-historical,real_gva,growth,pct,2,,I,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,I,2025,-2.681869128
 adverse,real_gva,growth,pct,AT,,I,2026,-3.799281570
 adverse,real_gva,growth,pct,AT,,I,2027,1.518953096
@@ -3806,13 +3704,6 @@ baseline,real_gva,growth,pct,SK,,I,2025,2.543657172
 baseline,real_gva,growth,pct,SK,,I,2026,2.224863728
 baseline,real_gva,growth,pct,SK,,I,2027,2.763350173
 historical,real_gva,growth,pct,SK,,I,2024,-2.194025279
-adverse,real_gva,growth,pct,2,,J,2025,6.000000000
-adverse,real_gva,growth,pct,2,,J,2026,7.000000000
-adverse,real_gva,growth,pct,2,,J,2027,8.000000000
-baseline,real_gva,growth,pct,2,,J,2025,3.000000000
-baseline,real_gva,growth,pct,2,,J,2026,4.000000000
-baseline,real_gva,growth,pct,2,,J,2027,5.000000000
-historical,real_gva,growth,pct,2,,J,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,J,2025,-2.492521320
 adverse,real_gva,growth,pct,AT,,J,2026,-3.215620599
 adverse,real_gva,growth,pct,AT,,J,2027,1.308426532
@@ -4016,13 +3907,6 @@ baseline,real_gva,growth,pct,SK,,J,2025,2.517449641
 baseline,real_gva,growth,pct,SK,,J,2026,2.190512320
 baseline,real_gva,growth,pct,SK,,J,2027,2.749087445
 historical,real_gva,growth,pct,SK,,J,2024,20.192093714
-adverse,real_gva,growth,pct,2,,K,2025,6.000000000
-adverse,real_gva,growth,pct,2,,K,2026,7.000000000
-adverse,real_gva,growth,pct,2,,K,2027,8.000000000
-baseline,real_gva,growth,pct,2,,K,2025,3.000000000
-baseline,real_gva,growth,pct,2,,K,2026,4.000000000
-baseline,real_gva,growth,pct,2,,K,2027,5.000000000
-historical,real_gva,growth,pct,2,,K,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,K,2025,-2.574694412
 adverse,real_gva,growth,pct,AT,,K,2026,-3.268347281
 adverse,real_gva,growth,pct,AT,,K,2027,1.513705261
@@ -4226,13 +4110,6 @@ baseline,real_gva,growth,pct,SK,,K,2025,2.277993188
 baseline,real_gva,growth,pct,SK,,K,2026,1.957320975
 baseline,real_gva,growth,pct,SK,,K,2027,2.482399452
 historical,real_gva,growth,pct,SK,,K,2024,-2.677405793
-adverse,real_gva,growth,pct,2,,L,2025,6.000000000
-adverse,real_gva,growth,pct,2,,L,2026,7.000000000
-adverse,real_gva,growth,pct,2,,L,2027,8.000000000
-baseline,real_gva,growth,pct,2,,L,2025,3.000000000
-baseline,real_gva,growth,pct,2,,L,2026,4.000000000
-baseline,real_gva,growth,pct,2,,L,2027,5.000000000
-historical,real_gva,growth,pct,2,,L,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,L,2025,-3.679551377
 adverse,real_gva,growth,pct,AT,,L,2026,-6.060907705
 adverse,real_gva,growth,pct,AT,,L,2027,0.528100541
@@ -4436,13 +4313,6 @@ baseline,real_gva,growth,pct,SK,,L,2025,1.656097598
 baseline,real_gva,growth,pct,SK,,L,2026,1.293021709
 baseline,real_gva,growth,pct,SK,,L,2027,1.908373767
 historical,real_gva,growth,pct,SK,,L,2024,-3.679662532
-adverse,real_gva,growth,pct,2,,MN,2025,6.000000000
-adverse,real_gva,growth,pct,2,,MN,2026,7.000000000
-adverse,real_gva,growth,pct,2,,MN,2027,8.000000000
-baseline,real_gva,growth,pct,2,,MN,2025,3.000000000
-baseline,real_gva,growth,pct,2,,MN,2026,4.000000000
-baseline,real_gva,growth,pct,2,,MN,2027,5.000000000
-historical,real_gva,growth,pct,2,,MN,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,MN,2025,-2.984879848
 adverse,real_gva,growth,pct,AT,,MN,2026,-3.812356406
 adverse,real_gva,growth,pct,AT,,MN,2027,0.873705359
@@ -4646,13 +4516,6 @@ baseline,real_gva,growth,pct,SK,,MN,2025,1.910816613
 baseline,real_gva,growth,pct,SK,,MN,2026,1.547139652
 baseline,real_gva,growth,pct,SK,,MN,2027,2.164810941
 historical,real_gva,growth,pct,SK,,MN,2024,0.869540596
-adverse,real_gva,growth,pct,2,,OPQ,2025,6.000000000
-adverse,real_gva,growth,pct,2,,OPQ,2026,7.000000000
-adverse,real_gva,growth,pct,2,,OPQ,2027,8.000000000
-baseline,real_gva,growth,pct,2,,OPQ,2025,3.000000000
-baseline,real_gva,growth,pct,2,,OPQ,2026,4.000000000
-baseline,real_gva,growth,pct,2,,OPQ,2027,5.000000000
-historical,real_gva,growth,pct,2,,OPQ,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,OPQ,2025,-1.802824502
 adverse,real_gva,growth,pct,AT,,OPQ,2026,-1.875310998
 adverse,real_gva,growth,pct,AT,,OPQ,2027,2.246939155
@@ -4856,13 +4719,6 @@ baseline,real_gva,growth,pct,SK,,OPQ,2025,1.790996828
 baseline,real_gva,growth,pct,SK,,OPQ,2026,1.446028742
 baseline,real_gva,growth,pct,SK,,OPQ,2027,2.028760717
 historical,real_gva,growth,pct,SK,,OPQ,2024,5.128407807
-adverse,real_gva,growth,pct,2,,RSTU,2025,6.000000000
-adverse,real_gva,growth,pct,2,,RSTU,2026,7.000000000
-adverse,real_gva,growth,pct,2,,RSTU,2027,8.000000000
-baseline,real_gva,growth,pct,2,,RSTU,2025,3.000000000
-baseline,real_gva,growth,pct,2,,RSTU,2026,4.000000000
-baseline,real_gva,growth,pct,2,,RSTU,2027,5.000000000
-historical,real_gva,growth,pct,2,,RSTU,2024,16.000000000
 adverse,real_gva,growth,pct,AT,,RSTU,2025,-1.951270021
 adverse,real_gva,growth,pct,AT,,RSTU,2026,-2.760195850
 adverse,real_gva,growth,pct,AT,,RSTU,2027,2.180474075
@@ -5213,6 +5069,13 @@ baseline,residential_property_prices,growth,pct,FR,,,2025,0.860320985
 baseline,residential_property_prices,growth,pct,FR,,,2026,0.580699742
 baseline,residential_property_prices,growth,pct,FR,,,2027,0.694605649
 historical,residential_property_prices,growth,pct,FR,,,2024,-3.922335863
+adverse,residential_property_prices,growth,pct,GB,,,2025,-4.012212104
+adverse,residential_property_prices,growth,pct,GB,,,2026,-12.960660125
+adverse,residential_property_prices,growth,pct,GB,,,2027,-12.240850398
+baseline,residential_property_prices,growth,pct,GB,,,2025,1.944506677
+baseline,residential_property_prices,growth,pct,GB,,,2026,1.944506677
+baseline,residential_property_prices,growth,pct,GB,,,2027,1.944506677
+historical,residential_property_prices,growth,pct,GB,,,2024,2.414506677
 adverse,residential_property_prices,growth,pct,GR,,,2025,-4.557489886
 adverse,residential_property_prices,growth,pct,GR,,,2026,-12.318924463
 adverse,residential_property_prices,growth,pct,GR,,,2027,-7.160005124
@@ -5388,13 +5251,6 @@ baseline,residential_property_prices,growth,pct,TR,,,2025,46.749330443
 baseline,residential_property_prices,growth,pct,TR,,,2026,39.951995696
 baseline,residential_property_prices,growth,pct,TR,,,2027,38.020145394
 historical,residential_property_prices,growth,pct,TR,,,2024,65.749330443
-adverse,residential_property_prices,growth,pct,UK,,,2025,-4.012212104
-adverse,residential_property_prices,growth,pct,UK,,,2026,-12.960660125
-adverse,residential_property_prices,growth,pct,UK,,,2027,-12.240850398
-baseline,residential_property_prices,growth,pct,UK,,,2025,1.944506677
-baseline,residential_property_prices,growth,pct,UK,,,2026,1.944506677
-baseline,residential_property_prices,growth,pct,UK,,,2027,1.944506677
-historical,residential_property_prices,growth,pct,UK,,,2024,2.414506677
 adverse,residential_property_prices,growth,pct,US,,,2025,-6.535663429
 adverse,residential_property_prices,growth,pct,US,,,2026,-3.492575410
 adverse,residential_property_prices,growth,pct,US,,,2027,6.592782932
@@ -7743,6 +7599,13 @@ baseline,unemployment_rate,level,pct,FR,,,2025,7.838850000
 baseline,unemployment_rate,level,pct,FR,,,2026,7.839692500
 baseline,unemployment_rate,level,pct,FR,,,2027,7.416297500
 historical,unemployment_rate,level,pct,FR,,,2024,7.425910000
+adverse,unemployment_rate,level,pct,GB,,,2025,7.196787183
+adverse,unemployment_rate,level,pct,GB,,,2026,9.566908396
+adverse,unemployment_rate,level,pct,GB,,,2027,10.151051880
+baseline,unemployment_rate,level,pct,GB,,,2025,4.100000000
+baseline,unemployment_rate,level,pct,GB,,,2026,4.000000000
+baseline,unemployment_rate,level,pct,GB,,,2027,4.000000000
+historical,unemployment_rate,level,pct,GB,,,2024,4.275000000
 adverse,unemployment_rate,level,pct,GR,,,2025,11.376071673
 adverse,unemployment_rate,level,pct,GR,,,2026,13.582282379
 adverse,unemployment_rate,level,pct,GR,,,2027,14.707403080
@@ -7918,13 +7781,6 @@ baseline,unemployment_rate,level,pct,TR,,,2025,9.878102521
 baseline,unemployment_rate,level,pct,TR,,,2026,9.607916007
 baseline,unemployment_rate,level,pct,TR,,,2027,9.477643705
 historical,unemployment_rate,level,pct,TR,,,2024,9.255414929
-adverse,unemployment_rate,level,pct,UK,,,2025,7.196787183
-adverse,unemployment_rate,level,pct,UK,,,2026,9.566908396
-adverse,unemployment_rate,level,pct,UK,,,2027,10.151051880
-baseline,unemployment_rate,level,pct,UK,,,2025,4.100000000
-baseline,unemployment_rate,level,pct,UK,,,2026,4.000000000
-baseline,unemployment_rate,level,pct,UK,,,2027,4.000000000
-historical,unemployment_rate,level,pct,UK,,,2024,4.275000000
 adverse,unemployment_rate,level,pct,US,,,2025,8.913555392
 adverse,unemployment_rate,level,pct,US,,,2026,10.045546320
 adverse,unemployment_rate,level,pct,US,,,2027,8.647014703
