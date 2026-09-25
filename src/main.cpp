@@ -45,7 +45,7 @@ struct Args {
                  "options: --base <dir> --parameters <file|dir> --memory-limit <size> --threads <n> --workers <n>\n"
                  "         --temp-dir <dir>\n"
                  "         --calculator <url> [--calculator-cache <dir>] [--calculator-ca <file>]\n"
-                 "         [--calculator-cert <file> --calculator-key <file>] [--calculator-batch <n>]\n");
+                 "         [--calculator-cert <file> --calculator-key <file>] [--calculator-batch <n>]   (run only)\n");
     std::exit(2);
 }
 
@@ -54,8 +54,10 @@ Args parse(int argc, char** argv) {
     Args a;
     a.command = argv[1];
     a.sim = argv[2];
+    const char* calculator_option = nullptr;   // the first --calculator* option (rejected unless `run`)
     for (int i = 3; i < argc; ++i) {
         auto next = [&]() -> std::string { if (i + 1 >= argc) usage(); return argv[++i]; };
+        if (!calculator_option && !std::strncmp(argv[i], "--calculator", 12)) calculator_option = argv[i];
         if (!std::strcmp(argv[i], "--scenario")) a.scenario = next();
         else if (!std::strcmp(argv[i], "-o") || !std::strcmp(argv[i], "--output")) a.out = next();
         else if (!std::strcmp(argv[i], "--base")) a.base = next();
@@ -73,6 +75,10 @@ Args parse(int argc, char** argv) {
         else usage();
     }
     if (a.command != "inspect" && (a.scenario.empty() || a.out.empty())) usage();
+    if (calculator_option && a.command != "run") {
+        std::fprintf(stderr, "sora: %s is an option of `sora run` only\n", calculator_option);
+        usage();
+    }
     if (a.calculator.cert_file.empty() != a.calculator.key_file.empty()) usage();
     return a;
 }

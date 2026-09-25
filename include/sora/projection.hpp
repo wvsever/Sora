@@ -63,6 +63,14 @@ void project_exposure(Stage stage, double gca, double allowance, const std::arra
                       const ScenarioConfig& cfg, std::array<std::array<YearResult, 3>, 2>& acc,
                       std::array<std::array<ParamAccum, 4>, 2>* param_acc = nullptr);
 
+// Parameter paths of an exposure with exposure-level parameters: its own starting point (the segment's effective
+// starting point `start`, overlaid with the exposure's actual/0 values) projected with the segment's satellite,
+// then per year the segment overlay and the exposure overlay; index 4 repeats year 3. The single definition
+// used by project() for provisions and by project_rea() for the calculator records.
+std::array<ParamPath, 2> exposure_param_paths(const Segmentation& s, const Segment& seg, const Params& start,
+                                              const Satellite& sat, const MacroTable& macro, const ScenarioConfig& cfg,
+                                              const ExternalParameters& external, std::size_t exposure);
+
 // `external` may be null (derived parameters only). `workers` threads project the segments in parallel
 // (0 = hardware concurrency); the results are bit-identical for any number of workers.
 Projection project(const Dataset& d, const Segmentation& s, const Calibration& cal,

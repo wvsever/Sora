@@ -1,7 +1,8 @@
 #pragma once
 // REST client for the external regulatory calculator (schemas/calculator/openapi.yaml, plans/11_integrations.md).
 //
-// - Reads /v1/capabilities first and fails fast if the calculation or the parameter set is not supported.
+// - Reads /v1/capabilities first (retried like a batch) and fails fast if the calculation or the parameter set is
+//   not supported.
 // - Splits every call into batches (maxRecordsPerSyncRequest by default); a batch above that limit is sent as
 //   an async job (/v1/jobs) and polled. Up to maxConcurrentRequests batches run in parallel.
 // - Retries 429/502/503/504 and connection errors with exponential backoff, honouring Retry-After, always with
@@ -11,7 +12,9 @@
 //   wire. Nothing is formatted or parsed through a binary float.
 // - Every response is validated (one result per record, recordIds echoed in order, status, decimal format).
 // - Optional replay cache on disk, keyed by calculator name/version and request fingerprint: a rerun with
-//   identical inputs replays stored responses and needs no calculator (capabilities are cached too).
+//   identical inputs replays stored responses and needs no calculator (capabilities are cached too). Writing it
+//   is best effort.
+// - Streaming (IrbStream): records are produced and consumed per batch, within a bounded window of batches.
 
 #include <cstdint>
 #include <filesystem>
@@ -97,6 +100,15 @@ struct IrbResult {
 // `request_id` empty leaves context.requestId out (the form hashed into the idempotency key).
 std::string encode_irb_request(const RequestContext& ctx, const std::vector<IrbRecord>& records, std::size_t first,
                                std::size_t count, const std::string& request_id);
+
+// A request ready to send: `key` = idempotency_key(ctx.run_id, "irb", body without requestId) = context.requestId.
+// The records are encoded once; the key is hashed from the parts of that encoding, then requestId is inserted.
+// `body` is byte-identical to encode_irb_request(ctx, records, first, count, key).
+struct IrbRequest {
+    std::string key, body;
+};
+IrbRequest make_irb_request(const RequestContext& ctx, const std::vector<IrbRecord>& records, std::size_t first,
+                            std::size_t count);
 // Validates an IrbResponse against the request and decodes it. Throws CalculatorError on any violation.
 std::vector<IrbResult> decode_irb_response(std::string_view json, const std::vector<IrbRecord>& records,
                                            std::size_t first, std::size_t count, const std::string& request_id,
@@ -136,17 +148,36 @@ struct ClientOptions {
     double connect_timeout = 10.0, read_timeout = 300.0, job_timeout = 3600.0;
 };
 
-// An HTTP(S) transport for `options.url` (TLS, mTLS and bearer token as configured).
+// An HTTP(S) transport for `options.url` (TLS, mTLS and bearer token as configured). Throws CalculatorError if a
+// bearer token is configured and the URL is plain http:// to a host that is not loopback.
 std::unique_ptr<Transport> http_transport(const ClientOptions& options);
+// True for localhost, 127.0.0.0/8 and ::1 (with or without a port, IPv6 in brackets), e.g. "127.0.0.1:8080", "[::1]".
+bool is_loopback_host(std::string_view host_port);
 
 struct IrbCall {
     RequestContext context;
     std::vector<IrbRecord> records;
 };
 
+// Streaming IRB calls: records are produced per batch and consumed with their results per batch, so only a
+// bounded window of batches (twice the number of worker threads) is in memory at any time.
+struct IrbStream {
+    std::vector<RequestContext> contexts;   // one per call (run id and parameter set are set by the client)
+    std::vector<std::size_t> counts;        // records per call
+    // Appends records [first, first + count) of `call` to `out` (empty on entry). Called concurrently from the
+    // worker threads; must depend only on its arguments, so a rerun produces the same bytes.
+    std::function<void(std::size_t call, std::size_t first, std::size_t count, std::vector<IrbRecord>& out)> fill;
+    // Receives the results of records [first, first + results.size()) of `call`. Called one batch at a time, in
+    // call and record order (the records themselves are released as soon as the response is decoded).
+    std::function<void(std::size_t call, std::size_t first, std::vector<IrbResult>& results)> sink;
+};
+
 struct ClientStats {
     std::size_t requests = 0, retries = 0, jobs = 0, cache_hits = 0, batches = 0;
-    bool offline = false;   // capabilities replayed from the cache (calculator unreachable)
+    bool offline = false;         // capabilities replayed from the cache (calculator unreachable)
+    std::string offline_reason;   // the last error of GET /v1/capabilities, when offline
+    std::size_t cache_write_failures = 0;   // replay cache entries that could not be written (best effort)
+    std::string cache_write_error;          // the first such error
 };
 
 class Client {
@@ -154,12 +185,15 @@ public:
     // `factory` defaults to http_transport(options); tests pass an in-memory stub.
     explicit Client(ClientOptions options, TransportFactory factory = {});
 
-    // GET /v1/capabilities and check `calculation` and the parameter set. If the calculator is unreachable and
-    // the replay cache holds its capabilities, continues offline (every batch must then be in the cache).
+    // GET /v1/capabilities (retried like a batch) and check `calculation` and the parameter set. If every attempt
+    // fails (no response or a retryable status) and the replay cache holds the capabilities, continues offline
+    // (stats().offline; every batch must then be in the cache).
     const Capabilities& connect(const std::string& calculation);
     const Capabilities& capabilities() const { return caps_; }
 
-    // Results per call, in record order. All batches of all calls share one worker pool.
+    // All batches of all calls share one worker pool; see IrbStream.
+    void irb(const IrbStream& stream);
+    // Results per call, in record order (all records in memory; for tests and small inputs).
     std::vector<std::vector<IrbResult>> irb(const std::vector<IrbCall>& calls);
 
     ClientStats stats() const;
@@ -170,7 +204,8 @@ private:
     Response call(Transport& t, const std::string& method, const std::string& path, const std::string& body,
                   const std::string& key, int attempts = 0);
     std::string run_batch(Transport& t, const Batch& b, const std::string& body, const std::string& key);
-    void cache_write(const std::filesystem::path& file, const std::string& data) const;
+    // Best effort: a failure is counted in stats_ (and reported as CALC-004 by the REA projection), never thrown.
+    void cache_write(const std::filesystem::path& file, const std::string& data);
 
     ClientOptions opt_;
     TransportFactory factory_;
