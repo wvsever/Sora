@@ -4,7 +4,9 @@
 //   sora calibrate <sim> --scenario <yaml> -o <dir>            starting-point parameters only
 //   sora run       <sim> --scenario <yaml> -o <dir>            calibration + projection (+ cr_scen.csv)
 //
-// Options: --base <dir> (resolve scenario paths, default: cwd), --memory-limit 1GB, --threads N,
+// Options: --base <dir> (resolve scenario paths, default: cwd), --memory-limit 1GB, --threads N (DuckDB),
+//          --temp-dir <dir> (DuckDB spill files for sorts beyond the memory limit),
+//          --workers N (engine threads, default: hardware concurrency; results do not depend on it),
 //          --parameters <file|dir>  customer risk parameters (default: SIM table sim_risk_parameter if present)
 
 #include <sys/resource.h>
@@ -27,6 +29,7 @@ struct Args {
     std::string command;
     fs::path sim, scenario, out, parameters, base = fs::current_path();
     DuckOptions duck;
+    unsigned workers = 0;   // 0 = hardware concurrency
 };
 
 [[noreturn]] void usage() {
@@ -34,7 +37,8 @@ struct Args {
                  "usage: sora inspect <sim> [options]\n"
                  "       sora calibrate <sim> --scenario <yaml> -o <dir> [options]\n"
                  "       sora run <sim> --scenario <yaml> -o <dir> [options]\n"
-                 "options: --base <dir> --parameters <file|dir> --memory-limit <size> --threads <n>\n");
+                 "options: --base <dir> --parameters <file|dir> --memory-limit <size> --threads <n> --workers <n>\n"
+                 "         --temp-dir <dir>\n");
     std::exit(2);
 }
 
@@ -51,6 +55,8 @@ Args parse(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--parameters")) a.parameters = next();
         else if (!std::strcmp(argv[i], "--memory-limit")) a.duck.memory_limit = next();
         else if (!std::strcmp(argv[i], "--threads")) a.duck.threads = std::stoi(next());
+        else if (!std::strcmp(argv[i], "--temp-dir")) a.duck.temp_directory = next();
+        else if (!std::strcmp(argv[i], "--workers")) a.workers = static_cast<unsigned>(std::stoul(next()));
         else usage();
     }
     if (a.command != "inspect" && (a.scenario.empty() || a.out.empty())) usage();
@@ -148,7 +154,7 @@ int main(int argc, char** argv) {
         const bool run = a.command == "run";
         if (run) {
             Timer t("project");
-            proj = project(d, seg, cal, sats, macro, cfg, ext.empty() ? nullptr : &ext);
+            proj = project(d, seg, cal, sats, macro, cfg, ext.empty() ? nullptr : &ext, a.workers);
             if (proj.exposures_with_own_parameters)
                 diag.findings.push_back({"PAR-003", "info", "exposures with exposure-level parameters", proj.exposures_with_own_parameters});
             if (!proj.parameter_errors.empty()) {

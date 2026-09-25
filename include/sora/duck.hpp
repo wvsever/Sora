@@ -18,6 +18,7 @@ namespace sora {
 struct DuckOptions {
     std::string memory_limit = "1GB";
     int threads = 0;  // 0 = DuckDB default (all cores)
+    std::string temp_directory;   // where sorts beyond memory_limit spill; empty = DuckDB default (.tmp in the cwd)
 };
 
 // One chunk of a streamed result. Accessors are typed; a mismatch with the column type throws.
@@ -47,7 +48,10 @@ public:
     }
 
 private:
-    void expect(std::size_t col, duckdb_type t, int scale = -1) const;
+    void expect(std::size_t col, duckdb_type t, int scale = -1) const {
+        if (col >= types_.size() || types_[col] != t || (scale >= 0 && scales_[col] != scale)) type_error(col);
+    }
+    [[noreturn]] void type_error(std::size_t col) const;
     duckdb_data_chunk chunk_;
     std::size_t size_;
     std::vector<void*> data_;
@@ -55,6 +59,49 @@ private:
     const std::vector<duckdb_type>& types_;
     const std::vector<std::uint8_t>& scales_;
 };
+
+// Accessors are inline: they run once per value on the load path (tens of millions of calls at 100x scale).
+inline bool Chunk::valid(std::size_t col, std::size_t row) const noexcept {
+    const std::uint64_t* v = validity_[col];   // nullptr = all valid; bit layout as duckdb_validity_row_is_valid
+    return v == nullptr || ((v[row / 64] >> (row % 64)) & 1U) != 0;
+}
+
+inline std::string_view Chunk::str(std::size_t col, std::size_t row) const {
+    expect(col, DUCKDB_TYPE_VARCHAR);
+    auto* s = static_cast<duckdb_string_t*>(data_[col]) + row;
+    const std::uint32_t len = s->value.inlined.length;
+    return {len <= 12 ? s->value.inlined.inlined : s->value.pointer.ptr, len};
+}
+
+inline std::int64_t Chunk::i64(std::size_t col, std::size_t row) const {
+    expect(col, DUCKDB_TYPE_BIGINT);
+    return static_cast<const std::int64_t*>(data_[col])[row];
+}
+
+inline Date Chunk::date(std::size_t col, std::size_t row) const {
+    expect(col, DUCKDB_TYPE_DATE);
+    return static_cast<const std::int32_t*>(data_[col])[row];
+}
+
+inline bool Chunk::boolean(std::size_t col, std::size_t row) const {
+    expect(col, DUCKDB_TYPE_BOOLEAN);
+    return static_cast<const bool*>(data_[col])[row];
+}
+
+inline double Chunk::f64(std::size_t col, std::size_t row) const {
+    expect(col, DUCKDB_TYPE_DOUBLE);
+    return static_cast<const double*>(data_[col])[row];
+}
+
+inline Cents Chunk::cents(std::size_t col, std::size_t row) const {
+    expect(col, DUCKDB_TYPE_DECIMAL, 2);   // DECIMAL(18,2): stored as int64 = cents
+    return static_cast<const std::int64_t*>(data_[col])[row];
+}
+
+inline Nano Chunk::nano(std::size_t col, std::size_t row) const {
+    expect(col, DUCKDB_TYPE_DECIMAL, 9);   // DECIMAL(18,9): stored as int64 = 1e-9 units
+    return static_cast<const std::int64_t*>(data_[col])[row];
+}
 
 class Duck {
 public:

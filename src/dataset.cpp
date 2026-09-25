@@ -1,20 +1,81 @@
 #include "sora/dataset.hpp"
 
+#include <functional>
+#include <stdexcept>
+
 namespace sora {
 
 namespace fs = std::filesystem;
 
+std::uint32_t Dictionary::hash(std::string_view s) noexcept {
+    const auto h = static_cast<std::uint64_t>(std::hash<std::string_view>{}(s));
+    return static_cast<std::uint32_t>(h ^ (h >> 32));
+}
+
+std::string_view Dictionary::view(std::uint32_t id) const {
+    if (id >= size_) throw std::out_of_range("Dictionary::view: id " + std::to_string(id));
+    return {arena_.data() + offsets_[id], offsets_[id + 1] - offsets_[id]};
+}
+
+// Linear probing. Returns the slot holding `s`, or the empty slot where it belongs.
+std::uint64_t* Dictionary::probe(std::string_view s, std::uint32_t h) const noexcept {
+    const std::size_t mask = slots_.size() - 1;
+    auto* slots = const_cast<std::uint64_t*>(slots_.data());
+    for (std::size_t i = h & mask;; i = (i + 1) & mask) {
+        const std::uint64_t v = slots[i];
+        if (v == 0) return slots + i;
+        if (static_cast<std::uint32_t>(v >> 32) == h) {
+            const auto id = static_cast<std::uint32_t>(v) - 1;
+            if (s == std::string_view(arena_.data() + offsets_[id], offsets_[id + 1] - offsets_[id])) return slots + i;
+        }
+    }
+}
+
+void Dictionary::rehash(std::size_t capacity) {
+    std::vector<std::uint64_t> old(capacity, 0);
+    old.swap(slots_);
+    const std::size_t mask = capacity - 1;
+    for (const auto v : old) {
+        if (v == 0) continue;
+        std::size_t i = static_cast<std::uint32_t>(v >> 32) & mask;
+        while (slots_[i] != 0) i = (i + 1) & mask;
+        slots_[i] = v;
+    }
+}
+
+void Dictionary::reserve(std::size_t n, std::size_t bytes) {
+    offsets_.reserve(n + 1);
+    arena_.reserve(bytes);
+    std::size_t cap = 16;
+    while (cap * 4 < n * 5) cap *= 2;   // load factor <= 0.8 (the hash tags keep long probe runs cheap)
+    if (cap > slots_.size()) rehash(cap);
+}
+
+std::size_t Dictionary::memory_bytes() const noexcept {
+    return arena_.capacity() + offsets_.capacity() * sizeof(std::uint32_t) + slots_.capacity() * sizeof(std::uint64_t);
+}
+
 std::uint32_t Dictionary::intern(std::string_view s) {
-    if (auto it = index_.find(s); it != index_.end()) return it->second;
-    const auto id = static_cast<std::uint32_t>(names_.size());
-    names_.emplace_back(s);
-    index_.emplace(names_.back(), id);
+    if (slots_.empty()) rehash(16);
+    const auto h = hash(s);
+    std::uint64_t* slot = probe(s, h);
+    if (*slot != 0) return static_cast<std::uint32_t>(*slot) - 1;
+    if (arena_.size() + s.size() > UINT32_MAX || size_ >= UINT32_MAX - 1) throw Error("Dictionary: too many keys");
+    const auto id = static_cast<std::uint32_t>(size_);
+    if (offsets_.empty()) offsets_.push_back(0);
+    arena_.append(s);
+    offsets_.push_back(static_cast<std::uint32_t>(arena_.size()));
+    *slot = (static_cast<std::uint64_t>(h) << 32) | (static_cast<std::uint64_t>(id) + 1);
+    ++size_;
+    if (size_ * 5 > slots_.size() * 4) rehash(slots_.size() * 2);
     return id;
 }
 
 std::optional<std::uint32_t> Dictionary::find(std::string_view s) const {
-    if (auto it = index_.find(s); it != index_.end()) return it->second;
-    return std::nullopt;
+    if (slots_.empty()) return std::nullopt;
+    const std::uint64_t v = *probe(s, hash(s));
+    if (v == 0) return std::nullopt;
+    return static_cast<std::uint32_t>(v) - 1;
 }
 
 namespace {
@@ -67,6 +128,18 @@ Manifest load_manifest(Duck& duck, const fs::path& sim_dir) {
     return m;
 }
 
+// Row count and total key length of a table, so arrays are sized once instead of regrowing (a regrowth
+// briefly holds the old and the new copy, which at 100x scale is the peak of the load).
+void reserve_keys(Duck& duck, const std::string& source, const char* key, Dictionary& ids, std::size_t& rows) {
+    std::size_t bytes = 0;
+    duck.query(std::string("SELECT count(*), CAST(coalesce(sum(length(CAST(") + key + " AS VARCHAR))), 0) AS BIGINT) FROM " + source,
+               [&](const Chunk& c) {
+                   rows = static_cast<std::size_t>(c.i64(0, 0));
+                   bytes = static_cast<std::size_t>(c.i64(1, 0));
+               });
+    ids.reserve(rows, bytes);
+}
+
 }  // namespace
 
 Dataset load_dataset(Duck& duck, const fs::path& sim_dir) {
@@ -88,6 +161,9 @@ Dataset load_dataset(Duck& duck, const fs::path& sim_dir) {
                    }
                });
 
+    std::size_t rows = 0;
+    reserve_keys(duck, sim_source(sim_dir, "sim_counterparty"), "counterparty_id", d.counterparty_ids, rows);
+    d.counterparties.reserve(rows);
     duck.query("SELECT CAST(counterparty_id AS VARCHAR), CAST(country_of_residence AS VARCHAR), "
                "CAST(eba_sector AS VARCHAR), CAST(is_sme AS BOOLEAN) FROM " +
                    sim_source(sim_dir, "sim_counterparty") + " ORDER BY 1",
@@ -103,6 +179,8 @@ Dataset load_dataset(Duck& duck, const fs::path& sim_dir) {
                    }
                });
 
+    reserve_keys(duck, sim_source(sim_dir, "sim_exposure"), "exposure_id", d.exposure_ids, rows);
+    d.exposures.reserve(rows);
     duck.query(
         "SELECT CAST(exposure_id AS VARCHAR), CAST(entity_id AS VARCHAR), CAST(counterparty_id AS VARCHAR), "
         "CAST(exposure_type AS VARCHAR), CAST(currency AS VARCHAR), CAST(measurement_category AS VARCHAR), "
