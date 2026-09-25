@@ -150,18 +150,20 @@ sora/
 ├── src/                      # C++ engine
 ├── python/                   # sora-tools: schema, map, validate, calculator stub (+ tests, contract tests)
 ├── mappings/
-│   └── cppbank/              # reference mapping SQL: test dataset -> SIM
+│   └── cppbank/              # reference mapping SQL + source data dictionary: test dataset -> SIM
+├── scenarios/                # normalised scenario data (sora-tools scenario-import)
 ├── tools/
-│   ├── mcp/                  # sora-mcp server
-│   ├── scenario_import/      # xlsx scenarios -> normalised CSV
+│   ├── extract_testdata.py   # extract tests/data/*.7z into build/
 │   └── reference/            # independent reference implementation (golden results)
 ├── tests/
 │   ├── data/                 # reference dataset (20260630.7z) + README
 │   ├── golden/               # expected results for the reference dataset
+│   ├── params/               # synthetic stand-ins for customer inputs (satellites, ...)
 │   └── scenarios/
 ├── benchmarks/
 ├── examples/
 ├── schemas/
+│   ├── export/               # source export specification (formats, manifest, data dictionary)
 │   ├── sim/                  # Sora Input Model: the single source of truth
 │   └── calculator/           # REST contract for the regulatory calculator (OpenAPI)
 ├── docs/                     # EBA guidelines and EU-wide stress test material (2025, 2027 draft)

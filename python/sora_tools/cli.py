@@ -58,6 +58,14 @@ def cmd_validate(args) -> int:
     return _report(validate(args.sim, modules=args.modules, schema=_schema(args), samples=args.samples), args)
 
 
+def cmd_profile(args) -> int:
+    from .profile import profile_export
+    doc = profile_export(args.export, args.output, max_codes=args.max_codes, list_codes=not args.no_codes,
+                         types_file=args.types_file)
+    print(f"{len(doc['tables'])} tables profiled -> {args.output}")
+    return 0
+
+
 def cmd_scenario_import(args) -> int:
     from .scenario_import import import_scenarios
     n = import_scenarios(args.workbooks, args.output)
@@ -102,6 +110,14 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--samples", type=int, default=5, help="sample keys per finding (0 = none)")
     v.add_argument("--report", help="write the report as JSON")
     v.set_defaults(func=cmd_validate)
+
+    pr = sub.add_parser("profile", help="profile an export and write a source data dictionary (no data values)")
+    pr.add_argument("export", help="directory with the exported source files")
+    pr.add_argument("-o", "--output", required=True, help="output YAML")
+    pr.add_argument("--max-codes", type=int, default=30, help="list code values for columns with at most N values")
+    pr.add_argument("--no-codes", action="store_true", help="never list any values")
+    pr.add_argument("--types-file", help="optional column-type JSON inside the export (e.g. _csv_column_types.json)")
+    pr.set_defaults(func=cmd_profile)
 
     si = sub.add_parser("scenario-import", help="convert EBA/ESRB scenario workbooks (xlsx) to a normalised CSV")
     si.add_argument("workbooks", nargs="+", help="macro-financial scenario and/or real GVA workbooks")

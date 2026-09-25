@@ -11,8 +11,15 @@ sora-tools schema llm                          # compact description for AI agen
 sora-tools schema ddl                          # CREATE TABLE statements
 
 python tools/extract_testdata.py               # -> build/testdata/20260630
+sora-tools profile build/testdata/20260630 --types-file _csv_column_types.json -o dictionary.yaml
 sora-tools map mappings/cppbank --export build/testdata/20260630 -o build/sim/20260630 --validate
 sora-tools validate build/sim/20260630 --modules core credit calibration
+
+sora-tools scenario-import <macro.xlsx> <gva.xlsx> -o scenarios/eba2025_macro.csv
+sora-tools calculator-stub --mode formula --port 8080
+
+python tools/reference/sora_reference.py --sim build/sim/20260630 \
+    --scenario tests/scenarios/test_eba2025.yaml --out tests/golden/20260630
 
 python -m pytest python/tests
 ```
