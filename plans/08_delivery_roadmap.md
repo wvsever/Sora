@@ -9,7 +9,7 @@ Every phase is delivered against the reference dataset `tests/data/20260630.7z` 
 | 0 Reference and test assets | Done, except the synthetic ECB benchmark file (moved to phase 5) |
 | 1 Core skeleton and input | Done: SIM reader (DuckDB), dataset, segmentation, input checks, `sora inspect` |
 | 2 Starting-point parameters | Done: derived calibration, and customer parameters (per exposure or segment hierarchy, starting point and projection) |
-| 3 Credit stress projection | Done for on-balance amortised cost, matching the golden results exactly, with EBA CSV_CR_SCEN output (`cr_scen.csv`). Open: like-for-like replacement of maturing exposures, collateral repricing, LTV columns, prior-year Actual rows. |
+| 3 Credit stress projection | Done for on-balance amortised cost, matching the golden results exactly, with EBA CSV_CR_SCEN output (`cr_scen.csv`). The static balance sheet holds by construction (no run-off in the flow model; exposure conservation is tested). Open: collateral repricing, LTV columns, prior-year Actual rows. |
 
 ## Phase 0 - Reference and test assets
 
