@@ -7,6 +7,8 @@ Every phase is delivered against the reference dataset `tests/data/20260630.7z` 
 Deliver:
 
 - `tools/extract_testdata` (extract the `.7z` into the build tree; used by CTest)
+- SIM schema v1 (`schemas/sim/`) with full descriptions, and generators for docs, DDL and the LLM description
+- Reference mapping `mappings/cppbank/*.sql` (test dataset → SIM) and `sora map` / `sora validate` (DuckDB)
 - `tools/scenario_import`: EBA/ESRB/ECB xlsx in `docs/` → normalised macro CSV
 - `tools/reference/`: independent Python + DuckDB implementation of calibration and the EBA credit projection
 - Synthetic stand-ins for customer inputs: satellite coefficients and an ECB-style benchmark file
@@ -18,7 +20,7 @@ Deliver:
 Deliver:
 
 - CMake project
-- Partitioned CSV reader (Hive partitions, header mapping, exact decimal parsing, nulls)
+- SIM reader for partitioned CSV and Parquet (header mapping, exact decimal parsing, nulls), with bindings generated from the schema
 - Dimensions, party store, dictionaries
 - Exposure assembly for `contract_loan` (+ counterparty, rating, collateral allocation, latest allowance)
 - `sora inspect`
@@ -67,6 +69,15 @@ Deliver:
 - Debt securities at amortised cost (`contract_security_position`)
 - CR_SECTOR (NACE) output
 
+## Phase 5b - Agent and calculator integration
+
+Deliver:
+
+- `sora-mcp` (describe, profile_source, test_mapping, validate_sim, reconcile)
+- `ParameterModel` port with a batch-file adapter
+- IRB reference calculator (CRR Art. 153/154) and the `CreditRiskIRB` port
+- `explain_result`, `diff_runs`
+
 ## Phase 6 - Funding and rates
 
 Deliver:
@@ -91,7 +102,7 @@ Deliver:
 
 Only after profiling or explicit need:
 
-- IRB/STA REA and output floor
+- CRR3 SA coverage, output floor and service adapters for external calculators
 - Market risk revaluation and CCR
 - Explicit SIMD
 - Alternative allocators

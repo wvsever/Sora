@@ -16,7 +16,7 @@ Represent financial records using compact, contiguous structures that are cheap 
 
 ## Source format
 
-The input is a Hive-partitioned CSV dataset: 54 tables, 1,051 columns, with types in `_csv_column_types.json`. Only a subset is needed for the engine. Other tables are ignored unless a module declares them.
+The engine reads the Sora Input Model (SIM), defined in `schemas/sim/` (see `10_input_model_and_mapping.md`). The reference dataset in `tests/data/` (54 raw tables, 1,051 columns) is a *source* layout. It is mapped to SIM by `mappings/cppbank/*.sql`. The type conventions below apply to both SIM CSV and the source data. SIM Parquet uses the matching native types (`DECIMAL(18,2)`, `DATE`, `BOOLEAN`).
 
 | Source type | Example | Internal representation |
 |---|---|---|
@@ -37,7 +37,7 @@ Parsing must be exact. Amounts and rates are parsed from their decimal digits di
 | Dimension | Source | Approximate cardinality |
 |---|---|---|
 | Entity | `reference/entity.csv` | 70 |
-| Currency | manifest / data | 14 |
+| Currency | SIM market data / exposures | 14 |
 | Country | counterparty, collateral, entity | < 100 |
 | ESA 2010 sector | counterparty | 16 |
 | NACE section / division | counterparty `nace_code` | 21 / ~90 |
@@ -112,7 +112,7 @@ Actual layout should be confirmed with profiling and alignment measurements. The
 
 ## Join model
 
-The source is normalised, and stress rules need a denormalised exposure. The join runs once at load time:
+SIM stays normalised at the level of party, exposure, collateral and guarantee, because many-to-many collateral allocation cannot be flattened without loss. Source-specific joins and code mappings happen in the mapping SQL. The engine performs only this fixed SIM join, once at load time (source table names shown for the reference dataset):
 
 ```text
 contract_loan / commitment / lease / security

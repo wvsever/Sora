@@ -7,17 +7,18 @@ Define a predictable, restartable, and testable execution sequence over the part
 ## Commands
 
 ```text
-sora inspect   <dataset>                          # tables, partitions, row counts, schema check
-sora calibrate <dataset> -o params.csv            # derive starting-point PD/TR/LGD/LR (09_risk_parameters.md)
-sora run       <dataset> --scenario s.yaml -o out # project and aggregate
-sora validate  <dataset> [--level full]           # reconciliation-only run
+sora map       <mapping.sql…> -o <sim>            # run customer mapping SQL (DuckDB) -> SIM files
+sora validate  <sim> [--level full]               # schema, keys, constraints, reconciliation
+sora inspect   <sim>                              # tables, partitions, row counts
+sora calibrate <sim> -o params.csv                # derive starting-point PD/TR/LGD/LR (09_risk_parameters.md)
+sora run       <sim> --scenario s.yaml -o out     # project and aggregate
 ```
 
 ## Pipeline (`sora run`)
 
-### Phase 1 - Discover dataset
+### Phase 1 - Discover SIM dataset
 
-Read the manifest and column types. Enumerate the partitions of the required tables. Fail early on missing required tables or columns.
+Read the run manifest (reference date, SIM version, mapping release). Enumerate the partitions of the required SIM tables. Fail early on missing required tables or columns.
 
 ### Phase 2 - Load dimensions and party data
 
@@ -91,7 +92,7 @@ For very large runs, optionally persist checkpoints at partition boundaries.
 A checkpoint includes:
 
 - Scenario fingerprint
-- Input fingerprint (manifest plus per-file size and xxHash)
+- Input fingerprint (SIM manifest, mapping release, per-file size and xxHash)
 - Last completed partition
 - Aggregation state
 - Output offsets

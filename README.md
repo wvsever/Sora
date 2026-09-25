@@ -51,11 +51,17 @@ The primary target is the EBA EU-wide stress test credit-risk methodology: the 2
 
 | Input | Location | Notes |
 |---|---|---|
-| Bank dataset | `tests/data/20260630.7z` (reference) | Hive-partitioned CSV, 54 tables, see `tests/data/README.md` |
+| Bank data in the Sora Input Model (SIM) | Customer, mapped with SQL | Documented schema in `schemas/sim/`. The reference source is `tests/data/20260630.7z`, mapped by `mappings/cppbank/`. See `plans/10_input_model_and_mapping.md`. |
 | Macro scenario | `docs/` (ESRB/ECB xlsx) | Converted to a normalised CSV by `tools/scenario_import` |
 | Starting-point PD / TR / LGD / LR | Customer model output, or `sora calibrate` | Not present in the dataset. See `plans/09_risk_parameters.md`. |
 | Satellite models | Customer | Macro → parameter sensitivities per segment (synthetic in tests) |
 | ECB benchmark parameters | Customer (received from ECB, confidential) | Loaded in Sora's benchmark format (synthetic in tests) |
+
+## Integration
+
+- **Mapping with SQL:** customers map their source data to SIM with SQL views, written by hand or with an AI agent.
+- **MCP server (`sora-mcp`):** lets an agent read the model description, profile sources, test mappings, validate, run and explain results. It runs locally, returns metadata only by default, and requires human approval for production mappings.
+- **Calculator ports:** PD/LGD models and regulatory calculators (SA, IRB, output floor) connect through ports, each with a built-in reference implementation and batch-file or service adapters. See `plans/11_integrations.md`.
 
 ## Example scenario
 
@@ -144,7 +150,10 @@ sora/
 ├── include/
 │   └── sora/
 ├── src/
+├── mappings/
+│   └── cppbank/              # reference mapping SQL: test dataset -> SIM
 ├── tools/
+│   ├── mcp/                  # sora-mcp server
 │   ├── scenario_import/      # xlsx scenarios -> normalised CSV
 │   └── reference/            # independent reference implementation (golden results)
 ├── tests/
@@ -154,6 +163,7 @@ sora/
 ├── benchmarks/
 ├── examples/
 ├── schemas/
+│   └── sim/                  # Sora Input Model: the single source of truth
 ├── docs/                     # EBA guidelines and EU-wide stress test material (2025, 2027 draft)
 └── plans/
     ├── 01_architecture.md
@@ -164,7 +174,9 @@ sora/
     ├── 06_validation.md
     ├── 07_benchmarking.md
     ├── 08_delivery_roadmap.md
-    └── 09_risk_parameters.md
+    ├── 09_risk_parameters.md
+    ├── 10_input_model_and_mapping.md
+    └── 11_integrations.md
 ```
 
 ## Non-goals
@@ -175,7 +187,7 @@ Avoid initially:
 
 - GUI development
 - Large dependency stacks
-- Embedded scripting languages
+- Embedded scripting languages (SQL mapping runs in tooling, not in the core engine)
 - Generic workflow engines
 - Distributed execution frameworks
 - Complex database persistence layers

@@ -44,7 +44,7 @@ Sora is vendor software. The customer (the institution) runs it on its own data.
 | Input | Owner | Sora's role |
 |---|---|---|
 | Bank dataset | Customer | Input format, mapping, validation |
-| Starting-point PD/TR/LGD/LR | Customer (IFRS 9 / IRB models) | Import format, checks, optional derivation (`sora calibrate`) |
+| Starting-point PD/TR/LGD/LR | Customer (IFRS 9 / IRB models) | Import format (`sim_risk_parameter`), `ParameterModel` port, checks, optional derivation (`sora calibrate`) |
 | Satellite model coefficients / projected parameters | Customer | Import format, evaluation engine |
 | ECB benchmark parameters | ECB → customer, confidential, per exercise | Import format and application rules (10% rule, portfolio level, no adjustment) |
 | Macro / market scenarios | EBA / ESRB / ECB, public | Converter (`tools/scenario_import`) |
@@ -83,7 +83,7 @@ Segments follow the EBA CR_SCEN portfolios (2027 MN Table 4) and are resolved on
 - **Country:** the top 10 exposure countries plus "Other".
 - **CR_SECTOR:** NACE section for NFCs.
 
-Mapping rules in the reference dataset:
+Mapping rules for the reference dataset. They belong in the mapping SQL (`mappings/cppbank/`), which fills the SIM columns `sector`, `household_purpose`, `is_sme` and `is_cre`:
 
 - **Sector:** from `counterparty.esa2010_sector`:
   - S.121 → central banks
@@ -130,6 +130,5 @@ Validating the engine needs expected results. None are included in the test data
 
 ## Open questions
 
-- Is the format of `tests/data` (the synthetic generator output) Sora's canonical input format, or do customers deliver in another layout that needs a mapping layer?
 - Which EBA exercises must be supported at the same time (2025 final, 2027 draft, later)? This decides how the methodology is versioned.
 - Should IRB/STA REA (PDreg, LGDreg, ELBE, output floor) be in scope in phase 1, or only IFRS 9 provisions?

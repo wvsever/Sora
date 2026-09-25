@@ -10,12 +10,12 @@ Build a small native engine with explicit ownership, stable data contracts, and 
 
 Responsibilities:
 
-- Discover the dataset: `_csv_column_types.json`, `plant_input/control_manifest.json`, `reference/*.csv`, and Hive partitions `accounting/<table>/entity_id=<id>[/period=YYYY-MM]/part-NNNN.csv`
-- Read only the tables and columns that enabled modules declare. Skip the rest, the GL tables in particular.
-- Map columns by header name, never by position. Tolerate columns that are extra, reordered or missing-and-nullable.
-- Validate minimal structural requirements (declared type, nullability, key presence)
+- Read Sora Input Model (SIM) tables (Parquet or CSV, partitioned by `entity_id`, see `10_input_model_and_mapping.md`). Customer layouts, including the raw test dataset, are mapped to SIM with SQL beforehand. The engine never parses them.
+- Read only the tables and columns that enabled modules declare
+- Map columns by name, never by position
+- Validate against the generated SIM schema (type, nullability, keys, constraints)
 - Convert external representations into compact internal records (exact decimal → scaled integer, see `02_data_model.md`)
-- Read the reporting date, base currency and entity from the manifest
+- Read the reporting date, base currency and SIM version from the run manifest
 
 Design rules:
 
@@ -23,7 +23,7 @@ Design rules:
 - Use buffered I/O or memory mapping
 - Parse directly into final internal types where possible
 - Process partitions in parallel. Many small files are the norm.
-- Keep the `.7z` archive out of the engine. Tests and tools extract it first.
+- Keep the `.7z` archive and SQL mapping out of the engine. `sora map` (DuckDB-based tooling) produces the SIM files first.
 
 ### 2. Reference and party store
 
@@ -41,12 +41,13 @@ Responsibilities:
 - Produce one denormalised `Exposure` per contract (`02_data_model.md`)
 - Report orphans (a contract without a counterparty, an allocation without a contract) as diagnostics
 
-### 4. Risk parameters
+### 4. Risk parameters and calculators
 
 Responsibilities:
 
 - Attach starting-point PD, TR, LGD, LRLT and CCF per contract or segment, from an external file, derived calibration, or benchmarks (`09_risk_parameters.md`)
 - Run calibration (`sora calibrate`) from the history tables. This is a separate command whose output is a reviewable parameter file.
+- Call parameter models and regulatory calculators (SA, IRB, output floor) through ports with built-in reference implementations and external adapters (`11_integrations.md`)
 
 ### 5. Scenario
 
@@ -153,6 +154,15 @@ Support:
 | Market risk | — | Revaluation of FV positions with the ECB shocks |
 | Funding / liquidity | — | Deposit outflows by `deposit_type`, DGS coverage and operational flags |
 | CCR | — | Default of the largest counterparties |
+
+## Around the core (tooling, not engine)
+
+| Component | Role |
+|---|---|
+| `schemas/sim/` | Single source of truth for the input model. Generates C++ bindings, docs, DDL and the LLM description. |
+| `sora map` / `sora validate` | Run customer mapping SQL (embedded DuckDB) and validate the SIM output |
+| `sora-mcp` | MCP server for AI agents: model description, profiling, mapping tests, validation, runs, explanations |
+| Calculator adapters | Batch-file and service adapters to customer PD/LGD models and regulatory calculators |
 
 ## Architectural constraints
 
