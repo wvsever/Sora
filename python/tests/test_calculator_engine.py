@@ -85,12 +85,44 @@ def test_rerun_replays_from_cache_without_calculator(reference_sim, formula_run,
     tmp, _, calculator = formula_run                       # the stub is stopped by now
     r = run(reference_sim, tmp_path / "out", "--calculator", calculator, "--calculator-cache", str(tmp / "cache"))
     assert "CALC-001" in r.stderr
+    assert "GET /v1/capabilities failed after 8 attempts" in findings(tmp_path / "out")["CALC-001"]["message"]
     assert (tmp_path / "out" / "rea.csv").read_bytes() == (tmp / "out" / "rea.csv").read_bytes()
 
 
+def test_cache_write_failure_is_a_warning(reference_sim, formula_run, tmp_path):
+    tmp, _, _ = formula_run
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x")
+    server = start_background("formula")
+    try:
+        run(reference_sim, tmp_path / "out", "--calculator", url(server), "--calculator-cache", str(blocker / "cache"))
+    finally:
+        stop(server)
+    f = findings(tmp_path / "out")
+    assert f["CALC-004"]["severity"] == "warning" and f["CALC-004"]["count"] > 0
+    assert (tmp_path / "out" / "rea.csv").read_bytes() == (tmp / "out" / "rea.csv").read_bytes()
+
+
+def test_token_is_not_sent_over_plain_http_to_another_host(reference_sim, tmp_path, monkeypatch):
+    monkeypatch.setenv("SORA_CALCULATOR_TOKEN", "secret")
+    r = run(reference_sim, tmp_path / "out", "--calculator", "http://192.0.2.1:8080", check=False)
+    assert r.returncode == 1 and "refusing to send the bearer token" in r.stderr
+
+
+@pytest.mark.parametrize("command", ["calibrate", "inspect"])
+def test_calculator_options_only_for_run(reference_sim, tmp_path, command):
+    args = [str(ENGINE), command, str(reference_sim), "--calculator", "http://127.0.0.1:9"]
+    if command == "calibrate":
+        args += ["--scenario", str(SCENARIO), "-o", str(tmp_path / "out")]
+    r = subprocess.run(args, capture_output=True, text=True)
+    assert r.returncode == 2 and "--calculator is an option of `sora run` only" in r.stderr
+    assert not (tmp_path / "out").exists()
+
+
 def test_unreachable_calculator_without_cache_fails(reference_sim, tmp_path):
+    # Capabilities are retried like a batch (8 attempts, about 30 s of backoff) before the run fails.
     r = run(reference_sim, tmp_path / "out", "--calculator", "http://127.0.0.1:9", check=False)
-    assert r.returncode == 1 and "capabilities" in r.stderr
+    assert r.returncode == 1 and "capabilities failed after 8 attempts" in r.stderr
     assert not (tmp_path / "out" / "summary.json").exists()
 
 

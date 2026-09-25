@@ -1,6 +1,8 @@
 #include "sora/rea.hpp"
+#include "sora/json_text.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <fstream>
 #include <optional>
@@ -154,108 +156,111 @@ ReaResult project_rea(Duck& duck, const ReaInputs& in, const calc::ClientOptions
     RegParams reg;
     reg.load(duck, in.parameter_source, d);
 
-    std::vector<calc::IrbCall> calls(kReaSlots);
-    for (std::size_t k = 0; k < kReaSlots; ++k) {
-        calls[k].context.scenario = rea_slot_scenario(k);
-        calls[k].context.year = rea_slot_year(k);
-        calls[k].context.reference_date = d.manifest.reference_date;
-        calls[k].context.currency = d.manifest.reporting_currency;
-    }
-    std::vector<std::size_t> exposure_of;   // per record (same order in every call)
-    std::uint64_t skipped = 0, proxy = 0;
+    // Exposures sent, in exposure order (the same records in every call). Records are generated per batch from
+    // this list and released once their results are aggregated, so memory does not grow with 7 x N records.
+    std::vector<std::uint32_t> sent;
+    std::uint64_t skipped = 0;
     for (std::size_t i = 0; i < d.exposures.size(); ++i) {
-        const auto sid = s.segment_of[i];
-        if (sid < 0) continue;
+        if (s.segment_of[i] < 0) continue;
         const auto& e = d.exposures[i];
         if (e.stage != Stage::S1 && e.stage != Stage::S2 && e.stage != Stage::S3) {
             if (e.stage == Stage::Poci) ++skipped;
             continue;
         }
-        const Cents ead = to_reporting(e.gca, d.fx_to_reporting.at(e.currency));
-        if (ead <= 0) { ++skipped; continue; }
-        const auto seg = static_cast<std::size_t>(sid);
+        if (to_reporting(e.gca, d.fx_to_reporting.at(e.currency)) <= 0) { ++skipped; continue; }
+        sent.push_back(static_cast<std::uint32_t>(i));
+    }
+
+    // Record of exposure `i` for scenario point `k`. `pit` is set when the PiT proxy is used.
+    const auto make_record = [&](std::size_t i, std::size_t k, bool& pit) {
+        const auto& e = d.exposures[i];
+        const auto seg = static_cast<std::size_t>(s.segment_of[i]);
         const auto& segment = s.segments[seg];
         const auto& cp = d.counterparties[e.counterparty];
         const auto& extra = extras[e.counterparty];
 
-        // Parameter path of this exposure: the segment's, or its own when it has exposure-level parameters
-        // (built as in project(): own starting point projected with the segment's satellite, then overlays).
-        std::array<ParamPath, 2> own;
-        const std::array<ParamPath, 2>* paths = &proj.params[seg];
-        if (in.external && in.external->has_exposure(i)) {
-            Params p0 = proj.params[seg][0][0];
-            in.external->apply_exposure(i, {0, 0}, p0);
-            const auto sat = in.satellites.find(segment.portfolio);
-            if (sat == in.satellites.end()) throw Error("no satellite coefficients for portfolio " + segment.portfolio);
-            for (std::size_t sc = 0; sc < 2; ++sc) {
-                own[sc] = project_parameters(segment, p0, sat->second, in.macro, kScenarios[sc], in.config);
-                own[sc][0] = p0;
-                for (int t = 1; t <= 3; ++t) {
-                    const ParamKey k{static_cast<int>(sc) + 1, t};
-                    in.external->apply_segment(s, segment, k, own[sc][static_cast<std::size_t>(t)]);
-                    in.external->apply_exposure(i, k, own[sc][static_cast<std::size_t>(t)]);
-                }
-            }
-            paths = &own;
-        }
-
-        calc::IrbRecord base;
-        base.exposure_class = irb_exposure_class(e, cp);
-        base.ead = ead;
+        calc::IrbRecord r;
+        r.exposure_class = irb_exposure_class(e, cp);
+        r.ead = to_reporting(e.gca, d.fx_to_reporting.at(e.currency));
         if (e.has_maturity) {
             const double years = static_cast<double>(e.maturity - d.manifest.reference_day) / 365.25;
-            base.maturity_bp = std::clamp<std::int64_t>(std::llround(years * 1e4), 10'000, 50'000);   // M in [1, 5]
+            r.maturity_bp = std::clamp<std::int64_t>(std::llround(years * 1e4), 10'000, 50'000);   // M in [1, 5]
         }
-        if (base.exposure_class.rfind("corporates", 0) == 0 && extra.turnover) base.turnover_eur = *extra.turnover;
+        if (r.exposure_class.rfind("corporates", 0) == 0 && extra.turnover) r.turnover_eur = *extra.turnover;
         // Art. 142(1)(4): large financial sector entity, total assets >= EUR 70 billion.
         if ((cp.sector == EbaSector::CreditInstitution || cp.sector == EbaSector::OtherFinancial) && extra.total_assets &&
             *extra.total_assets >= 7'000'000'000'000)
-            base.large_financial_entity = true;
-        const auto country = d.countries.at(e.country_of_risk != kNone ? e.country_of_risk : cp.country);
-        if (is_code(country, 2)) base.country = country;
-        const std::string& id = d.exposure_ids.at(e.id);
+            r.large_financial_entity = true;
+        const auto& country = d.countries.at(e.country_of_risk != kNone ? e.country_of_risk : cp.country);
+        if (is_code(country, 2)) r.country = country;
+        const int year = rea_slot_year(k);
+        r.record_id = d.exposure_ids.at(e.id) + "|" + rea_slot_scenario(k) + "|" + std::to_string(year);
 
-        for (std::size_t k = 0; k < kReaSlots; ++k) {
-            const int year = rea_slot_year(k);
-            const Params& p = (*paths)[k <= 3 ? 0 : 1][static_cast<std::size_t>(year)];
-            calc::IrbRecord r = base;
-            r.record_id = id + "|" + rea_slot_scenario(k) + "|" + std::to_string(year);
-            const auto rp = reg.get(s, segment, i, k);
-            bool pit = false;
-            if (e.stage == Stage::S3) {
-                r.defaulted = true;
-                r.pd = 1'000'000'000;
-                r.elbe = calc::to_nano(p.lgd_s3);
-                r.lgd = rp.lgd ? *rp.lgd : *r.elbe;
-                pit = !rp.lgd;
-            } else {
-                const bool s1 = e.stage == Stage::S1;
-                r.pd = rp.pd ? *rp.pd : calc::to_nano(s1 ? p.pd12m_s1 : p.pd12m_s2);
-                r.lgd = rp.lgd ? *rp.lgd : calc::to_nano(s1 ? p.lgd_s1 : p.lgd_s2);
-                pit = !rp.pd || !rp.lgd;
-            }
-            proxy += pit ? 1 : 0;
-            calls[k].records.push_back(std::move(r));
+        // Parameters of this point: the segment's path, or the exposure's own path when it has exposure-level
+        // parameters (exposure_param_paths, the same paths project() used for the provisions).
+        const std::size_t sc = k <= 3 ? 0 : 1;
+        Params p;
+        if (in.external && in.external->has_exposure(i)) {
+            const auto sat = in.satellites.find(segment.portfolio);
+            if (sat == in.satellites.end()) throw Error("no satellite coefficients for portfolio " + segment.portfolio);
+            p = exposure_param_paths(s, segment, proj.params[seg][0][0], sat->second, in.macro, in.config, *in.external,
+                                     i)[sc][static_cast<std::size_t>(year)];
+        } else {
+            p = proj.params[seg][sc][static_cast<std::size_t>(year)];
         }
-        exposure_of.push_back(i);
-    }
+        const auto rp = reg.get(s, segment, i, k);
+        if (e.stage == Stage::S3) {
+            r.defaulted = true;
+            r.pd = 1'000'000'000;
+            r.elbe = calc::to_nano(p.lgd_s3);
+            r.lgd = rp.lgd ? *rp.lgd : *r.elbe;
+            pit = !rp.lgd;
+        } else {
+            const bool s1 = e.stage == Stage::S1;
+            r.pd = rp.pd ? *rp.pd : calc::to_nano(s1 ? p.pd12m_s1 : p.pd12m_s2);
+            r.lgd = rp.lgd ? *rp.lgd : calc::to_nano(s1 ? p.lgd_s1 : p.lgd_s2);
+            pit = !rp.pd || !rp.lgd;
+        }
+        return r;
+    };
 
     ReaResult out;
     out.calculator = caps.name;
     out.version = caps.version;
     out.param_set = opt.param_set;
     out.cells.assign(s.segments.size(), {});
-    const auto results = client.irb(calls);
-    out.stats = client.stats();
 
+    std::atomic<std::uint64_t> proxy{0};
     std::uint64_t ok = 0, rejected = 0;
     std::vector<std::string> examples;
+    calc::IrbStream stream;
     for (std::size_t k = 0; k < kReaSlots; ++k) {
-        for (std::size_t j = 0; j < results[k].size(); ++j) {
-            const auto& res = results[k][j];
-            auto& cell = out.cells[static_cast<std::size_t>(s.segment_of[exposure_of[j]])][k];
+        calc::RequestContext ctx;
+        ctx.scenario = rea_slot_scenario(k);
+        ctx.year = rea_slot_year(k);
+        ctx.reference_date = d.manifest.reference_date;
+        ctx.currency = d.manifest.reporting_currency;
+        stream.contexts.push_back(std::move(ctx));
+        stream.counts.push_back(sent.size());
+    }
+    stream.fill = [&](std::size_t k, std::size_t first, std::size_t count, std::vector<calc::IrbRecord>& records) {
+        records.reserve(count);
+        std::uint64_t pit_records = 0;
+        for (std::size_t j = first; j < first + count; ++j) {
+            bool pit = false;
+            records.push_back(make_record(sent[j], k, pit));
+            pit_records += pit ? 1 : 0;
+        }
+        proxy += pit_records;
+    };
+    // Called in call and record order, so the rejection examples are the first ones, as before.
+    stream.sink = [&](std::size_t k, std::size_t first, std::vector<calc::IrbResult>& results) {
+        for (std::size_t j = 0; j < results.size(); ++j) {
+            const auto& res = results[j];
+            const auto& e = d.exposures[sent[first + j]];
+            auto& cell = out.cells[static_cast<std::size_t>(s.segment_of[sent[first + j]])][k];
             if (res.ok) {
-                cell.ead += calls[k].records[j].ead;
+                cell.ead += to_reporting(e.gca, d.fx_to_reporting.at(e.currency));   // the record's EAD
                 cell.rea += res.rea;
                 cell.expected_loss += res.expected_loss;
                 ++cell.ok;
@@ -270,7 +275,10 @@ ReaResult project_rea(Duck& duck, const ReaInputs& in, const calc::ClientOptions
                 }
             }
         }
-    }
+    };
+    client.irb(stream);
+    out.stats = client.stats();
+
     const auto& st = out.stats;
     out.findings.push_back({"CALC-000", "info",
                             "IRB REA by " + caps.name + " " + caps.version + " (" + opt.param_set + "): " +
@@ -279,7 +287,14 @@ ReaResult project_rea(Duck& duck, const ReaInputs& in, const calc::ClientOptions
                                 std::to_string(st.cache_hits) + " batches from the replay cache",
                             ok + rejected});
     if (st.offline)
-        out.findings.push_back({"CALC-001", "info", "calculator unreachable: results replayed from the cache", st.cache_hits});
+        out.findings.push_back({"CALC-001", "info",
+                                "calculator unreachable (" + st.offline_reason + "): results replayed from the cache",
+                                st.cache_hits});
+    if (st.cache_write_failures)
+        out.findings.push_back({"CALC-004", "warning",
+                                "replay cache not written (results are unaffected; a rerun calls the calculator again): " +
+                                    st.cache_write_error,
+                                st.cache_write_failures});
     if (proxy)
         out.findings.push_back({"CALC-002", "warning",
                                 "IFRS 9 point-in-time PD/LGD used as a proxy for the regulatory PD/LGD (no pd_reg/lgd_reg supplied)",
@@ -314,16 +329,8 @@ void write_rea_csv(const Segmentation& s, const ReaResult& r, const fs::path& fi
 }
 
 void write_rea_summary(std::ostream& f, const ReaResult& r) {
-    const auto quote = [](const std::string& x) {
-        std::string o = "\"";
-        for (char c : x) {
-            if (c == '"' || c == '\\') o += '\\';
-            o += c;
-        }
-        return o + "\"";
-    };
-    f << "{\n    \"calculator\": " << quote(r.calculator) << ",\n    \"calculator_version\": " << quote(r.version)
-      << ",\n    \"param_set\": " << quote(r.param_set) << ",\n    \"totals\": {";
+    f << "{\n    \"calculator\": " << json_quote(r.calculator) << ",\n    \"calculator_version\": " << json_quote(r.version)
+      << ",\n    \"param_set\": " << json_quote(r.param_set) << ",\n    \"totals\": {";
     for (std::size_t k = 0; k < kReaSlots; ++k) {
         ReaCell t;
         for (const auto& cells : r.cells) {

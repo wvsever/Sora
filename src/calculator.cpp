@@ -1,18 +1,21 @@
 #include "sora/calculator.hpp"
+#include "sora/json_text.hpp"
 
+#include <arpa/inet.h>
 #include <httplib.h>
 #include <json.hpp>
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <fstream>
+#include <initializer_list>
 #include <limits>
 #include <mutex>
 #include <sstream>
@@ -180,21 +183,44 @@ std::string sha256_hex(std::string_view data) {
     return hex(d.data(), d.size());
 }
 
-std::string uuid_from_hash(std::string_view data) {
-    Sha256 h;
-    h.update(data);
-    auto d = h.digest();
+namespace {
+
+std::string uuid_from_digest(std::array<std::uint8_t, 32> d) {
     d[6] = static_cast<std::uint8_t>((d[6] & 0x0F) | 0x80);   // version 8 (custom)
     d[8] = static_cast<std::uint8_t>((d[8] & 0x3F) | 0x80);   // RFC 9562 variant
     const std::string x = hex(d.data(), 16);
     return x.substr(0, 8) + "-" + x.substr(8, 4) + "-" + x.substr(12, 4) + "-" + x.substr(16, 4) + "-" + x.substr(20, 12);
 }
 
-std::string idempotency_key(std::string_view run_id, std::string_view calculation, std::string_view body) {
+// idempotency_key() of a body given as consecutive parts, hashed without concatenating them.
+std::string idempotency_key_of_parts(std::string_view run_id, std::string_view calculation,
+                                     std::initializer_list<std::string_view> body) {
     // Length-prefixed parts, so no two different inputs share an encoding.
-    std::string m = "sora-calculator-v1\n";
-    for (auto part : {run_id, calculation, body}) m += std::to_string(part.size()) + ":" + std::string(part) + "\n";
-    return uuid_from_hash(m);
+    Sha256 h;
+    h.update("sora-calculator-v1\n");
+    for (auto part : {run_id, calculation}) {
+        h.update(std::to_string(part.size()) + ":");
+        h.update(part);
+        h.update("\n");
+    }
+    std::size_t size = 0;
+    for (auto part : body) size += part.size();
+    h.update(std::to_string(size) + ":");
+    for (auto part : body) h.update(part);
+    h.update("\n");
+    return uuid_from_digest(h.digest());
+}
+
+}  // namespace
+
+std::string uuid_from_hash(std::string_view data) {
+    Sha256 h;
+    h.update(data);
+    return uuid_from_digest(h.digest());
+}
+
+std::string idempotency_key(std::string_view run_id, std::string_view calculation, std::string_view body) {
+    return idempotency_key_of_parts(run_id, calculation, {body});
 }
 
 // ============================================================================================== protocol
@@ -279,63 +305,114 @@ Capabilities parse_capabilities(std::string_view text) {
     return c;
 }
 
+namespace {
+
+// The request written directly as canonical JSON into one buffer, byte-identical to nlohmann's dump() of the same
+// objects (keys in byte order, no whitespace, strings escaped by json_escape_to):
+//   {"context":{"inputFingerprint":"sha256:<hex>","paramSet":..,"projectionYear":..,"referenceDate":..,
+//   "reportingCurrency":..,["requestId":..,]"runId":..,"scenario":..},"records":[..]}
+// The fingerprint (fixed length) is written as a placeholder and filled in once the records are encoded.
+struct EncodedIrb {
+    std::string body;
+    std::size_t id_begin = 0, id_end = 0;   // the "requestId":..., member (empty range without one)
+};
+
+EncodedIrb encode_irb(const RequestContext& ctx, const std::vector<IrbRecord>& records, std::size_t first,
+                      std::size_t count, std::string_view request_id) {
+    if (first + count > records.size()) throw CalculatorError("encode_irb_request: record range out of bounds");
+    EncodedIrb e;
+    std::string& o = e.body;
+    o.reserve(512 + count * 300);
+    o += "{\"context\":{\"inputFingerprint\":\"sha256:";
+    const std::size_t fingerprint = o.size();
+    o.append(64, '0');
+    o += "\",\"paramSet\":" + json_quote(ctx.param_set) + ",\"projectionYear\":" + std::to_string(ctx.year) +
+         ",\"referenceDate\":" + json_quote(ctx.reference_date) + ",\"reportingCurrency\":" + json_quote(ctx.currency) + ",";
+    e.id_begin = e.id_end = o.size();
+    if (!request_id.empty()) {
+        o += "\"requestId\":" + json_quote(request_id) + ",";
+        e.id_end = o.size();
+    }
+    o += "\"runId\":" + json_quote(ctx.run_id) + ",\"scenario\":" + json_quote(ctx.scenario) + "},\"records\":";
+    const std::size_t records_begin = o.size();
+    o += '[';
+    for (std::size_t i = first; i < first + count; ++i) {
+        const auto& r = records[i];
+        if (i != first) o += ',';
+        char sep = '{';
+        const auto key = [&](const char* k) {
+            o += sep;
+            sep = ',';
+            o += '"';
+            o += k;
+            o += "\":";
+        };
+        const auto str = [&](const char* k, std::string_view v) {
+            key(k);
+            o += '"';
+            json_escape_to(o, v);
+            o += '"';
+        };
+        // Members in key order.
+        if (r.turnover_eur) str("annualTurnoverEurMillions", format_decimal(*r.turnover_eur, 8));   // cents / 10^8
+        str("approach", r.approach);
+        if (!r.country.empty()) str("countryOfRisk", r.country);
+        if (!r.currency.empty()) str("currency", r.currency);
+        str("ead", format_decimal(r.ead, 2));
+        if (r.elbe) str("elbe", format_decimal(*r.elbe, 9));
+        str("exposureClass", r.exposure_class);
+        if (r.defaulted) { key("isDefaulted"); o += "true"; }
+        if (r.large_financial_entity) { key("isLargeFinancialSectorEntity"); o += "true"; }
+        str("lgd", format_decimal(r.lgd, 9));
+        str("maturityYears", format_decimal(r.maturity_bp, 4));
+        str("pd", format_decimal(r.pd, 9));
+        str("recordId", r.record_id);
+        o += '}';
+    }
+    o += ']';
+    // context.inputFingerprint = SHA-256 of the records array.
+    o.replace(fingerprint, 64, sha256_hex(std::string_view(o).substr(records_begin)));
+    o += '}';
+    return e;
+}
+
+}  // namespace
+
 std::string encode_irb_request(const RequestContext& ctx, const std::vector<IrbRecord>& records, std::size_t first,
                                std::size_t count, const std::string& request_id) {
-    json recs = json::array();
-    for (std::size_t i = first; i < first + count; ++i) {
-        const auto& r = records.at(i);
-        json o = {{"recordId", r.record_id},
-                  {"exposureClass", r.exposure_class},
-                  {"approach", r.approach},
-                  {"ead", format_decimal(r.ead, 2)},
-                  {"pd", format_decimal(r.pd, 9)},
-                  {"lgd", format_decimal(r.lgd, 9)},
-                  {"maturityYears", format_decimal(r.maturity_bp, 4)}};
-        if (r.defaulted) o["isDefaulted"] = true;
-        if (r.elbe) o["elbe"] = format_decimal(*r.elbe, 9);
-        if (r.turnover_eur) o["annualTurnoverEurMillions"] = format_decimal(*r.turnover_eur, 8);   // cents / 10^8
-        if (r.large_financial_entity) o["isLargeFinancialSectorEntity"] = true;
-        if (!r.currency.empty()) o["currency"] = r.currency;
-        if (!r.country.empty()) o["countryOfRisk"] = r.country;
-        recs.push_back(std::move(o));
-    }
-    json c = {{"runId", ctx.run_id},
-              {"scenario", ctx.scenario},
-              {"projectionYear", ctx.year},
-              {"referenceDate", ctx.reference_date},
-              {"paramSet", ctx.param_set},
-              {"reportingCurrency", ctx.currency},
-              {"inputFingerprint", "sha256:" + sha256_hex(recs.dump())}};
-    if (!request_id.empty()) c["requestId"] = request_id;
-    return json{{"context", std::move(c)}, {"records", std::move(recs)}}.dump();
+    return encode_irb(ctx, records, first, count, request_id).body;
+}
+
+IrbRequest make_irb_request(const RequestContext& ctx, const std::vector<IrbRecord>& records, std::size_t first,
+                            std::size_t count) {
+    // Encoded once with a placeholder requestId of the key's fixed length (a UUID needs no escaping). The key is
+    // hashed from the body around that member (= the body without requestId), then written into the placeholder.
+    constexpr std::size_t kUuidLength = 36;
+    EncodedIrb e = encode_irb(ctx, records, first, count, std::string(kUuidLength, '0'));
+    const std::string_view body(e.body);
+    IrbRequest r;
+    r.key = idempotency_key_of_parts(ctx.run_id, "irb", {body.substr(0, e.id_begin), body.substr(e.id_end)});
+    if (r.key.size() != kUuidLength) throw CalculatorError("idempotency key of unexpected length");
+    e.body.replace(e.id_end - 2 - kUuidLength, kUuidLength, r.key);   // ..."<placeholder>",
+    r.body = std::move(e.body);
+    return r;
 }
 
 std::vector<IrbResult> decode_irb_response(std::string_view text, const std::vector<IrbRecord>& records,
                                            std::size_t first, std::size_t count, const std::string& request_id,
                                            const Capabilities& caps, const std::string& param_set) {
     const std::string where = "IRB response " + request_id;
-    const auto j = parse_json(text, where);
-    const auto& meta = field(j, "meta", where);
-    const std::string wm = where + ".meta", wc = where + ".meta.calculator";
-    if (str_field(meta, "requestId", wm) != request_id)
-        throw CalculatorError(where + ": meta.requestId does not echo the request");
-    const auto& calc = field(meta, "calculator", wm);
-    const auto name = str_field(calc, "name", wc), version = str_field(calc, "version", wc);
-    if (name != caps.name || version != caps.version)
-        throw CalculatorError(where + ": calculator " + name + " " + version + " differs from the capabilities (" + caps.name +
-                              " " + caps.version + ")");
-    if (str_field(meta, "paramSet", wm) != param_set)
-        throw CalculatorError(where + ": meta.paramSet differs from the request");
-    const auto& results = field(j, "results", where);
-    if (!results.is_array()) throw CalculatorError(where + ": results is not an array");
-    if (results.size() != count)
-        throw CalculatorError(where + ": " + std::to_string(results.size()) + " results for " + std::to_string(count) + " records");
-    std::vector<IrbResult> out(count);
-    for (std::size_t k = 0; k < count; ++k) {
-        const auto& r = results[k];
-        const auto& expected = records.at(first + k).record_id;
+    if (first + count > records.size()) throw CalculatorError(where + ": record range out of bounds");
+    std::vector<IrbResult> out;
+    out.reserve(count);
+    // Each result object is decoded as soon as it is parsed and then dropped from the document, so a large
+    // response never exists as a full JSON tree (only `meta` and the rest of the envelope are kept).
+    const auto decode = [&](const json& r) {
+        const std::size_t k = out.size();
+        if (k >= count) throw CalculatorError(where + ": more results than the " + std::to_string(count) + " records");
+        const auto& expected = records[first + k].record_id;
         const std::string w = where + " result " + std::to_string(k);
-        IrbResult& x = out[k];
+        IrbResult& x = out.emplace_back();
         x.record_id = str_field(r, "recordId", w);
         if (x.record_id != expected) throw CalculatorError(w + ": recordId " + x.record_id + ", expected " + expected);
         const auto status = str_field(r, "status", w);
@@ -367,7 +444,43 @@ std::vector<IrbResult> decode_irb_response(std::string_view text, const std::vec
         } else {
             throw CalculatorError(w + ": status must be ok or rejected, got " + status);
         }
+    };
+    std::string top_key;   // current member of the top-level object
+    bool in_results = false;
+    json j;
+    try {
+        j = json::parse(text, [&](int depth, json::parse_event_t event, json& parsed) {
+            if (depth == 1 && event == json::parse_event_t::key) {
+                top_key = parsed.get<std::string>();
+                in_results = false;
+            } else if (depth == 1 && event == json::parse_event_t::array_start && top_key == "results") {
+                in_results = true;
+            } else if (depth == 2 && event == json::parse_event_t::object_end && in_results) {
+                decode(parsed);
+                return false;   // decoded: drop it
+            }
+            return true;
+        });
+    } catch (const json::exception& e) {
+        throw CalculatorError(where + ": invalid JSON (" + e.what() + ")");
     }
+    const auto& meta = field(j, "meta", where);
+    const std::string wm = where + ".meta", wc = where + ".meta.calculator";
+    if (str_field(meta, "requestId", wm) != request_id)
+        throw CalculatorError(where + ": meta.requestId does not echo the request");
+    const auto& calc = field(meta, "calculator", wm);
+    const auto name = str_field(calc, "name", wc), version = str_field(calc, "version", wc);
+    if (name != caps.name || version != caps.version)
+        throw CalculatorError(where + ": calculator " + name + " " + version + " differs from the capabilities (" + caps.name +
+                              " " + caps.version + ")");
+    if (str_field(meta, "paramSet", wm) != param_set)
+        throw CalculatorError(where + ": meta.paramSet differs from the request");
+    const auto& results = field(j, "results", where);
+    if (!results.is_array()) throw CalculatorError(where + ": results is not an array");
+    // Decoded objects were dropped while parsing: anything left is not a result object.
+    if (!results.empty()) throw CalculatorError(where + ": results holds a value that is not an object");
+    if (out.size() != count)
+        throw CalculatorError(where + ": " + std::to_string(out.size()) + " results for " + std::to_string(count) + " records");
     return out;
 }
 
@@ -418,7 +531,14 @@ public:
         client_->set_write_timeout(usec(o.read_timeout));
         client_->set_keep_alive(true);
         if (!o.token_env.empty()) {
-            if (const char* token = std::getenv(o.token_env.c_str()); token && *token) client_->set_bearer_token_auth(token);
+            if (const char* token = std::getenv(o.token_env.c_str()); token && *token) {
+                // A bearer token in clear text is readable by anyone on the path: only to this machine.
+                if (url_.scheme == "http" && !is_loopback_host(url_.host_port))
+                    throw CalculatorError("refusing to send the bearer token from $" + o.token_env + " over plain http:// to " +
+                                          url_.host_port + ": use an https:// calculator URL (http:// is allowed with a "
+                                          "token only for localhost, 127.0.0.0/8 and ::1)");
+                client_->set_bearer_token_auth(token);
+            }
         }
     }
 
@@ -472,6 +592,29 @@ bool retryable(const Response& r) {
 
 std::unique_ptr<Transport> http_transport(const ClientOptions& options) { return std::make_unique<HttpTransport>(options); }
 
+bool is_loopback_host(std::string_view host_port) {
+    std::string host;
+    if (!host_port.empty() && host_port.front() == '[') {   // [IPv6]:port
+        const auto end = host_port.find(']');
+        if (end == std::string_view::npos) return false;
+        host = host_port.substr(1, end - 1);
+    } else if (std::count(host_port.begin(), host_port.end(), ':') > 1) {   // bare IPv6, no port
+        host = host_port;
+    } else {
+        host = host_port.substr(0, host_port.find(':'));
+    }
+    std::transform(host.begin(), host.end(), host.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (host == "localhost" || host == "localhost.") return true;
+    unsigned char a[16];
+    if (inet_pton(AF_INET, host.c_str(), a) == 1) return a[0] == 127;
+    if (inet_pton(AF_INET6, host.c_str(), a) == 1) {
+        static constexpr unsigned char mapped[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};   // ::ffff:a.b.c.d
+        if (std::memcmp(a, mapped, 12) == 0) return a[12] == 127;
+        return std::all_of(a, a + 15, [](unsigned char c) { return c == 0; }) && a[15] == 1;   // ::1
+    }
+    return false;
+}
+
 // ============================================================================================== client
 
 struct Client::Batch {
@@ -521,15 +664,22 @@ const Capabilities& Client::connect(const std::string& calculation) {
     auto t = factory_();
     const fs::path cached = opt_.cache_dir.empty() ? fs::path{}
                                                    : opt_.cache_dir / "capabilities" / (sha256_hex(opt_.url).substr(0, 16) + ".json");
-    // One quick attempt first: if the calculator is down and the cache knows it, replay offline.
-    Response r = call(*t, "GET", "/v1/capabilities", "", "", 1);
+    // Retried with the same backoff as a batch, so a transient error does not switch the run to offline replay.
+    // Only when every attempt failed (no response or a retryable status) does a cached copy take over.
+    const Response r = call(*t, "GET", "/v1/capabilities", "", "");
     std::string text;
-    if (r.status == 0 && !cached.empty() && fs::is_regular_file(cached)) {
+    std::error_code ec;
+    if (r.status != 200 && retryable(r) && !cached.empty() && fs::is_regular_file(cached, ec)) {
         text = read_file(cached).value_or("");
+        std::lock_guard lock(mu_);
         stats_.offline = true;
+        stats_.offline_reason = "GET /v1/capabilities failed after " + std::to_string(opt_.max_attempts) +
+                                " attempts: " + problem_text(r);
     } else {
-        if (retryable(r)) r = call(*t, "GET", "/v1/capabilities", "", "", std::min(opt_.max_attempts, 3));   // fail fast
-        if (r.status != 200) throw CalculatorError("calculator " + opt_.url + ": GET /v1/capabilities failed: " + problem_text(r));
+        if (r.status != 200)
+            throw CalculatorError("calculator " + opt_.url + ": GET /v1/capabilities failed" +
+                                  (retryable(r) ? " after " + std::to_string(opt_.max_attempts) + " attempts" : std::string()) +
+                                  ": " + problem_text(r));
         text = r.body;
     }
     caps_ = parse_capabilities(text);
@@ -541,7 +691,10 @@ const Capabilities& Client::connect(const std::string& calculation) {
     return caps_;
 }
 
-void Client::cache_write(const fs::path& file, const std::string& data) const {
+void Client::cache_write(const fs::path& file, const std::string& data) {
+    // The cache only saves calculator calls on a rerun: a failure (read-only or full disk) must not lose a valid
+    // response, so it is counted and reported, and the run continues.
+    std::string error;
     std::error_code ec;
     fs::create_directories(file.parent_path(), ec);
     // Write then rename: readers never see a partial file, and concurrent writers store identical content.
@@ -550,10 +703,16 @@ void Client::cache_write(const fs::path& file, const std::string& data) const {
     const fs::path tmp = file.parent_path() / tmp_name.str();
     {
         std::ofstream f(tmp, std::ios::binary);
-        if (!f || !(f << data)) throw CalculatorError("cannot write the calculator cache file " + tmp.string());
+        if (!f || !(f << data) || !f.flush()) error = "cannot write " + tmp.string();
     }
-    fs::rename(tmp, file, ec);
-    if (ec) throw CalculatorError("cannot write the calculator cache file " + file.string() + ": " + ec.message());
+    if (error.empty()) {
+        fs::rename(tmp, file, ec);
+        if (ec) error = "cannot rename to " + file.string() + ": " + ec.message();
+    }
+    if (error.empty()) return;
+    fs::remove(tmp, ec);
+    std::lock_guard lock(mu_);
+    if (stats_.cache_write_failures++ == 0) stats_.cache_write_error = error;
 }
 
 std::string Client::run_batch(Transport& t, const Batch& b, const std::string& body, const std::string& key) {
@@ -597,15 +756,14 @@ std::string Client::run_batch(Transport& t, const Batch& b, const std::string& b
     }
 }
 
-std::vector<std::vector<IrbResult>> Client::irb(const std::vector<IrbCall>& calls) {
+void Client::irb(const IrbStream& stream) {
     if (caps_.name.empty()) throw CalculatorError("calculator client: connect() first");
+    if (stream.counts.size() != stream.contexts.size()) throw CalculatorError("calculator client: one record count per call");
     // Batch size: the sync limit, unless a larger batch is configured (then those batches go through jobs).
     const std::size_t size = opt_.max_batch ? std::min(opt_.max_batch, caps_.max_records) : caps_.max_sync_records;
     std::vector<Batch> batches;
-    std::vector<std::vector<IrbResult>> out(calls.size());
-    for (std::size_t c = 0; c < calls.size(); ++c) {
-        const std::size_t n = calls[c].records.size();
-        out[c].resize(n);
+    for (std::size_t c = 0; c < stream.counts.size(); ++c) {
+        const std::size_t n = stream.counts[c];
         const std::size_t k = (n + size - 1) / size;   // balanced batches of at most `size` records
         for (std::size_t i = 0, first = 0; i < k; ++i) {
             const std::size_t count = n / k + (i < n % k ? 1 : 0);
@@ -617,31 +775,56 @@ std::vector<std::vector<IrbResult>> Client::irb(const std::vector<IrbCall>& call
         std::lock_guard lock(mu_);
         stats_.batches += batches.size();
     }
+    if (batches.empty()) return;
+    std::vector<RequestContext> contexts = stream.contexts;
+    for (auto& ctx : contexts) {
+        ctx.run_id = opt_.run_id;
+        ctx.param_set = opt_.param_set;
+    }
     const fs::path cache = opt_.cache_dir.empty() ? fs::path{}
                                                   : opt_.cache_dir / (path_safe(caps_.name) + "_" + path_safe(caps_.version)) / "irb";
+    std::size_t nthreads = caps_.max_concurrent;
+    if (opt_.max_concurrent) nthreads = std::min(nthreads, opt_.max_concurrent);
+    nthreads = std::max<std::size_t>(1, std::min(nthreads, batches.size()));
 
-    std::atomic<std::size_t> next{0};
-    std::atomic<bool> stop{false};
+    // Batches are handed out in order, but at most `window` ahead of the first batch not yet delivered to the
+    // sink: records, bodies and results exist only for the batches in that window. Finished batches wait in
+    // their slot until all earlier ones are delivered, so the sink sees them in order whatever the timing.
+    struct Done {
+        std::vector<IrbResult> results;
+        bool ready = false;
+    };
+    const std::size_t window = 2 * nthreads;
+    std::vector<Done> slots(window);
+    std::mutex wmu;   // guards next, delivered, slots, stop, failure; the sink runs under it
+    std::condition_variable cv;
+    std::size_t next = 0, delivered = 0;
+    bool stop = false;
     std::exception_ptr failure;
-    std::mutex failure_mu;
+
     auto worker = [&] {
         std::unique_ptr<Transport> t;
         try {
-            for (std::size_t i; !stop && (i = next++) < batches.size();) {
+            for (;;) {
+                std::size_t i;
+                {
+                    std::unique_lock lock(wmu);
+                    cv.wait(lock, [&] { return stop || next >= batches.size() || next < delivered + window; });
+                    if (stop || next >= batches.size()) return;
+                    i = next++;
+                }
                 const Batch& b = batches[i];
-                const IrbCall& call_in = calls[b.call];
-                RequestContext ctx = call_in.context;
-                ctx.run_id = opt_.run_id;
-                ctx.param_set = opt_.param_set;
-                const std::string key = idempotency_key(opt_.run_id, "irb", encode_irb_request(ctx, call_in.records, b.first, b.count, ""));
-                const std::string body = encode_irb_request(ctx, call_in.records, b.first, b.count, key);
-                const fs::path file = cache.empty() ? fs::path{} : cache / (sha256_hex(body) + ".json");
-                std::vector<IrbResult> res;
+                std::vector<IrbRecord> records;
+                stream.fill(b.call, b.first, b.count, records);
+                if (records.size() != b.count) throw CalculatorError("calculator client: fill produced a wrong record count");
+                IrbRequest req = make_irb_request(contexts[b.call], records, 0, b.count);
+                const fs::path file = cache.empty() ? fs::path{} : cache / (sha256_hex(req.body) + ".json");
+                Done done;
                 bool hit = false;
                 if (!file.empty()) {
                     if (const auto text = read_file(file)) {
                         try {
-                            res = decode_irb_response(*text, call_in.records, b.first, b.count, key, caps_, opt_.param_set);
+                            done.results = decode_irb_response(*text, records, 0, b.count, req.key, caps_, opt_.param_set);
                             hit = true;
                         } catch (const CalculatorError&) {   // unreadable entry: fetch again and overwrite it
                         }
@@ -652,28 +835,60 @@ std::vector<std::vector<IrbResult>> Client::irb(const std::vector<IrbCall>& call
                     ++stats_.cache_hits;
                 } else {
                     if (stats_.offline)
-                        throw CalculatorError("calculator unreachable and batch " + key + " is not in the replay cache");
+                        throw CalculatorError("calculator unreachable and batch " + req.key + " is not in the replay cache");
                     if (!t) t = factory_();
-                    const std::string text = run_batch(*t, b, body, key);
-                    res = decode_irb_response(text, call_in.records, b.first, b.count, key, caps_, opt_.param_set);
+                    const std::string text = run_batch(*t, b, req.body, req.key);
+                    std::string().swap(req.body);
+                    done.results = decode_irb_response(text, records, 0, b.count, req.key, caps_, opt_.param_set);
                     if (!file.empty()) cache_write(file, text);
                 }
-                std::move(res.begin(), res.end(), out[b.call].begin() + static_cast<std::ptrdiff_t>(b.first));
+                std::vector<IrbRecord>().swap(records);
+                done.ready = true;
+                {
+                    std::lock_guard lock(wmu);
+                    slots[i % window] = std::move(done);
+                    while (!stop && delivered < batches.size() && slots[delivered % window].ready) {
+                        Done d = std::move(slots[delivered % window]);
+                        slots[delivered % window] = Done{};
+                        const Batch& db = batches[delivered];
+                        stream.sink(db.call, db.first, d.results);
+                        ++delivered;
+                    }
+                }
+                cv.notify_all();
             }
         } catch (...) {
-            std::lock_guard lock(failure_mu);
-            if (!failure) failure = std::current_exception();
-            stop = true;
+            {
+                std::lock_guard lock(wmu);
+                if (!failure) failure = std::current_exception();
+                stop = true;
+            }
+            cv.notify_all();
         }
     };
-    std::size_t nthreads = caps_.max_concurrent;
-    if (opt_.max_concurrent) nthreads = std::min(nthreads, opt_.max_concurrent);
-    nthreads = std::max<std::size_t>(1, std::min(nthreads, batches.size()));
     std::vector<std::thread> pool;
     for (std::size_t i = 1; i < nthreads; ++i) pool.emplace_back(worker);
     worker();
     for (auto& th : pool) th.join();
     if (failure) std::rethrow_exception(failure);
+}
+
+std::vector<std::vector<IrbResult>> Client::irb(const std::vector<IrbCall>& calls) {
+    std::vector<std::vector<IrbResult>> out(calls.size());
+    IrbStream s;
+    for (std::size_t c = 0; c < calls.size(); ++c) {
+        s.contexts.push_back(calls[c].context);
+        s.counts.push_back(calls[c].records.size());
+        out[c].resize(calls[c].records.size());
+    }
+    s.fill = [&](std::size_t call, std::size_t first, std::size_t count, std::vector<IrbRecord>& records) {
+        const auto& in = calls[call].records;
+        records.assign(in.begin() + static_cast<std::ptrdiff_t>(first), in.begin() + static_cast<std::ptrdiff_t>(first + count));
+    };
+    s.sink = [&](std::size_t call, std::size_t first, std::vector<IrbResult>& results) {
+        std::move(results.begin(), results.end(), out[call].begin() + static_cast<std::ptrdiff_t>(first));
+    };
+    irb(s);
     return out;
 }
 

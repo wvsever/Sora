@@ -108,6 +108,24 @@ void project_exposure(Stage stage, double gca, double allowance, const std::arra
     }
 }
 
+std::array<ParamPath, 2> exposure_param_paths(const Segmentation& s, const Segment& seg, const Params& start,
+                                              const Satellite& sat, const MacroTable& macro, const ScenarioConfig& cfg,
+                                              const ExternalParameters& external, std::size_t exposure) {
+    Params p0 = start;
+    external.apply_exposure(exposure, {0, 0}, p0);
+    std::array<ParamPath, 2> own;
+    for (std::size_t sc = 0; sc < 2; ++sc) {
+        own[sc] = project_parameters(seg, p0, sat, macro, kScenarios[sc], cfg);   // own[sc][0] = p0
+        for (int t = 1; t <= 3; ++t) {
+            const ParamKey k{static_cast<int>(sc) + 1, t};
+            external.apply_segment(s, seg, k, own[sc][static_cast<std::size_t>(t)]);
+            external.apply_exposure(exposure, k, own[sc][static_cast<std::size_t>(t)]);
+        }
+        own[sc][4] = own[sc][3];
+    }
+    return own;
+}
+
 Projection project(const Dataset& d, const Segmentation& s, const Calibration& cal,
                    const std::map<std::string, Satellite>& satellites, const MacroTable& macro,
                    const ScenarioConfig& cfg, const ExternalParameters* external, unsigned workers) {
@@ -178,20 +196,11 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
                 auto check_own = [&](const Params& p, const std::string& what) {
                     for (const auto& msg : check_parameters(p)) log.errors.emplace_back(i, what + ": " + msg);
                 };
-                Params p0 = start[seg];
-                external->apply_exposure(i, {0, 0}, p0);
-                std::array<ParamPath, 2> own;
-                for (std::size_t sc = 0; sc < 2; ++sc) {
-                    own[sc] = project_parameters(s.segments[seg], p0, *sat[seg], macro, kScenarios[sc], cfg);
-                    for (int t = 1; t <= 3; ++t) {
-                        const ParamKey k{static_cast<int>(sc) + 1, t};
-                        external->apply_segment(s, s.segments[seg], k, own[sc][static_cast<std::size_t>(t)]);
-                        external->apply_exposure(i, k, own[sc][static_cast<std::size_t>(t)]);
+                const auto own = exposure_param_paths(s, s.segments[seg], start[seg], *sat[seg], macro, cfg, *external, i);
+                for (std::size_t sc = 0; sc < 2; ++sc)
+                    for (int t = 1; t <= 3; ++t)
                         check_own(own[sc][static_cast<std::size_t>(t)], d.exposure_ids.at(e.id) + " " + kScenarios[sc] + "/" + std::to_string(t));
-                    }
-                    own[sc][4] = own[sc][3];
-                }
-                check_own(p0, d.exposure_ids.at(e.id) + " actual/0");
+                check_own(own[0][0], d.exposure_ids.at(e.id) + " actual/0");
                 ++log.own;
                 project_exposure(e.stage, gca, allowance, own, cfg, acc, &pacc);
             } else {
