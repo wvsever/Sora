@@ -1,6 +1,8 @@
 #include "sora/output.hpp"
 
+#include "sora/collateral.hpp"
 #include "sora/cr_scen.hpp"
+#include "sora/json_text.hpp"
 
 #include <cstdio>
 #include <fstream>
@@ -22,15 +24,6 @@ std::string rate(double x) {
     char buf[64];
     std::snprintf(buf, sizeof buf, "%.9f", x);
     return buf;
-}
-
-std::string json_escape(const std::string& s) {
-    std::string o;
-    for (char c : s) {
-        if (c == '"' || c == '\\') o += '\\';
-        o += c;
-    }
-    return o;
 }
 
 std::ofstream open(const fs::path& p) {
@@ -127,7 +120,12 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
         }
     }
 
-    if (run.projection) write_cr_scen(d, s, *run.projection, dir / "cr_scen.csv");
+    if (run.projection) {
+        const auto coll = collateral_ltv(d, s, run.macro, run.config);
+        write_collateral(s, coll, dir / "collateral.csv");
+        write_cr_scen(d, s, *run.projection, dir / "cr_scen.csv", &coll);
+    }
+    if (run.rea) write_rea_csv(s, *run.rea, dir / "rea.csv");
 
     {
         auto f = open(dir / "summary.json");
@@ -138,7 +136,7 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
                 sp[4 + st] += stock[i][static_cast<std::size_t>(st)][1];
             }
         const char* spn[8] = {"exp_s1", "exp_s2", "exp_s3", "exp_poci", "prov_s1", "prov_s2", "prov_s3", "prov_poci"};
-        f << "{\n  \"reference_date\": \"" << d.manifest.reference_date << "\",\n"
+        f << "{\n  \"reference_date\": \"" << json_escape(d.manifest.reference_date) << "\",\n"
           << "  \"sim_mapping_release\": \"" << json_escape(d.manifest.mapping_release) << "\",\n"
           << "  \"scenario\": \"" << json_escape(run.config.name) << "\",\n"
           << "  \"segments\": " << nseg << ",\n  \"exposures\": " << s.in_scope << ",\n  \"starting_point\": {";
@@ -152,7 +150,12 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
             f << "\n    }";
             first = false;
         }
-        f << "\n  }\n}\n";
+        f << "\n  }";
+        if (run.rea) {
+            f << ",\n  \"rea\": ";
+            write_rea_summary(f, *run.rea);
+        }
+        f << "\n}\n";
     }
 
     {
@@ -160,7 +163,7 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
         f << "{\n  \"findings\": [";
         for (std::size_t i = 0; i < run.diagnostics.findings.size(); ++i) {
             const auto& x = run.diagnostics.findings[i];
-            f << (i ? ",\n" : "\n") << "    {\"id\": \"" << x.id << "\", \"severity\": \"" << x.severity
+            f << (i ? ",\n" : "\n") << "    {\"id\": \"" << json_escape(x.id) << "\", \"severity\": \"" << json_escape(x.severity)
               << "\", \"count\": " << x.count << ", \"message\": \"" << json_escape(x.message) << "\"}";
         }
         f << "\n  ]\n}\n";

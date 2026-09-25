@@ -29,13 +29,6 @@ struct Cell {
     std::array<double, 3> to{};
 };
 
-int stage_index(std::string_view s) {
-    if (s == "stage1") return 0;
-    if (s == "stage2") return 1;
-    if (s == "stage3") return 2;
-    return -1;
-}
-
 // Last day of the month following the month of `day` (days since epoch), without calendar libraries.
 Date next_month_end(Date day) {
     // Civil-from-days (H. Hinnant), then days-from-civil of the next month end.
@@ -87,24 +80,37 @@ Calibration calibrate(Duck& duck, const Dataset& d, const Segmentation& s, const
         }
     }
 
-    // Month-on-month transitions, streamed in (exposure_id, period_end) order.
-    if (sim_table_exists(d.sim_dir, "sim_stage_history")) {
-        std::string prev_id;
-        Date prev_day = 0;
+    // Month-on-month transitions, streamed in (exposure_id, period_end) order. DuckDB joins each history row
+    // to the exposure's index (its rank by exposure_id, which is the order of Dataset::exposures), so the sort
+    // runs on integers instead of strings and the loop needs no key lookups. History rows of exposures that
+    // are not in sim_exposure drop out of the join; they never contributed (no segment).
+    if (sim_table_exists(d.sim_dir, "sim_stage_history") && !d.exposures.empty()) {
+        // The index join below relies on load_dataset keeping every sim_exposure row, in the same
+        // ORDER BY CAST(exposure_id AS VARCHAR). Check that invariant instead of trusting it.
+        std::int64_t rows = -1;
+        duck.query("SELECT count(*) FROM " + sim_source(d.sim_dir, "sim_exposure"),
+                   [&](const Chunk& c) { if (c.size()) rows = c.i64(0, 0); });
+        if (rows != static_cast<std::int64_t>(d.exposures.size()))
+            throw Error("calibration: sim_exposure has " + std::to_string(rows) + " rows but " +
+                        std::to_string(d.exposures.size()) + " were loaded; exposure index join would misalign");
+        std::uint32_t prev_ex = kNone;
+        Date prev_day = 0, prev_next = 0;   // prev_next = next_month_end(prev_day)
         int prev_stage = -1;
         double prev_w = 0.0;
         bool prev_has_w = false;
         std::int32_t prev_sid = -1;
-        duck.query("SELECT CAST(exposure_id AS VARCHAR), CAST(period_end AS DATE), CAST(stage AS VARCHAR), "
-                   "CAST(gross_carrying_amount AS DECIMAL(18,2)) FROM " + sim_source(d.sim_dir, "sim_stage_history") +
-                   " ORDER BY 1, 2",
+        duck.query("SELECT x.ix, CAST(h.period_end AS DATE), CAST(CASE CAST(h.stage AS VARCHAR) WHEN 'stage1' THEN 0 "
+                   "WHEN 'stage2' THEN 1 WHEN 'stage3' THEN 2 ELSE -1 END AS BIGINT), "
+                   "CAST(h.gross_carrying_amount AS DECIMAL(18,2)) FROM " + sim_source(d.sim_dir, "sim_stage_history") +
+                   " h JOIN (SELECT CAST(exposure_id AS VARCHAR) AS id, "
+                   "row_number() OVER (ORDER BY CAST(exposure_id AS VARCHAR)) - 1 AS ix FROM " +
+                   sim_source(d.sim_dir, "sim_exposure") + ") x ON x.id = CAST(h.exposure_id AS VARCHAR) ORDER BY 1, 2",
                    [&](const Chunk& c) {
                        for (std::size_t r = 0; r < c.size(); ++r) {
-                           const auto id = c.str(0, r);
+                           const auto ex = static_cast<std::uint32_t>(c.i64(0, r));
                            const Date day = c.date(1, r);
-                           const int st = stage_index(c.str(2, r));
-                           if (id == prev_id && prev_stage >= 0 && st >= 0 && prev_has_w && prev_sid >= 0 &&
-                               day == next_month_end(prev_day)) {
+                           const int st = static_cast<int>(c.i64(2, r));
+                           if (ex == prev_ex && prev_stage >= 0 && st >= 0 && prev_has_w && prev_sid >= 0 && day == prev_next) {
                                for (auto lv : s.segments[static_cast<std::size_t>(prev_sid)].levels) {
                                    auto& cell = counts[lv][static_cast<std::size_t>(prev_stage)];
                                    cell.n += 1;
@@ -112,15 +118,16 @@ Calibration calibrate(Duck& duck, const Dataset& d, const Segmentation& s, const
                                    cell.to[static_cast<std::size_t>(st)] += prev_w;
                                }
                            }
-                           if (id != prev_id) {
-                               prev_id = std::string(id);
-                               const auto ex = d.exposure_ids.find(id);
-                               prev_sid = ex ? s.segment_of[*ex] : -1;
+                           if (ex != prev_ex) {
+                               if (ex >= d.exposures.size()) throw Error("calibration: exposure index out of range");
+                               prev_ex = ex;
+                               prev_sid = s.segment_of[ex];
                            }
+                           if (day != prev_day || prev_next == 0) prev_next = next_month_end(day);   // few distinct month ends
                            prev_day = day;
                            prev_stage = st;
                            prev_has_w = c.valid(3, r);
-                           prev_w = prev_has_w && prev_sid >= 0 ? to_double(c.cents(3, r)) * s.fx[*d.exposure_ids.find(id)] : 0.0;
+                           prev_w = prev_has_w && prev_sid >= 0 ? to_double(c.cents(3, r)) * s.fx[ex] : 0.0;
                        }
                    });
     }

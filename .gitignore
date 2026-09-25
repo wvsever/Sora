@@ -73,3 +73,6 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .venv/
+
+# Claude Code agent worktrees (temporary)
+.claude/worktrees/

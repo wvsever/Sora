@@ -32,8 +32,20 @@ ctest --test-dir build/release --output-on-failure          # unit tests + golde
 
 build/release/sora inspect build/sim/20260630
 build/release/sora run build/sim/20260630 --scenario tests/scenarios/test_eba2025.yaml -o build/out
-#   -> segments.csv, parameters.csv, projection.csv, cr_scen.csv (EBA CSV_CR_SCEN layout), summary.json, diagnostics.json
+#   -> segments.csv, parameters.csv, projection.csv, collateral.csv (LTV), cr_scen.csv (EBA CSV_CR_SCEN layout),
+#      summary.json, diagnostics.json
 #   add --parameters <file> to use customer risk parameters (plans/09_risk_parameters.md)
+
+# IRB REA through a regulatory calculator (here the stub): adds rea.csv and summary.json "rea"
+sora-tools calculator-stub --mode formula --port 8080 &
+build/release/sora run build/sim/20260630 --scenario tests/scenarios/test_eba2025.yaml -o build/out \
+    --calculator http://127.0.0.1:8080 --calculator-cache build/calculator-cache
+#   TLS: --calculator-ca <file>, mTLS: --calculator-cert <file> --calculator-key <file>,
+#   bearer token from $SORA_CALCULATOR_TOKEN (never on the command line)
+#   --workers N engine threads (default: all cores; results are identical for any N), --threads N DuckDB threads
+
+# Scaling benchmarks (plans/07_benchmarking.md): 10x/100x replicas of the reference SIM, results in benchmarks/RESULTS.md
+python benchmarks/run_benchmarks.py
 ```
 
 ### Vera-derived risk parameters (SORA-DS)
@@ -109,7 +121,7 @@ The primary target is the EBA EU-wide stress test credit-risk methodology: the 2
 
 - **Mapping with SQL on exports:** customers export source tables to files. Mapping SQL, written by hand or with an AI agent, runs on those files with embedded DuckDB. There is no database access.
 - **MCP server (`sora-mcp`):** lets an agent read the model description, profile sources, test mappings, validate, run and explain results. It runs locally, returns metadata only by default, and requires human approval for production mappings.
-- **Regulatory calculator over REST:** PD/LGD models, IRB, SA and the output floor are computed by an external calculator implementing `schemas/calculator/openapi.yaml`. A stub server (`sora-tools calculator-stub`) and contract tests are used for testing. See `plans/11_integrations.md`.
+- **Regulatory calculator over REST:** PD/LGD models, IRB, SA and the output floor are computed by an external calculator implementing `schemas/calculator/openapi.yaml`. A stub server (`sora-tools calculator-stub`) and contract tests are used for testing. `sora run --calculator <url>` projects IRB REA and expected loss per segment, scenario and year (`rea.csv`), with batching, retries, idempotency keys and an on-disk replay cache. See `plans/11_integrations.md`.
 
 ## Example scenario
 
@@ -181,7 +193,7 @@ C++ engine baseline:
 - Standard library first. Avoid heavy frameworks in the core engine.
 - Optional dependencies only where justified by measurable performance or implementation simplicity:
   - Apache Arrow C++ (Parquet component only): row-group streaming with column projection
-  - `libcurl` for the REST calculator client
+  - `cpp-httplib` + `nlohmann/json` (vendored single headers) and OpenSSL for the REST calculator client
   - `simdjson`, `yaml-cpp`/`rapidyaml`, `fmt`, `spdlog`, `xxHash`
   - `mimalloc` only after profiling shows allocator pressure
 

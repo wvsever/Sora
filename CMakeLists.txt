@@ -25,6 +25,7 @@ add_library(sora_core
   src/projection.cpp
   src/output.cpp
   src/cr_scen.cpp
+  src/collateral.cpp
   src/validation.cpp
 )
 target_include_directories(sora_core PUBLIC include)
@@ -46,3 +47,6 @@ if(SORA_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests/cpp)
 endif()
+
+# Regulatory calculator REST client, REA projection and their tests.
+include(cmake/Calculator.cmake)

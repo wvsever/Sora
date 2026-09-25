@@ -59,6 +59,25 @@ TEST_CASE("dictionary interning") {
     CHECK(!d.find("FR"));
 }
 
+TEST_CASE("dictionary with many keys (growth and reserve)") {
+    Dictionary grown, reserved;
+    reserved.reserve(100000, 100000 * 12);
+    for (int i = 0; i < 100000; ++i) {
+        const std::string k = "CL-" + std::to_string(i) + "~" + std::to_string(i % 7);
+        CHECK(grown.intern(k) == static_cast<std::uint32_t>(i));
+        CHECK(reserved.intern(k) == static_cast<std::uint32_t>(i));
+    }
+    CHECK(grown.size() == 100000);
+    CHECK(grown.find("CL-99999~4") == 99999U);
+    CHECK(reserved.view(12345) == "CL-12345~4");
+    CHECK(grown.at(0) == "CL-0~0");
+    CHECK(!grown.find("CL-99999"));
+    CHECK(!grown.find(""));
+    CHECK(grown.intern("") == 100000U);   // the empty string is a valid key
+    CHECK(grown.find("") == 100000U);
+    CHECK_THROWS(grown.view(100001));
+}
+
 TEST_CASE("code lists") {
     CHECK(parse_stage("stage2") == Stage::S2);
     CHECK(parse_exposure_type("debt_security") == ExposureType::DebtSecurity);

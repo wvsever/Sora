@@ -28,6 +28,11 @@ Method (see plans/03_scenario_engine.md and plans/09_risk_parameters.md):
    Stage flows and provisions follow EBA 2027 draft MN Boxes 3-9. There are no cures from S3, the balance sheet
    is static, POCI is static, the old S3 floor applies per exposure (para 141), and in the final adverse year the t+2
    loss term is blended 5/6 adverse + 1/6 baseline.
+4. Collateral and LTV (static balance sheet). Real-estate collateral allocated to in-scope exposures is revalued
+   with the cumulative residential/commercial property price growth of its property country (country fallback as
+   for the macro key); other collateral is unchanged. Allocated amounts are converted at the reference-date FX
+   rate; a NULL amount gets the market value pro rata to the GCA of the in-scope exposures the collateral is
+   allocated to. LTV per t0 stage = t0 GCA of exposures with real-estate collateral / their collateral value.
 """
 
 from __future__ import annotations
@@ -54,6 +59,13 @@ def connect(sim: Path) -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
     for t in ("sim_exposure", "sim_counterparty", "sim_fx_rate", "sim_stage_history"):
         con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{sim}/{t}/**/*.parquet', hive_partitioning=false)")
+    for t, cols in (("sim_collateral", "collateral_id VARCHAR, collateral_type VARCHAR, currency VARCHAR, "
+                                        "market_value DECIMAL(18,2), property_country VARCHAR"),
+                    ("sim_collateral_allocation", "exposure_id VARCHAR, collateral_id VARCHAR, allocated_amount DECIMAL(18,2)")):
+        if any((sim / t).glob("**/*.parquet")):
+            con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{sim}/{t}/**/*.parquet', hive_partitioning=false)")
+        else:                                                  # optional tables: empty if absent
+            con.execute(f"CREATE TABLE {t} ({cols})")
     return con
 
 
@@ -324,6 +336,103 @@ def project_segment(stock, params_by_scen, cfg, s3_exposures=None) -> list[dict]
     return rows
 
 
+# ----------------------------------------------------------------------------------------- collateral and LTV
+
+LTV_SLOTS = (("actual", 0), ("baseline", 1), ("baseline", 2), ("baseline", 3),
+             ("adverse", 1), ("adverse", 2), ("adverse", 3))
+PROPERTY_VARIABLE = {"residential_property": "residential_property_prices",
+                     "commercial_property": "commercial_property_prices"}
+
+
+def collateral_index(collateral_type, country, macro, cfg) -> dict:
+    """{(scenario, year): value index} for years 0..3; 1 throughout for non-property collateral."""
+    idx = {(sc, 0): 1.0 for sc in ("baseline", "adverse")}
+    var = PROPERTY_VARIABLE.get(collateral_type)
+    key = macro_key(macro, country or "", cfg) if var else None
+    for sc in ("baseline", "adverse"):
+        for t in (1, 2, 3):
+            g = macro.get((var, key, sc, cfg["year_map"][t]), 0.0) if var else 0.0
+            idx[(sc, t)] = idx[(sc, t - 1)] * (1 + g / 100)
+    return idx
+
+
+def allocated_values(allocations, gca_by_exposure) -> list[tuple]:
+    """(exposure_id, collateral type, property country, value in reporting currency) per in-scope allocation.
+
+    `allocations` rows: (exposure_id, collateral_id, allocated_amount or None, type, market_value, country, fx).
+    Allocations to exposures missing from `gca_by_exposure` (out of scope) are dropped. A None amount gets the
+    market value pro rata to the GCA of the in-scope exposures of that collateral (equal shares if that is 0)."""
+    rows = [a for a in allocations if a[0] in gca_by_exposure]
+    base, links = defaultdict(float), defaultdict(int)
+    for eid, cid, *_ in rows:
+        base[cid] += gca_by_exposure[eid]
+        links[cid] += 1
+    out = []
+    for eid, cid, amount, ctype, mv, country, fx in rows:
+        if fx is None:                                         # only real-estate collateral needs a value
+            if ctype in PROPERTY_VARIABLE:
+                raise ValueError(f"no FX rate at the reference date for collateral {cid}")
+            continue
+        if amount is not None:
+            v = amount * fx
+        elif base[cid] > 0:
+            v = mv * fx * gca_by_exposure[eid] / base[cid]
+        else:
+            v = mv * fx / links[cid]
+        out.append((eid, ctype, country, v))
+    return out
+
+
+def collateral_ltv(con, exposures, macro, cfg, manifest) -> dict:
+    """{segment: {(scenario, year): [secured exp S1, S2, S3, RE collateral S1, S2, S3]}} for all segments."""
+    allocations = con.execute(f"""
+        WITH fx AS (
+            SELECT currency, CAST(rate_to_reporting AS DOUBLE) AS r FROM sim_fx_rate
+            WHERE rate_date = DATE '{manifest["reference_date"]}'
+            UNION SELECT '{manifest["reporting_currency"]}', 1.0
+        )
+        SELECT a.exposure_id, a.collateral_id, CAST(a.allocated_amount AS DOUBLE), c.collateral_type,
+               CAST(c.market_value AS DOUBLE), c.property_country, fx.r
+        FROM sim_collateral_allocation a
+        JOIN sim_collateral c USING (collateral_id)
+        LEFT JOIN fx ON fx.currency = c.currency
+        ORDER BY a.exposure_id, a.collateral_id
+    """).fetchall()
+    exp = {r["exposure_id"]: r for r in exposures}
+    values = allocated_values(allocations, {k: r["gca"] for k, r in exp.items()})
+    indices, re_value = {}, {}                                    # re_value: exposure -> {slot: value}
+    for eid, ctype, country, v in values:
+        if ctype not in PROPERTY_VARIABLE:
+            continue
+        if (ctype, country) not in indices:
+            indices[(ctype, country)] = collateral_index(ctype, country, macro, cfg)
+        idx = indices[(ctype, country)]
+        by_slot = re_value.setdefault(eid, defaultdict(float))
+        for sc, t in LTV_SLOTS:
+            by_slot[(sc, t)] += v * idx[("baseline" if sc == "actual" else sc, t)]
+    out = {s: {slot: [0.0] * 6 for slot in LTV_SLOTS} for s in sorted({r["segment"] for r in exposures})}
+    for eid, by_slot in re_value.items():
+        r = exp[eid]
+        if r["stage"] not in STAGES:                              # POCI: no LTV column
+            continue
+        i = STAGES.index(r["stage"])
+        for slot in LTV_SLOTS:
+            out[r["segment"]][slot][i] += r["gca"]
+            out[r["segment"]][slot][3 + i] += by_slot[slot]
+    return out
+
+
+def write_collateral(path: Path, ltv: dict):
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(["segment", "scenario", "year", "secured_exp_s1", "secured_exp_s2", "secured_exp_s3",
+                    "re_collateral_s1", "re_collateral_s2", "re_collateral_s3", "ltv_s1", "ltv_s2", "ltv_s3"])
+        for s, by_slot in ltv.items():
+            for (sc, t), v in by_slot.items():
+                ratios = [f"{v[i] / v[3 + i]:.9f}" if v[3 + i] > 0 else "" for i in range(3)]
+                w.writerow([s, sc, t, *(f"{x:.2f}" for x in v), *ratios])
+
+
 # ----------------------------------------------------------------------------------------- main
 
 def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
@@ -394,6 +503,8 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
                 w.writerow([s, row["scenario"], row["year"], *(fmt(row[k]) for k in fields[2:])])
                 for k in fields[2:]:
                     totals[(row["scenario"], row["year"])][k] += row[k]
+
+    write_collateral(out / "collateral.csv", collateral_ltv(con, exposures, macro, cfg, manifest))
 
     summary = {
         "reference_date": manifest["reference_date"], "sim_mapping_release": manifest.get("mapping_release"),

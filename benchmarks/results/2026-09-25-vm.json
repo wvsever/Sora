@@ -1,0 +1,689 @@
+{
+ "date": "2026-09-25",
+ "host": {
+  "host": "vm",
+  "cpu": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+  "cores": 4,
+  "memory": "15.7 GB",
+  "os": "Linux-6.18.44-fc-v37-x86_64-with-glibc2.39",
+  "engine": "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/release/sora",
+  "commit": "d48a56a+dirty",
+  "load_avg_1m_at_start": 1.50537109375
+ },
+ "repeat": 3,
+ "scenario": "tests/scenarios/test_eba2025.yaml",
+ "scales": [
+  {
+   "factor": 1,
+   "sim": "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630",
+   "dataset": {
+    "files": 218,
+    "bytes": 9235007,
+    "tables": {
+     "sim_collateral": {
+      "rows": 23263,
+      "files": 37,
+      "bytes": 771538
+     },
+     "sim_collateral_allocation": {
+      "rows": 22198,
+      "files": 1,
+      "bytes": 343022
+     },
+     "sim_counterparty": {
+      "rows": 23852,
+      "files": 1,
+      "bytes": 387373
+     },
+     "sim_credit_event": {
+      "rows": 14341,
+      "files": 32,
+      "bytes": 170779
+     },
+     "sim_entity": {
+      "rows": 70,
+      "files": 1,
+      "bytes": 3942
+     },
+     "sim_exposure": {
+      "rows": 61854,
+      "files": 62,
+      "bytes": 3662731
+     },
+     "sim_fx_rate": {
+      "rows": 5152,
+      "files": 1,
+      "bytes": 23380
+     },
+     "sim_guarantee": {
+      "rows": 3763,
+      "files": 1,
+      "bytes": 79129
+     },
+     "sim_rating": {
+      "rows": 8756,
+      "files": 1,
+      "bytes": 57924
+     },
+     "sim_recovery_flow": {
+      "rows": 9872,
+      "files": 31,
+      "bytes": 130322
+     },
+     "sim_stage_history": {
+      "rows": 399083,
+      "files": 49,
+      "bytes": 3604592
+     }
+    }
+   },
+   "inspect": {
+    "cmd": [
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/release/sora",
+     "inspect",
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630"
+    ],
+    "wall_s": 0.174,
+    "cpu_s": 0.31,
+    "cpu_utilisation": 1.78,
+    "child_max_rss_mb": 86.3,
+    "stages_ms": {
+     "load SIM": 110.5,
+     "segment": 3.6,
+     "check inputs": 22.2
+    },
+    "trace": [],
+    "engine_peak_rss_mb": 86.3,
+    "counterparties": 23852,
+    "exposures": 61854,
+    "in_scope": 45480,
+    "segments": 152,
+    "peak_rss_mb": 86.3
+   },
+   "run": {
+    "cmd": [
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/release/sora",
+     "run",
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630",
+     "--scenario",
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/tests/scenarios/test_eba2025.yaml",
+     "-o",
+     "/tmp/sora-bench-tl3mm46b/run-1",
+     "--base",
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9"
+    ],
+    "wall_s": 0.343,
+    "cpu_s": 0.59,
+    "cpu_utilisation": 1.73,
+    "child_max_rss_mb": 129.0,
+    "stages_ms": {
+     "load SIM": 109.8,
+     "segment": 1.7,
+     "check inputs": 18.4,
+     "calibrate": 74.6,
+     "load scenario": 61.7,
+     "project": 4.5,
+     "write outputs": 29.9
+    },
+    "trace": [],
+    "engine_peak_rss_mb": 129.0,
+    "peak_rss_mb": 129.0,
+    "exposures": 61854,
+    "exposures_per_s": 180332
+   },
+   "all_runs_wall_s": [
+    0.363,
+    0.409,
+    0.343
+   ]
+  },
+  {
+   "factor": 10,
+   "sim": "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630-x10",
+   "dataset": {
+    "files": 218,
+    "bytes": 40668064,
+    "tables": {
+     "sim_collateral": {
+      "rows": 232630,
+      "files": 37,
+      "bytes": 3648487
+     },
+     "sim_collateral_allocation": {
+      "rows": 221980,
+      "files": 1,
+      "bytes": 2379907
+     },
+     "sim_counterparty": {
+      "rows": 238520,
+      "files": 1,
+      "bytes": 2623270
+     },
+     "sim_credit_event": {
+      "rows": 143410,
+      "files": 32,
+      "bytes": 788467
+     },
+     "sim_entity": {
+      "rows": 70,
+      "files": 1,
+      "bytes": 3942
+     },
+     "sim_exposure": {
+      "rows": 618540,
+      "files": 62,
+      "bytes": 14005512
+     },
+     "sim_fx_rate": {
+      "rows": 5152,
+      "files": 1,
+      "bytes": 23380
+     },
+     "sim_guarantee": {
+      "rows": 37630,
+      "files": 1,
+      "bytes": 523269
+     },
+     "sim_rating": {
+      "rows": 87560,
+      "files": 1,
+      "bytes": 331361
+     },
+     "sim_recovery_flow": {
+      "rows": 98720,
+      "files": 31,
+      "bytes": 529446
+     },
+     "sim_stage_history": {
+      "rows": 3990830,
+      "files": 49,
+      "bytes": 15810240
+     }
+    }
+   },
+   "inspect": {
+    "cmd": [
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/release/sora",
+     "inspect",
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630-x10"
+    ],
+    "wall_s": 0.872,
+    "cpu_s": 1.42,
+    "cpu_utilisation": 1.63,
+    "child_max_rss_mb": 303.4,
+    "stages_ms": {
+     "load SIM": 750.7,
+     "segment": 18.9,
+     "check inputs": 39.3
+    },
+    "trace": [],
+    "engine_peak_rss_mb": 303.4,
+    "counterparties": 238520,
+    "exposures": 618540,
+    "in_scope": 454800,
+    "segments": 152,
+    "peak_rss_mb": 303.4
+   },
+   "run": {
+    "cmd": [
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/release/sora",
+     "run",
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630-x10",
+     "--scenario",
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/tests/scenarios/test_eba2025.yaml",
+     "-o",
+     "/tmp/sora-bench-tl3mm46b/run-10",
+     "--base",
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9"
+    ],
+    "wall_s": 1.496,
+    "cpu_s": 2.91,
+    "cpu_utilisation": 1.95,
+    "child_max_rss_mb": 368.8,
+    "stages_ms": {
+     "load SIM": 649.4,
+     "segment": 18.0,
+     "check inputs": 41.7,
+     "calibrate": 574.4,
+     "load scenario": 67.6,
+     "project": 32.1,
+     "write outputs": 46.8
+    },
+    "trace": [],
+    "engine_peak_rss_mb": 368.8,
+    "peak_rss_mb": 368.8,
+    "exposures": 618540,
+    "exposures_per_s": 413463
+   },
+   "all_runs_wall_s": [
+    1.496,
+    1.559,
+    1.609
+   ]
+  },
+  {
+   "factor": 100,
+   "sim": "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630-x100",
+   "dataset": {
+    "files": 218,
+    "bytes": 308676359,
+    "tables": {
+     "sim_collateral": {
+      "rows": 2326300,
+      "files": 37,
+      "bytes": 29291657
+     },
+     "sim_collateral_allocation": {
+      "rows": 2219800,
+      "files": 1,
+      "bytes": 22284674
+     },
+     "sim_counterparty": {
+      "rows": 2385200,
+      "files": 1,
+      "bytes": 23832921
+     },
+     "sim_credit_event": {
+      "rows": 1434100,
+      "files": 32,
+      "bytes": 5749342
+     },
+     "sim_entity": {
+      "rows": 70,
+      "files": 1,
+      "bytes": 3942
+     },
+     "sim_exposure": {
+      "rows": 6185400,
+      "files": 62,
+      "bytes": 94735853
+     },
+     "sim_fx_rate": {
+      "rows": 5152,
+      "files": 1,
+      "bytes": 23380
+     },
+     "sim_guarantee": {
+      "rows": 376300,
+      "files": 1,
+      "bytes": 5359044
+     },
+     "sim_rating": {
+      "rows": 875600,
+      "files": 1,
+      "bytes": 2958646
+     },
+     "sim_recovery_flow": {
+      "rows": 987200,
+      "files": 31,
+      "bytes": 3811568
+     },
+     "sim_stage_history": {
+      "rows": 39908300,
+      "files": 49,
+      "bytes": 120624539
+     }
+    }
+   },
+   "inspect": {
+    "cmd": [
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/release/sora",
+     "inspect",
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630-x100"
+    ],
+    "wall_s": 9.992,
+    "cpu_s": 15.94,
+    "cpu_utilisation": 1.6,
+    "child_max_rss_mb": 2132.5,
+    "stages_ms": {
+     "load SIM": 9289.3,
+     "segment": 155.5,
+     "check inputs": 259.2
+    },
+    "trace": [],
+    "engine_peak_rss_mb": 2132.5,
+    "counterparties": 2385200,
+    "exposures": 6185400,
+    "in_scope": 4548000,
+    "segments": 152,
+    "peak_rss_mb": 2132.5
+   },
+   "run": {
+    "cmd": [
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/release/sora",
+     "run",
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630-x100",
+     "--scenario",
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/tests/scenarios/test_eba2025.yaml",
+     "-o",
+     "/tmp/sora-bench-tl3mm46b/run-100",
+     "--base",
+     "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9"
+    ],
+    "wall_s": 17.646,
+    "cpu_s": 34.02,
+    "cpu_utilisation": 1.93,
+    "child_max_rss_mb": 2189.3,
+    "stages_ms": {
+     "load SIM": 9233.0,
+     "segment": 195.3,
+     "check inputs": 257.6,
+     "calibrate": 7309.5,
+     "load scenario": 72.1,
+     "project": 271.8,
+     "write outputs": 100.7
+    },
+    "trace": [],
+    "engine_peak_rss_mb": 2189.3,
+    "peak_rss_mb": 2189.3,
+    "exposures": 6185400,
+    "exposures_per_s": 350527
+   },
+   "all_runs_wall_s": [
+    17.646,
+    18.716,
+    17.687
+   ]
+  }
+ ],
+ "notes": [],
+ "workers_scale": 100,
+ "workers": [
+  {
+   "cmd": [
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/release/sora",
+    "run",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630-x100",
+    "--scenario",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/tests/scenarios/test_eba2025.yaml",
+    "-o",
+    "/tmp/sora-bench-tl3mm46b/workers-1",
+    "--base",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9",
+    "--workers",
+    "1"
+   ],
+   "wall_s": 18.785,
+   "cpu_s": 34.62,
+   "cpu_utilisation": 1.84,
+   "child_max_rss_mb": 2204.6,
+   "stages_ms": {
+    "load SIM": 10616.6,
+    "segment": 169.7,
+    "check inputs": 256.8,
+    "calibrate": 6556.6,
+    "load scenario": 64.9,
+    "project": 845.7,
+    "write outputs": 102.1
+   },
+   "trace": [],
+   "engine_peak_rss_mb": 2204.6,
+   "peak_rss_mb": 2204.6,
+   "workers": 1,
+   "identical": true
+  },
+  {
+   "cmd": [
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/release/sora",
+    "run",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630-x100",
+    "--scenario",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/tests/scenarios/test_eba2025.yaml",
+    "-o",
+    "/tmp/sora-bench-tl3mm46b/workers-2",
+    "--base",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9",
+    "--workers",
+    "2"
+   ],
+   "wall_s": 17.252,
+   "cpu_s": 33.34,
+   "cpu_utilisation": 1.93,
+   "child_max_rss_mb": 2130.6,
+   "stages_ms": {
+    "load SIM": 9359.7,
+    "segment": 162.2,
+    "check inputs": 261.9,
+    "calibrate": 6676.0,
+    "load scenario": 62.0,
+    "project": 413.8,
+    "write outputs": 124.4
+   },
+   "trace": [],
+   "engine_peak_rss_mb": 2130.6,
+   "peak_rss_mb": 2130.6,
+   "workers": 2,
+   "identical": true
+  },
+  {
+   "cmd": [
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/release/sora",
+    "run",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630-x100",
+    "--scenario",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/tests/scenarios/test_eba2025.yaml",
+    "-o",
+    "/tmp/sora-bench-tl3mm46b/workers-4",
+    "--base",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9",
+    "--workers",
+    "4"
+   ],
+   "wall_s": 17.433,
+   "cpu_s": 33.73,
+   "cpu_utilisation": 1.93,
+   "child_max_rss_mb": 1997.7,
+   "stages_ms": {
+    "load SIM": 9830.5,
+    "segment": 155.6,
+    "check inputs": 261.6,
+    "calibrate": 6534.8,
+    "load scenario": 65.8,
+    "project": 270.2,
+    "write outputs": 104.0
+   },
+   "trace": [],
+   "engine_peak_rss_mb": 1997.7,
+   "peak_rss_mb": 1997.7,
+   "workers": 4,
+   "identical": true
+  },
+  {
+   "cmd": [
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/release/sora",
+    "run",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630-x100",
+    "--scenario",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/tests/scenarios/test_eba2025.yaml",
+    "-o",
+    "/tmp/sora-bench-tl3mm46b/workers-8",
+    "--base",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9",
+    "--workers",
+    "8"
+   ],
+   "wall_s": 16.966,
+   "cpu_s": 33.41,
+   "cpu_utilisation": 1.97,
+   "child_max_rss_mb": 2117.4,
+   "stages_ms": {
+    "load SIM": 9390.1,
+    "segment": 158.0,
+    "check inputs": 265.2,
+    "calibrate": 6503.1,
+    "load scenario": 61.5,
+    "project": 272.2,
+    "write outputs": 104.7
+   },
+   "trace": [],
+   "engine_peak_rss_mb": 2117.4,
+   "peak_rss_mb": 2117.4,
+   "workers": 8,
+   "identical": true
+  }
+ ],
+ "memory_limits": [
+  {
+   "failed": "sora: duckdb: Out of Memory Error: could not allocate block of size 256.0 KiB (244.3 MiB/244.1 MiB used)",
+   "memory_limit": "256MB"
+  },
+  {
+   "cmd": [
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/release/sora",
+    "run",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630-x100",
+    "--scenario",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/tests/scenarios/test_eba2025.yaml",
+    "-o",
+    "/tmp/sora-bench-tl3mm46b/mem",
+    "--base",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9",
+    "--memory-limit",
+    "512MB"
+   ],
+   "wall_s": 21.028,
+   "cpu_s": 40.19,
+   "cpu_utilisation": 1.91,
+   "child_max_rss_mb": 1274.7,
+   "stages_ms": {
+    "load SIM": 9777.3,
+    "segment": 163.2,
+    "check inputs": 261.9,
+    "calibrate": 10190.8,
+    "load scenario": 59.0,
+    "project": 270.0,
+    "write outputs": 106.6
+   },
+   "trace": [],
+   "engine_peak_rss_mb": 1274.7,
+   "peak_rss_mb": 1274.7,
+   "memory_limit": "512MB"
+  },
+  {
+   "cmd": [
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/release/sora",
+    "run",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630-x100",
+    "--scenario",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/tests/scenarios/test_eba2025.yaml",
+    "-o",
+    "/tmp/sora-bench-tl3mm46b/mem",
+    "--base",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9",
+    "--memory-limit",
+    "1GB"
+   ],
+   "wall_s": 18.129,
+   "cpu_s": 34.67,
+   "cpu_utilisation": 1.91,
+   "child_max_rss_mb": 2176.2,
+   "stages_ms": {
+    "load SIM": 10128.2,
+    "segment": 154.8,
+    "check inputs": 253.9,
+    "calibrate": 6991.9,
+    "load scenario": 60.8,
+    "project": 249.3,
+    "write outputs": 99.9
+   },
+   "trace": [],
+   "engine_peak_rss_mb": 2176.2,
+   "peak_rss_mb": 2176.2,
+   "memory_limit": "1GB"
+  },
+  {
+   "cmd": [
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/release/sora",
+    "run",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/build/sim/20260630-x100",
+    "--scenario",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9/tests/scenarios/test_eba2025.yaml",
+    "-o",
+    "/tmp/sora-bench-tl3mm46b/mem",
+    "--base",
+    "/home/user/Sora/.claude/worktrees/agent-adf3e46d7beb059e9",
+    "--memory-limit",
+    "2GB"
+   ],
+   "wall_s": 14.226,
+   "cpu_s": 28.32,
+   "cpu_utilisation": 1.99,
+   "child_max_rss_mb": 2731.5,
+   "stages_ms": {
+    "load SIM": 7657.3,
+    "segment": 152.8,
+    "check inputs": 251.6,
+    "calibrate": 5513.1,
+    "load scenario": 67.4,
+    "project": 256.6,
+    "write outputs": 102.7
+   },
+   "trace": [],
+   "engine_peak_rss_mb": 2731.5,
+   "peak_rss_mb": 2731.5,
+   "memory_limit": "2GB"
+  }
+ ],
+ "trace": [
+  {
+   "ms": 3.5,
+   "engine_ms": 0.0,
+   "rows": 1,
+   "sql": "SELECT CAST(sim_version AS VARCHAR), CAST(CAST(reference_date AS DATE)"
+  },
+  {
+   "ms": 3.4,
+   "engine_ms": 0.0,
+   "rows": 14,
+   "sql": "SELECT CAST(currency AS VARCHAR), CAST(rate_to_reporting AS DECIMAL(18"
+  },
+  {
+   "ms": 27.5,
+   "engine_ms": 0.0,
+   "rows": 1,
+   "sql": "SELECT count(*), CAST(coalesce(sum(length(CAST(counterparty_id AS VARC"
+  },
+  {
+   "ms": 1104.9,
+   "engine_ms": 522.1,
+   "rows": 2385200,
+   "sql": "SELECT CAST(counterparty_id AS VARCHAR), CAST(country_of_residence AS "
+  },
+  {
+   "ms": 86.3,
+   "engine_ms": 0.0,
+   "rows": 1,
+   "sql": "SELECT count(*), CAST(coalesce(sum(length(CAST(exposure_id AS VARCHAR)"
+  },
+  {
+   "ms": 7926.5,
+   "engine_ms": 4026.0,
+   "rows": 6185400,
+   "sql": "SELECT CAST(exposure_id AS VARCHAR), CAST(entity_id AS VARCHAR), CAST("
+  },
+  {
+   "ms": 207.7,
+   "engine_ms": 0.0,
+   "rows": 1,
+   "sql": "SELECT sum(CAST(h.loss_allowance AS DOUBLE) * coalesce(CAST(f.rate_to_"
+  },
+  {
+   "ms": 7167.2,
+   "engine_ms": 700.4,
+   "rows": 39908300,
+   "sql": "SELECT x.ix, CAST(h.period_end AS DATE), CAST(CASE CAST(h.stage AS VAR"
+  },
+  {
+   "ms": 51.9,
+   "engine_ms": 0.6,
+   "rows": 2388,
+   "sql": "SELECT variable, key, scenario, year, value FROM read_csv('/home/user/"
+  },
+  {
+   "ms": 7.1,
+   "engine_ms": 0.0,
+   "rows": 12,
+   "sql": "SELECT portfolio, beta_gdp, beta_unemployment, beta_property, lgd_prop"
+  }
+ ]
+}

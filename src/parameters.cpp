@@ -66,7 +66,7 @@ void ExternalParameters::load(Duck& duck, const std::string& source, const Datas
 std::size_t ExternalParameters::apply_segment(const Segmentation& s, const Segment& seg, ParamKey k, Params& p) const {
     std::size_t n = 0;
     for (auto it = seg.levels.rbegin(); it != seg.levels.rend(); ++it) {   // general -> specific
-        const auto f = by_level_.find(s.level_keys.at(*it));
+        const auto f = by_level_.find(s.level_keys.view(*it));
         if (f == by_level_.end()) continue;
         const auto& op = f->second[slot(k)];
         for (std::size_t i = 0; i < kParamCount; ++i)
