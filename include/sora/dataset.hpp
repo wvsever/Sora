@@ -60,6 +60,8 @@ struct Exposure {
     Flag is_cre = Flag::Unknown;
     bool intragroup = false;
     bool has_gca = false;
+    bool has_maturity = false;
+    Date maturity = 0;         // legal final maturity (days since epoch)
     Cents gca = 0;             // gross carrying amount (on-balance part)
     Cents off_balance = 0;     // undrawn / nominal off-balance amount
     Cents allowance = 0;       // loss allowance / provision (0 if NULL)

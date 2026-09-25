@@ -2,9 +2,10 @@
 //
 //   sora inspect   <sim>                                       dataset summary and input checks
 //   sora calibrate <sim> --scenario <yaml> -o <dir>            starting-point parameters only
-//   sora run       <sim> --scenario <yaml> -o <dir>            calibration + projection
+//   sora run       <sim> --scenario <yaml> -o <dir>            calibration + projection (+ cr_scen.csv)
 //
-// Options: --base <dir> (resolve scenario paths, default: cwd), --memory-limit 1GB, --threads N
+// Options: --base <dir> (resolve scenario paths, default: cwd), --memory-limit 1GB, --threads N,
+//          --parameters <file|dir>  customer risk parameters (default: SIM table sim_risk_parameter if present)
 
 #include <sys/resource.h>
 
@@ -24,7 +25,7 @@ namespace {
 
 struct Args {
     std::string command;
-    fs::path sim, scenario, out, base = fs::current_path();
+    fs::path sim, scenario, out, parameters, base = fs::current_path();
     DuckOptions duck;
 };
 
@@ -33,7 +34,7 @@ struct Args {
                  "usage: sora inspect <sim> [options]\n"
                  "       sora calibrate <sim> --scenario <yaml> -o <dir> [options]\n"
                  "       sora run <sim> --scenario <yaml> -o <dir> [options]\n"
-                 "options: --base <dir> --memory-limit <size> --threads <n>\n");
+                 "options: --base <dir> --parameters <file|dir> --memory-limit <size> --threads <n>\n");
     std::exit(2);
 }
 
@@ -47,6 +48,7 @@ Args parse(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--scenario")) a.scenario = next();
         else if (!std::strcmp(argv[i], "-o") || !std::strcmp(argv[i], "--output")) a.out = next();
         else if (!std::strcmp(argv[i], "--base")) a.base = next();
+        else if (!std::strcmp(argv[i], "--parameters")) a.parameters = next();
         else if (!std::strcmp(argv[i], "--memory-limit")) a.duck.memory_limit = next();
         else if (!std::strcmp(argv[i], "--threads")) a.duck.threads = std::stoi(next());
         else usage();
@@ -114,6 +116,29 @@ int main(int argc, char** argv) {
             return 1;
         }
 
+        // Customer parameters: --parameters, else the SIM table if present.
+        ExternalParameters ext;
+        std::string ext_source;
+        if (!a.parameters.empty()) {
+            const auto ext_name = a.parameters.extension().string();
+            ext_source = fs::is_directory(a.parameters) ? sim_source(a.parameters.parent_path(), a.parameters.filename().string())
+                         : ext_name == ".parquet" ? "read_parquet(" + sql_quote(a.parameters.string()) + ")"
+                                                  : "read_csv(" + sql_quote(a.parameters.string()) + ", header = true, all_varchar = true)";
+        } else if (sim_table_exists(d.sim_dir, "sim_risk_parameter")) {
+            ext_source = sim_source(d.sim_dir, "sim_risk_parameter");
+        }
+        if (!ext_source.empty()) {
+            Timer t("load parameters");
+            ext.load(duck, ext_source, d);
+            std::string unmatched;
+            const auto um = ext.unmatched_segment_keys(seg);
+            for (std::size_t i = 0; i < um.size() && i < 5; ++i) unmatched += (i ? ", " : "") + um[i];
+            if (!um.empty()) diag.findings.push_back({"PAR-001", "warning", "segment keys match no segment: " + unmatched, um.size()});
+            if (!ext.unknown_keys.empty())
+                diag.findings.push_back({"PAR-002", "warning", "exposure keys not in sim_exposure (e.g. " + ext.unknown_keys.front() + ")", ext.unknown_keys.size()});
+            diag.findings.push_back({"PAR-000", "info", "customer risk parameters loaded", ext.rows()});
+        }
+
         Calibration cal;
         { Timer t("calibrate"); cal = calibrate(duck, d, seg, cfg.calibration); }
         MacroTable macro;
@@ -121,7 +146,18 @@ int main(int argc, char** argv) {
         { Timer t("load scenario"); macro = load_macro(duck, cfg.macro_path); sats = load_satellites(duck, cfg.satellites_path); }
         Projection proj;
         const bool run = a.command == "run";
-        if (run) { Timer t("project"); proj = project(d, seg, cal, sats, macro, cfg); }
+        if (run) {
+            Timer t("project");
+            proj = project(d, seg, cal, sats, macro, cfg, ext.empty() ? nullptr : &ext);
+            if (proj.exposures_with_own_parameters)
+                diag.findings.push_back({"PAR-003", "info", "exposures with exposure-level parameters", proj.exposures_with_own_parameters});
+            if (!proj.parameter_errors.empty()) {
+                for (std::size_t i = 0; i < proj.parameter_errors.size() && i < 10; ++i)
+                    std::fprintf(stderr, "  error   PAR-010     %s\n", proj.parameter_errors[i].c_str());
+                std::fprintf(stderr, "sora: %zu invalid parameter values; no results written\n", proj.parameter_errors.size());
+                return 1;
+            }
+        }
         { Timer t("write outputs"); write_outputs({d, seg, cal, run ? &proj : nullptr, macro, cfg, diag}, a.out); }
         print_findings(diag);
         std::fprintf(stderr, "  %zu exposures, %zu segments -> %s (peak RSS %.1f MB)\n", seg.in_scope,

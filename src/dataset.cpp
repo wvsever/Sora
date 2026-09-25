@@ -109,7 +109,7 @@ Dataset load_dataset(Duck& duck, const fs::path& sim_dir) {
         "CAST(stage AS VARCHAR), CAST(gross_carrying_amount AS DECIMAL(18,2)), "
         "CAST(off_balance_amount AS DECIMAL(18,2)), CAST(loss_allowance AS DECIMAL(18,2)), "
         "CAST(household_purpose AS VARCHAR), CAST(is_cre AS BOOLEAN), CAST(is_intragroup AS BOOLEAN), "
-        "CAST(country_of_risk AS VARCHAR) FROM " + sim_source(sim_dir, "sim_exposure") + " ORDER BY 1",
+        "CAST(country_of_risk AS VARCHAR), CAST(maturity_date AS DATE) FROM " + sim_source(sim_dir, "sim_exposure") + " ORDER BY 1",
         [&](const Chunk& c) {
             for (std::size_t r = 0; r < c.size(); ++r) {
                 Exposure e;
@@ -131,6 +131,8 @@ Dataset load_dataset(Duck& duck, const fs::path& sim_dir) {
                 e.is_cre = c.flag(11, r);
                 e.intragroup = c.flag(12, r) == Flag::True;
                 e.country_of_risk = c.valid(13, r) ? d.countries.intern(c.str(13, r)) : kNone;
+                e.has_maturity = c.valid(14, r);
+                e.maturity = e.has_maturity ? c.date(14, r) : 0;
                 d.exposures.push_back(e);
             }
         });

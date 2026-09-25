@@ -67,9 +67,12 @@ segment,NFC_SME_CRE|BE,actual,2026,0.012,0.18,0.06,0.25,0.00,0.05,0.22,0.24,0.35
 contract,CL-000001,actual,2026,0.004,,,,,,0.12,,,,,external
 ```
 
-- `level = segment` or `contract`. Contract values override segment values.
-- `scenario = actual` is the starting point. `baseline`/`adverse` rows for 2027–2029 are optional overrides of the projected values.
-- Values are decimal fractions. They are stored as parts-per-billion.
+- The file is the SIM table `sim_risk_parameter`, or a separate CSV/Parquet file passed with `sora run --parameters <file>`.
+- `level = segment`: `key` is a Sora segment key at any hierarchy level: `LOANS|NFC_SME_CRE|BE` (segment), `LOANS|NFC_SME_CRE|ALL` (portfolio, all countries), `LOANS|ALL|ALL`, `ALL|ALL|ALL`. `level = exposure`: `key` is an `exposure_id`.
+- `scenario = actual`, `year = 0` is the starting point. `baseline`/`adverse` with `year` 1–3 override the projected values.
+- Every parameter column is optional. Precedence per field, most specific first: exposure row > segment > portfolio > instrument > all > Sora's own value (derived calibration for the starting point, satellite projection for later years). An exposure-level starting point is projected with the segment's satellite model.
+- Values are decimal fractions in [0, 1], with `pd12m_s1 + tr1_2 ≤ 1` and `pd12m_s2 + tr2_1 ≤ 1`. Invalid values stop the run (PAR-010). Keys that match nothing are reported (PAR-001/002).
+- `parameters.csv` in the run output shows the effective values and their `source` (`derived`, `external`, `mixed`).
 
 ### Segmentation
 

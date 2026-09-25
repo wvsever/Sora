@@ -29,3 +29,7 @@ jobs:
         run: cmake --build build/ci -j
       - name: Test (unit + golden)
         run: ctest --test-dir build/ci --output-on-failure
+      - name: Engine integration tests
+        env:
+          SORA_ENGINE: build/ci/sora
+        run: python -m pytest python/tests/test_engine.py -q

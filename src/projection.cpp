@@ -1,8 +1,35 @@
 #include "sora/projection.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace sora {
+
+std::size_t param_weight_stage(std::size_t param) {
+    switch (param) {
+        case 0: case 2: case 6: return 0;            // pd12m_s1, tr1_2, lgd_s1
+        case 1: case 3: case 7: case 9: return 1;    // pd12m_s2, tr2_1, lgd_s2, lrlt_s2
+        default: return 2;                           // tr3_1, tr3_2, lgd_s3
+    }
+}
+
+double ParamAccum::average(std::size_t param) const {
+    const double w = weight[param_weight_stage(param)];
+    return w > 0 ? sum[param] / w : std::numeric_limits<double>::quiet_NaN();
+}
+
+namespace {
+void accumulate(ParamAccum& a, const Params& p, double w1, double w2, double w3) {
+    a.weight[0] += w1;
+    a.weight[1] += w2;
+    a.weight[2] += w3;
+    for (std::size_t i = 0; i < kParamCount; ++i) {
+        const double w = param_weight_stage(i) == 0 ? w1 : param_weight_stage(i) == 1 ? w2 : w3;
+        if (w != 0) a.sum[i] += param_field(p, i) * w;
+    }
+}
+}  // namespace
 
 std::array<double, 21> fields(const YearResult& r) {
     return {r.exp_s1, r.exp_s2, r.exp_s3_old, r.exp_s3_new, r.exp_poci,
@@ -13,7 +40,8 @@ std::array<double, 21> fields(const YearResult& r) {
 }
 
 void project_exposure(Stage stage, double gca, double allowance, const std::array<ParamPath, 2>& paths,
-                      const ScenarioConfig& cfg, std::array<std::array<YearResult, 3>, 2>& acc) {
+                      const ScenarioConfig& cfg, std::array<std::array<YearResult, 3>, 2>& acc,
+                      std::array<std::array<ParamAccum, 4>, 2>* param_acc) {
     const bool poci = stage == Stage::Poci;
     for (std::size_t sc = 0; sc < 2; ++sc) {
         const auto& P = paths[sc];
@@ -25,9 +53,11 @@ void project_exposure(Stage stage, double gca, double allowance, const std::arra
         double prev_total = allowance;
         // Box 9, per exposure (MN para 141): no release below the starting provision.
         const double old3 = stage == Stage::S3 ? std::max(e3old * P[1].lgd_s3, allowance) : 0.0;
+        if (param_acc) accumulate((*param_acc)[sc][0], P[0], e1, e2, e3old);
         for (std::size_t t = 0; t < 3; ++t) {
             const Params& p1 = P[t + 1];
             const Params& p2 = P[t + 2];
+            if (param_acc) accumulate((*param_acc)[sc][t + 1], p1, e1, e2, e3old);
             const double f12 = e1 * p1.tr1_2, f21 = e2 * p1.tr2_1;
             const double f13 = e1 * p1.pd12m_s1, f23 = e2 * p1.pd12m_s2;
             double loss_next = p2.pd12m_s1 * p2.lgd_s1;
@@ -76,16 +106,38 @@ void project_exposure(Stage stage, double gca, double allowance, const std::arra
 
 Projection project(const Dataset& d, const Segmentation& s, const Calibration& cal,
                    const std::map<std::string, Satellite>& satellites, const MacroTable& macro,
-                   const ScenarioConfig& cfg) {
+                   const ScenarioConfig& cfg, const ExternalParameters* external) {
     Projection out;
-    out.results.resize(s.segments.size());
-    out.params.resize(s.segments.size());
-    for (std::size_t i = 0; i < s.segments.size(); ++i) {
+    const auto nseg = s.segments.size();
+    out.results.resize(nseg);
+    out.params.resize(nseg);
+    out.start_source.resize(nseg);
+    out.path_source.resize(nseg);
+    out.accum.resize(nseg);
+    auto check = [&](const Params& p, const std::string& what) {
+        for (const auto& m : check_parameters(p)) out.parameter_errors.push_back(what + ": " + m);
+    };
+    std::vector<const Satellite*> sat(nseg);
+    std::vector<Params> start(nseg);
+    for (std::size_t i = 0; i < nseg; ++i) {
         const auto& seg = s.segments[i];
         const auto it = satellites.find(seg.portfolio);
         if (it == satellites.end()) throw Error("no satellite coefficients for portfolio " + seg.portfolio);
+        sat[i] = &it->second;
+        // Starting point: derived calibration, overlaid field-wise by customer parameters.
+        start[i] = cal.params[i];
+        const std::size_t n = external ? external->apply_segment(s, seg, {0, 0}, start[i]) : 0;
+        out.start_source[i] = n == 0 ? "derived" : n >= kParamCount ? "external" : "mixed";
+        check(start[i], seg.key + " actual/0");
         for (std::size_t sc = 0; sc < 2; ++sc) {
-            out.params[i][sc] = project_parameters(seg, cal.params[i], it->second, macro, kScenarios[sc], cfg);
+            auto& path = out.params[i][sc];
+            path = project_parameters(seg, start[i], *sat[i], macro, kScenarios[sc], cfg);
+            for (int t = 1; t <= 3; ++t) {
+                const std::size_t n = external ? external->apply_segment(s, seg, {static_cast<int>(sc) + 1, t}, path[static_cast<std::size_t>(t)]) : 0;
+                out.path_source[i][sc][static_cast<std::size_t>(t - 1)] = n == 0 ? "derived" : n >= kParamCount ? "external" : "mixed";
+            }
+            path[4] = path[3];
+            for (int t = 1; t <= 3; ++t) check(path[static_cast<std::size_t>(t)], seg.key + " " + kScenarios[sc] + "/" + std::to_string(t));
         }
     }
     for (std::size_t i = 0; i < d.exposures.size(); ++i) {
@@ -94,8 +146,28 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
         const auto& e = d.exposures[i];
         if (e.stage == Stage::NotApplicable) continue;
         const auto seg = static_cast<std::size_t>(sid);
-        project_exposure(e.stage, to_double(e.gca) * s.fx[i], to_double(e.allowance) * s.fx[i],
-                         out.params[seg], cfg, out.results[seg]);
+        const double gca = to_double(e.gca) * s.fx[i], allowance = to_double(e.allowance) * s.fx[i];
+        if (external && external->has_exposure(i)) {
+            // Exposure-level parameters: own starting point and path (same macro drivers as the segment).
+            Params p0 = start[seg];
+            external->apply_exposure(i, {0, 0}, p0);
+            std::array<ParamPath, 2> own;
+            for (std::size_t sc = 0; sc < 2; ++sc) {
+                own[sc] = project_parameters(s.segments[seg], p0, *sat[seg], macro, kScenarios[sc], cfg);
+                for (int t = 1; t <= 3; ++t) {
+                    const ParamKey k{static_cast<int>(sc) + 1, t};
+                    external->apply_segment(s, s.segments[seg], k, own[sc][static_cast<std::size_t>(t)]);
+                    external->apply_exposure(i, k, own[sc][static_cast<std::size_t>(t)]);
+                    check(own[sc][static_cast<std::size_t>(t)], d.exposure_ids.at(e.id) + " " + kScenarios[sc] + "/" + std::to_string(t));
+                }
+                own[sc][4] = own[sc][3];
+            }
+            check(p0, d.exposure_ids.at(e.id) + " actual/0");
+            ++out.exposures_with_own_parameters;
+            project_exposure(e.stage, gca, allowance, own, cfg, out.results[seg], &out.accum[seg]);
+        } else {
+            project_exposure(e.stage, gca, allowance, out.params[seg], cfg, out.results[seg], &out.accum[seg]);
+        }
     }
     return out;
 }

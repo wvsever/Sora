@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "sora/dataset.hpp"
+#include "sora/parameters.hpp"
 #include "sora/scenario.hpp"
 
 namespace sora {
@@ -31,20 +32,40 @@ std::array<double, 21> fields(const YearResult& r);
 
 inline constexpr std::array<const char*, 2> kScenarios = {"baseline", "adverse"};
 
+// Exposure-weighted parameter sums for reporting (EBA templates ask for exposure-weighted averages).
+// Weights: stage 1 exposure at the start of the year for pd12m_s1, tr1_2, lgd_s1; stage 2 exposure for
+// pd12m_s2, tr2_1, lgd_s2, lrlt_s2; existing stage 3 exposure for tr3_1, tr3_2, lgd_s3.
+struct ParamAccum {
+    std::array<double, 3> weight{};              // S1, S2, S3 exposure
+    std::array<double, kParamCount> sum{};       // sum of parameter x weight
+    double average(std::size_t param) const;     // NaN if the weight is 0
+};
+std::size_t param_weight_stage(std::size_t param);   // 0 = S1, 1 = S2, 2 = S3
+
 struct Projection {
     // [segment][scenario 0=baseline,1=adverse][year 0..2 = years 1..3]
     std::vector<std::array<std::array<YearResult, 3>, 2>> results;
-    // [segment][scenario] parameter paths
+    // [segment][scenario] parameter paths (index 0 = effective starting point)
     std::vector<std::array<ParamPath, 2>> params;
+    // [segment]: where the starting point came from: derived | external | mixed
+    std::vector<std::string> start_source;
+    // [segment][scenario][year 1..3 at index 0..2]: derived | external | mixed
+    std::vector<std::array<std::array<std::string, 3>, 2>> path_source;
+    // [segment][scenario][year 0..3] exposure-weighted parameters, including exposure-level overrides
+    std::vector<std::array<std::array<ParamAccum, 4>, 2>> accum;
+    std::size_t exposures_with_own_parameters = 0;
+    std::vector<std::string> parameter_errors;
 };
 
 // Projects one exposure (reporting-currency amounts) and adds its contribution to `acc`.
 // Exposed for unit tests; `paths[0]` is the baseline path, `paths[1]` the adverse path.
 void project_exposure(Stage stage, double gca, double allowance, const std::array<ParamPath, 2>& paths,
-                      const ScenarioConfig& cfg, std::array<std::array<YearResult, 3>, 2>& acc);
+                      const ScenarioConfig& cfg, std::array<std::array<YearResult, 3>, 2>& acc,
+                      std::array<std::array<ParamAccum, 4>, 2>* param_acc = nullptr);
 
+// `external` may be null (derived parameters only).
 Projection project(const Dataset& d, const Segmentation& s, const Calibration& cal,
                    const std::map<std::string, Satellite>& satellites, const MacroTable& macro,
-                   const ScenarioConfig& cfg);
+                   const ScenarioConfig& cfg, const ExternalParameters* external = nullptr);
 
 }  // namespace sora

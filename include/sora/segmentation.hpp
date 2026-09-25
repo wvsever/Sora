@@ -30,6 +30,7 @@ struct Segmentation {
     std::vector<std::int32_t> segment_of;        // per exposure; -1 = out of scope
     std::vector<double> fx;                      // per exposure: rate to the reporting currency
     Dictionary level_keys;                       // all hierarchy keys
+    std::vector<std::string> top_countries;      // country buckets, largest exposure first
     std::size_t in_scope = 0;
 };
 

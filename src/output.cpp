@@ -1,5 +1,7 @@
 #include "sora/output.hpp"
 
+#include "sora/cr_scen.hpp"
+
 #include <cstdio>
 #include <fstream>
 #include <map>
@@ -38,11 +40,11 @@ std::ofstream open(const fs::path& p) {
 }
 
 void write_params_row(std::ofstream& f, const std::string& key, const char* scen, int year, const Params& p,
-                      const std::string& levels) {
+                      const std::string& levels, const std::string& source = "derived") {
     f << "segment," << key << ',' << scen << ',' << year << ',' << rate(p.pd12m_s1) << ',' << rate(p.pd12m_s2) << ','
       << rate(p.tr1_2) << ',' << rate(p.tr2_1) << ',' << rate(p.tr3_1) << ',' << rate(p.tr3_2) << ','
       << rate(p.lgd_s1) << ',' << rate(p.lgd_s2) << ',' << rate(p.lgd_s3) << ',' << rate(p.lrlt_s2)
-      << ",derived," << levels << '\n';
+      << ',' << source << ',' << levels << '\n';
 }
 
 }  // namespace
@@ -89,12 +91,18 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
             // Sorted by part name, as in the reference: lgd, lrlt, stage1, stage2, stage3.
             const std::string levels = "lgd=" + src[3] + ";lrlt=" + src[4] + ";stage1=" + src[0] + ";stage2=" + src[1] +
                                        ";stage3=" + src[2];
-            write_params_row(f, s.segments[i].key, "actual", 0, run.calibration.params[i], levels);
+            if (run.projection) {
+                write_params_row(f, s.segments[i].key, "actual", 0, run.projection->params[i][0][0], levels,
+                                 run.projection->start_source[i]);
+            } else {
+                write_params_row(f, s.segments[i].key, "actual", 0, run.calibration.params[i], levels);
+            }
             if (run.projection) {
                 for (std::size_t sc = 0; sc < 2; ++sc)
                     for (int t = 1; t <= 3; ++t)
                         write_params_row(f, s.segments[i].key, kScenarios[sc], t,
-                                         run.projection->params[i][sc][static_cast<std::size_t>(t)], "");
+                                         run.projection->params[i][sc][static_cast<std::size_t>(t)], "",
+                                         run.projection->path_source[i][sc][static_cast<std::size_t>(t - 1)]);
             }
         }
     }
@@ -118,6 +126,8 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
             }
         }
     }
+
+    if (run.projection) write_cr_scen(d, s, *run.projection, dir / "cr_scen.csv");
 
     {
         auto f = open(dir / "summary.json");

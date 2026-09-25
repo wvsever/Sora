@@ -56,6 +56,7 @@ Segmentation segment(const Dataset& d, const ScopeConfig& scope) {
         return a.second != b.second ? a.second > b.second : a.first < b.first;
     });
     if (ranked.size() > scope.top_countries) ranked.resize(scope.top_countries);
+    for (const auto& [k, _] : ranked) s.top_countries.push_back(k);
     auto bucket_of = [&](std::uint32_t c) {
         const auto& code = d.countries.at(c);
         for (const auto& [k, _] : ranked) if (k == code) return code;
