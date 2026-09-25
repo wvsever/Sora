@@ -26,7 +26,8 @@ Method (see plans/03_scenario_engine.md and plans/09_risk_parameters.md):
    logit(PD_t) = logit(PD_0) + z_t for PD12M_S1, PD12M_S2 and TR1-2. For TR2-1 the sign is reversed.
    LGD/LR_t = LGD/LR_0 * (1 + s * max(0, -cumulative property growth_t)), capped at 1 (secured portfolios).
    Stage flows and provisions follow EBA 2027 draft MN Boxes 3-9. There are no cures from S3, the balance sheet
-   is static, POCI is static, and in the final adverse year the t+2 loss term is blended 5/6 adverse + 1/6 baseline.
+   is static, POCI is static, the old S3 floor applies per exposure (para 141), and in the final adverse year the t+2
+   loss term is blended 5/6 adverse + 1/6 baseline.
 """
 
 from __future__ import annotations
@@ -273,8 +274,12 @@ def project_parameters(segment, p0, sat, macro, scenario, cfg) -> dict[int, dict
     return out
 
 
-def project_segment(stock, params_by_scen, cfg) -> list[dict]:
-    """Stage flows and provisions per EBA MN Boxes 3-9 for one segment. Returns one row per scenario and year."""
+def project_segment(stock, params_by_scen, cfg, s3_exposures=None) -> list[dict]:
+    """Stage flows and provisions per EBA MN Boxes 3-9 for one segment. Returns one row per scenario and year.
+
+    `s3_exposures` is a list of (gross carrying amount, provision) of the stage 3 exposures at t0. Box 9's
+    no-release floor applies per exposure (MN para 141). Without the list, it is applied to the segment total.
+    """
     rows = []
     w_adv, w_base = cfg["constraints"]["adverse_final_year_blend"]
     for scen, P in params_by_scen.items():
@@ -283,7 +288,10 @@ def project_segment(stock, params_by_scen, cfg) -> list[dict]:
         prov_s3_0 = stock["stage3"][1]
         cum13 = cum23 = 0.0
         prev_total = stock["stage1"][1] + stock["stage2"][1] + stock["stage3"][1] + stock["poci"][1]
-        old3 = max(e3old * P[1]["lgd_s3"], prov_s3_0)                                   # Box 9
+        if s3_exposures is None:
+            old3 = max(e3old * P[1]["lgd_s3"], prov_s3_0)                               # Box 9
+        else:                                                                          # Box 9, per exposure (para 141)
+            old3 = sum(max(g * P[1]["lgd_s3"], a) for g, a in s3_exposures)
         for t in (0, 1, 2):
             p1, p2 = P[t + 1], P[t + 2]
             f12, f21 = e1 * p1["tr1_2"], e2 * p1["tr2_1"]
@@ -335,7 +343,10 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
 
     seg_stock = {s: {st: [0.0, 0.0] for st in (*STAGES, "poci")} for s in segments}
     counts_by_seg = defaultdict(int)
+    s3_by_seg = defaultdict(list)
     for r in exposures:
+        if r["stage"] == "stage3":
+            s3_by_seg[r["segment"]].append((r["gca"], r["allowance"]))
         seg_stock[r["segment"]][r["stage"]][0] += r["gca"]
         seg_stock[r["segment"]][r["stage"]][1] += r["allowance"]
         counts_by_seg[r["segment"]] += 1
@@ -376,7 +387,7 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
     with open(out / "projection.csv", "w", newline="") as f:
         w = csv.writer(f, lineterminator="\n")
         for s in segments:
-            for row in project_segment(seg_stock[s], projected[s], cfg):
+            for row in project_segment(seg_stock[s], projected[s], cfg, s3_by_seg[s]):
                 if fields is None:
                     fields = list(row)
                     w.writerow(["segment", *fields])

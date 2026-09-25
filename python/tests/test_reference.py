@@ -57,6 +57,16 @@ def test_box9_floor_and_no_release():
     assert all(r["impairment"] == pytest.approx(0) for r in rows)
 
 
+def test_box9_floor_per_exposure():
+    """Para 141: the floor applies per exposure. max(100*0.5, 70) + max(100*0.5, 10) = 70 + 50 = 120,
+    while the segment-level max(200*0.5, 80) would give 100."""
+    P = flat(lgd_s3=0.5)
+    st = stock(0, 0, 200, prov=(0, 0, 80, 0))
+    assert approx(ref.project_segment(st, {"baseline": P}, CFG)[0]["prov_old_s3"], 100)
+    rows = ref.project_segment(st, {"baseline": P}, CFG, s3_exposures=[(100, 70), (100, 10)])
+    assert approx(rows[0]["prov_old_s3"], 120)
+
+
 def test_exposure_conserved_and_cumulative_s3():
     P = flat(pd12m_s1=0.03, pd12m_s2=0.2, tr1_2=0.1, tr2_1=0.3, lgd_s1=0.3, lgd_s2=0.4, lgd_s3=0.5, lrlt_s2=0.1)
     rows = ref.project_segment(stock(800, 150, 50, 5), {"baseline": P}, CFG)
