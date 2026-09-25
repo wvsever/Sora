@@ -7,9 +7,15 @@ Every phase is delivered against the reference dataset `tests/data/20260630.7z` 
 | Phase | Status |
 |---|---|
 | 0 Reference and test assets | Done, except the synthetic ECB benchmark file (moved to phase 5) |
-| 1 Core skeleton and input | Done: SIM reader (DuckDB), dataset, segmentation, input checks, `sora inspect` |
+| 1 Core skeleton and input | Done: SIM reader (DuckDB, streamed), dataset, segmentation, input checks, `sora inspect` |
 | 2 Starting-point parameters | Done: derived calibration, and customer parameters (per exposure or segment hierarchy, starting point and projection) |
-| 3 Credit stress projection | Done for on-balance amortised cost, matching the golden results exactly, with EBA CSV_CR_SCEN output (`cr_scen.csv`). The static balance sheet holds by construction (no run-off in the flow model; exposure conservation is tested). Open: collateral repricing, LTV columns, prior-year Actual rows. |
+| 3 Credit stress projection | Done for on-balance amortised cost, matching the golden results exactly: EBA Boxes 3–9, static balance sheet (by construction), EBA CSV_CR_SCEN output, collateral repricing and LTV (`collateral.csv`, CR_SCEN LTV columns). Open: prior-year Actual rows (needs a second year-end in the data). |
+| 4 Performance and parallel execution | Done: `--workers N` (bit-identical for any N), 10x/100x benchmarks (`benchmarks/RESULTS.md`): 100x = 6.2M exposures in 17.7 s. Open: pre-sorted SIM to remove DuckDB sorts; true chunked streaming of exposures. |
+| 5 Scenario models and coverage | Open: off-balance-sheet (CR_SCEN_OFF_BS), ECB benchmark rule, CR_SECTOR, satellite estimation. |
+| 5b Agent and calculator integration | Calculator REST client and IRB REA projection done (`--calculator`, `rea.csv`). Open: `sora-mcp`, `/v1/parameters/credit` integration, `explain_result`, `diff_runs`. |
+| 6–8 | Not started. |
+
+Hardening (2026-09-25): code review of phases 3–5b; ten findings fixed (calculator retry/offline fallback, token over HTTP, best-effort cache, JSON escaping, shared exposure parameter paths, per-batch REA records, worker stop flag, level-key lookup, calibration index invariant, option validation). CI (`python`, `cpp` release + ASan/UBSan) green on `main`.
 
 ## Phase 0 - Reference and test assets
 
