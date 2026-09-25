@@ -68,7 +68,7 @@ source export files (Parquet or CSV, one folder per source table) + source data 
         │  mapping SQL, run by `sora-tools map` (embedded DuckDB, files only)
         ▼
 SIM tables (Parquet or CSV, partitioned by entity)
-        │  sora validate
+        │  sora-tools validate
         ▼
 Sora engine
 ```
