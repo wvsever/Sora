@@ -41,28 +41,39 @@ Sora can model stresses such as:
 
 A scenario may combine multiple shocks and apply them by country, sector, portfolio, product, rating bucket, counterparty class, or other segmentation dimensions.
 
+## Reference methodology
+
+The primary target is the EBA EU-wide stress test credit-risk methodology: the 2025 final and 2027 draft methodological notes in `docs/`. The engine projects IFRS 9 stage flows and provisions over a 3-year horizon, under baseline and adverse macro scenarios, from 12-month point-in-time starting-point parameters per portfolio segment. See `plans/03_scenario_engine.md` and `plans/09_risk_parameters.md`.
+
+## Inputs
+
+| Input | Location | Notes |
+|---|---|---|
+| Bank dataset | `tests/data/20260630.7z` (reference) | Hive-partitioned CSV, 54 tables, see `tests/data/README.md` |
+| Macro scenario | `docs/` (ESRB/ECB xlsx) | Converted to a normalised CSV by `tools/scenario_import` |
+| Starting-point PD / TR / LGD / LR | External file or `sora calibrate` | Not present in the dataset. See `plans/09_risk_parameters.md`. |
+| Satellite models / benchmarks | External | Macro → parameter sensitivities per segment |
+
 ## Example scenario
 
 ```yaml
-name: severe_recession
-scenario_id: severe_recession_001
-horizon_months: 36
+name: eba_2027_adverse
+scenario_id: eba2027_adv_v1
+reference_date: 2026-06-30
+steps: 3
+macro_path: scenarios/eba2027_macro.csv
+scenario: adverse
+starting_parameters: params/risk_parameters_20260630.csv
+satellite_models: models/satellites.csv
+constraints:
+  no_cure_from_s3: true
+  no_s3_provision_release: true
+  static_balance_sheet: true
 
-macro:
-  gdp_change_pct: -3.2
-  unemployment_change_pct: 2.1
-  residential_property_change_pct: -18.0
-  commercial_property_change_pct: -25.0
-
-rates:
-  eur_parallel_shift_bps: 150
-
-credit:
-  default_probability_multiplier: 1.70
-  downgrade_bias: 0.25
-
-fx:
-  EURUSD_change_pct: -12.0
+overlays:                      # optional sensitivity shocks
+  - rule: pd_multiplier
+    where: { sector: NFC, country: DE }
+    value: 1.7
 ```
 
 ## Processing model
@@ -70,8 +81,11 @@ fx:
 The engine should be implemented as a staged pipeline:
 
 ```text
-Input Reader
-    -> Scenario Loader
+Dataset Discovery (partitioned CSV)
+    -> Reference & Party Store
+    -> Exposure Assembly (contract + counterparty + collateral + allowance)
+    -> Risk Parameters (external | calibrated | benchmark)
+    -> Scenario Loader & Compiler
     -> Segmentation
     -> Stress Rule Evaluation
     -> Event Generation
@@ -96,6 +110,7 @@ Initial engineering targets:
 - Allow zero-copy parsing where practical
 - Use memory mapping for large immutable input files where beneficial
 - Provide binary output options for high-volume workflows
+- Handle many small partition files efficiently (the reference dataset has 5,651)
 
 ## C++ baseline
 
@@ -126,10 +141,17 @@ sora/
 ├── include/
 │   └── sora/
 ├── src/
+├── tools/
+│   ├── scenario_import/      # xlsx scenarios -> normalised CSV
+│   └── reference/            # independent reference implementation (golden results)
 ├── tests/
+│   ├── data/                 # reference dataset (20260630.7z) + README
+│   ├── golden/               # expected results for the reference dataset
+│   └── scenarios/
 ├── benchmarks/
 ├── examples/
 ├── schemas/
+├── docs/                     # EBA guidelines and EU-wide stress test material (2025, 2027 draft)
 └── plans/
     ├── 01_architecture.md
     ├── 02_data_model.md
@@ -138,7 +160,8 @@ sora/
     ├── 05_execution_pipeline.md
     ├── 06_validation.md
     ├── 07_benchmarking.md
-    └── 08_delivery_roadmap.md
+    ├── 08_delivery_roadmap.md
+    └── 09_risk_parameters.md
 ```
 
 ## Non-goals
