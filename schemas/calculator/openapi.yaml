@@ -1,0 +1,593 @@
+openapi: 3.1.0
+info:
+  title: Sora Regulatory Calculator API
+  version: 0.1.0
+  summary: Interface that Sora calls to obtain regulatory and risk-parameter calculations.
+  description: |
+    Proposed by Sora. It is implemented by an external regulatory calculator; Sora is the client.
+
+    Design rules:
+    - **Batch-first.** Every call carries many records. Sora splits large runs into batches
+      of at most `limits.maxRecordsPerRequest` (from `/v1/capabilities`), and uses async jobs
+      above `limits.maxRecordsPerSyncRequest`.
+    - **Exact decimals.** All amounts, rates and probabilities are JSON strings holding
+      decimal numbers (e.g. `"0.0125"`, `"1250000.00"`). Never binary floats.
+    - **Deterministic.** The same request body with the same `paramSet` and calculator version
+      must return the same results. The calculator reports its version in every response.
+    - **Idempotent.** `Idempotency-Key` (= `requestId`) may be retried safely.
+    - **Record-level errors.** A batch succeeds even if individual records are rejected. Each
+      result carries `status` and, when rejected, `errors`.
+    - **Formats.** `application/json` is required. `application/vnd.apache.parquet` is optional
+      for bulk request and response bodies (the same columns as the JSON record schemas, flattened).
+    - **Security.** Deployed on the customer's premises. Supports mTLS and/or OAuth2 client credentials.
+servers:
+  - url: https://calculator.example.internal
+    description: Customer on-premises deployment (placeholder)
+security:
+  - bearerAuth: []
+  - mutualTLS: []
+
+paths:
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      summary: Calculator identity, supported calculations, parameter sets and limits.
+      responses:
+        "200":
+          description: Capabilities
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capabilities" }
+
+  /v1/health:
+    get:
+      operationId: getHealth
+      summary: Liveness and readiness.
+      security: []
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok, degraded] }
+
+  /v1/credit-risk/irb:
+    post:
+      operationId: calculateIrb
+      summary: IRB risk weights, REA and expected loss (CRR Art. 153-154, 158).
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IrbRequest" }
+      responses:
+        "200":
+          description: Results, one per request record, in request order.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IrbResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /v1/credit-risk/sa:
+    post:
+      operationId: calculateSa
+      summary: Standardised approach exposure value, risk weight and REA (CRR3 Part Three, Title II, Chapter 2).
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SaRequest" }
+      responses:
+        "200":
+          description: Results
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SaResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /v1/credit-risk/output-floor:
+    post:
+      operationId: calculateOutputFloor
+      summary: Output floor (CRR3 Art. 92(3)-(5)) per reporting unit, including transitional factor.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OutputFloorRequest" }
+      responses:
+        "200":
+          description: Results
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OutputFloorResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /v1/parameters/credit:
+    post:
+      operationId: calculateCreditParameters
+      summary: Risk-parameter model (PD, LGD, CCF, stage transition rates) per exposure or segment, per scenario year.
+      description: |
+        Used for the customer's own IFRS 9 / IRB / satellite models. Sora sends exposure attributes
+        and, for projections, the macro path. The calculator returns parameters per requested year.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ParameterRequest" }
+      responses:
+        "200":
+          description: Results
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ParameterResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /v1/jobs:
+    post:
+      operationId: submitJob
+      summary: Submit a large batch asynchronously (any calculation above).
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [calculation, request]
+              properties:
+                calculation: { $ref: "#/components/schemas/Calculation" }
+                request:
+                  description: The request body of the matching synchronous endpoint.
+                  oneOf:
+                    - $ref: "#/components/schemas/IrbRequest"
+                    - $ref: "#/components/schemas/SaRequest"
+                    - $ref: "#/components/schemas/OutputFloorRequest"
+                    - $ref: "#/components/schemas/ParameterRequest"
+      responses:
+        "202":
+          description: Accepted
+          headers:
+            Location: { schema: { type: string }, description: "/v1/jobs/{jobId}" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+
+  /v1/jobs/{jobId}:
+    get:
+      operationId: getJob
+      parameters:
+        - { name: jobId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Job status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: cancelJob
+      parameters:
+        - { name: jobId, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Cancelled }
+
+  /v1/jobs/{jobId}/result:
+    get:
+      operationId: getJobResult
+      parameters:
+        - { name: jobId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The response body of the matching synchronous endpoint.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/IrbResponse"
+                  - $ref: "#/components/schemas/SaResponse"
+                  - $ref: "#/components/schemas/OutputFloorResponse"
+                  - $ref: "#/components/schemas/ParameterResponse"
+            application/vnd.apache.parquet:
+              schema: { type: string, format: binary }
+        "409":
+          description: Job not finished
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: OAuth2 client-credentials access token.
+    mutualTLS:
+      type: mutualTLS
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Equal to `context.requestId`. A retry with the same key returns the original result.
+      schema: { type: string, format: uuid }
+
+  responses:
+    Problem:
+      description: Request-level error (RFC 9457 problem details).
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Decimal:
+      type: string
+      pattern: '^-?[0-9]+(\.[0-9]+)?$'
+      description: Exact decimal number as a string.
+    Probability:
+      allOf:
+        - $ref: "#/components/schemas/Decimal"
+      description: Decimal fraction in [0, 1], e.g. "0.0125" = 1.25%.
+    CurrencyCode:
+      type: string
+      pattern: '^[A-Z]{3}$'
+    CountryCode:
+      type: string
+      pattern: '^[A-Z]{2}$'
+    Calculation:
+      type: string
+      enum: [irb, sa, output-floor, parameters-credit]
+
+    Capabilities:
+      type: object
+      required: [calculator, apiVersion, calculations, paramSets, limits]
+      properties:
+        calculator:
+          type: object
+          required: [name, version]
+          properties:
+            name: { type: string }
+            version: { type: string, description: Returned in every response; part of Sora's result fingerprint. }
+        apiVersion: { type: string, example: "0.1.0" }
+        calculations:
+          type: array
+          items: { $ref: "#/components/schemas/Calculation" }
+        paramSets:
+          type: array
+          description: Supported regulatory parameter sets.
+          items: { type: string, example: EU_CRR3_2025-01-01 }
+        formats:
+          type: array
+          items: { type: string, enum: [application/json, application/vnd.apache.parquet] }
+        limits:
+          type: object
+          required: [maxRecordsPerRequest, maxRecordsPerSyncRequest]
+          properties:
+            maxRecordsPerRequest: { type: integer, minimum: 1 }
+            maxRecordsPerSyncRequest: { type: integer, minimum: 1 }
+            maxConcurrentRequests: { type: integer, minimum: 1 }
+
+    RequestContext:
+      type: object
+      description: Identifies the Sora run. Echoed in the response.
+      required: [requestId, runId, referenceDate, paramSet, reportingCurrency]
+      properties:
+        requestId: { type: string, format: uuid }
+        runId: { type: string }
+        scenario: { type: string, enum: [actual, baseline, adverse], default: actual }
+        projectionYear:
+          type: integer
+          description: 0 = reference date, 1..n = projection year.
+          minimum: 0
+        referenceDate: { type: string, format: date }
+        paramSet: { type: string, example: EU_CRR3_2025-01-01 }
+        reportingCurrency: { $ref: "#/components/schemas/CurrencyCode" }
+        inputFingerprint: { type: string, description: xxHash of the request records, set by Sora. }
+
+    ResponseMeta:
+      type: object
+      required: [requestId, calculator, paramSet]
+      properties:
+        requestId: { type: string, format: uuid }
+        calculator:
+          type: object
+          required: [name, version]
+          properties:
+            name: { type: string }
+            version: { type: string }
+        paramSet: { type: string }
+        warnings:
+          type: array
+          items: { $ref: "#/components/schemas/Message" }
+
+    Message:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, example: IRB-PD-RANGE }
+        message: { type: string }
+        field: { type: string }
+
+    RecordStatus:
+      type: object
+      required: [recordId, status]
+      properties:
+        recordId: { type: string, description: Echo of the request record id. }
+        status: { type: string, enum: [ok, rejected] }
+        errors:
+          type: array
+          items: { $ref: "#/components/schemas/Message" }
+
+    # ---------- IRB ----------
+    IrbRecord:
+      type: object
+      required: [recordId, exposureClass, approach, ead, pd, lgd, maturityYears]
+      properties:
+        recordId: { type: string, description: Sora exposure key, e.g. "CL-000001". }
+        exposureClass:
+          type: string
+          enum: [central_governments, institutions, corporates_general, corporates_sme,
+                 specialised_lending, purchased_receivables_corporate,
+                 retail_residential_mortgage, retail_qrre, retail_sme, retail_other,
+                 purchased_receivables_retail, equity]
+        approach: { type: string, enum: [firb, airb, slotting] }
+        ead: { $ref: "#/components/schemas/Decimal" }
+        pd: { $ref: "#/components/schemas/Probability" }
+        lgd: { $ref: "#/components/schemas/Probability" }
+        maturityYears: { $ref: "#/components/schemas/Decimal" }
+        isDefaulted: { type: boolean, default: false }
+        elbe: { $ref: "#/components/schemas/Probability" }
+        annualTurnoverEurMillions:
+          allOf: [{ $ref: "#/components/schemas/Decimal" }]
+          description: For the SME correlation adjustment (Art. 153(4)).
+        isLargeFinancialSectorEntity:
+          type: boolean
+          description: Applies the 1.25 correlation multiplier (Art. 153(2)).
+        slottingCategory: { type: string, enum: [strong, good, satisfactory, weak, default] }
+        supportingFactor: { type: string, enum: [none, sme, infrastructure] }
+        currency: { $ref: "#/components/schemas/CurrencyCode" }
+        countryOfRisk: { $ref: "#/components/schemas/CountryCode" }
+
+    IrbRequest:
+      type: object
+      required: [context, records]
+      properties:
+        context: { $ref: "#/components/schemas/RequestContext" }
+        records:
+          type: array
+          items: { $ref: "#/components/schemas/IrbRecord" }
+
+    IrbResult:
+      allOf:
+        - $ref: "#/components/schemas/RecordStatus"
+        - type: object
+          properties:
+            pdApplied: { $ref: "#/components/schemas/Probability" }
+            lgdApplied: { $ref: "#/components/schemas/Probability" }
+            correlation: { $ref: "#/components/schemas/Decimal" }
+            maturityAdjustment: { $ref: "#/components/schemas/Decimal" }
+            capitalRequirementK: { $ref: "#/components/schemas/Decimal" }
+            riskWeight: { $ref: "#/components/schemas/Decimal" }
+            rea: { $ref: "#/components/schemas/Decimal" }
+            expectedLoss: { $ref: "#/components/schemas/Decimal" }
+
+    IrbResponse:
+      type: object
+      required: [meta, results]
+      properties:
+        meta: { $ref: "#/components/schemas/ResponseMeta" }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/IrbResult" }
+
+    # ---------- SA ----------
+    SaRecord:
+      type: object
+      required: [recordId, exposureClass, originalExposure]
+      properties:
+        recordId: { type: string }
+        exposureClass:
+          type: string
+          enum: [central_governments, regional_governments, public_sector_entities, mdb,
+                 international_organisations, institutions, covered_bonds, corporates,
+                 specialised_lending, retail, secured_by_immovable_property,
+                 adc_exposures, defaulted, subordinated_debt_equity, ciu, other_items]
+        originalExposure: { $ref: "#/components/schemas/Decimal" }
+        offBalanceSheet: { type: boolean, default: false }
+        ccfCategory: { type: string, description: CRR3 Annex I bucket for off-balance items. }
+        specificCreditRiskAdjustments: { $ref: "#/components/schemas/Decimal" }
+        creditQualityStep: { type: integer, minimum: 1, maximum: 6 }
+        countryOfCounterparty: { $ref: "#/components/schemas/CountryCode" }
+        isSme: { type: boolean }
+        propertyType: { type: string, enum: [residential, commercial, none] }
+        propertyValue: { $ref: "#/components/schemas/Decimal" }
+        isIncomeProducing: { type: boolean }
+        priorRankingClaims: { $ref: "#/components/schemas/Decimal" }
+        eligibleCollateralValue: { $ref: "#/components/schemas/Decimal" }
+        guarantorExposureClass: { type: string }
+        guarantorCreditQualityStep: { type: integer, minimum: 1, maximum: 6 }
+        guaranteedAmount: { $ref: "#/components/schemas/Decimal" }
+        currency: { $ref: "#/components/schemas/CurrencyCode" }
+        isCurrencyMismatch: { type: boolean }
+
+    SaRequest:
+      type: object
+      required: [context, records]
+      properties:
+        context: { $ref: "#/components/schemas/RequestContext" }
+        records:
+          type: array
+          items: { $ref: "#/components/schemas/SaRecord" }
+
+    SaResult:
+      allOf:
+        - $ref: "#/components/schemas/RecordStatus"
+        - type: object
+          properties:
+            exposureValue: { $ref: "#/components/schemas/Decimal" }
+            ccfApplied: { $ref: "#/components/schemas/Probability" }
+            riskWeight: { $ref: "#/components/schemas/Decimal" }
+            rea: { $ref: "#/components/schemas/Decimal" }
+            ltv: { $ref: "#/components/schemas/Decimal" }
+
+    SaResponse:
+      type: object
+      required: [meta, results]
+      properties:
+        meta: { $ref: "#/components/schemas/ResponseMeta" }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/SaResult" }
+
+    # ---------- Output floor ----------
+    OutputFloorRecord:
+      type: object
+      required: [recordId, reaModelled, reaStandardisedEquivalent]
+      properties:
+        recordId: { type: string, description: Reporting unit, e.g. an entity_id or consolidation scope. }
+        reaModelled: { $ref: "#/components/schemas/Decimal" }
+        reaStandardisedEquivalent: { $ref: "#/components/schemas/Decimal" }
+        reaOther: { $ref: "#/components/schemas/Decimal" }
+        applicationDate: { type: string, format: date }
+
+    OutputFloorRequest:
+      type: object
+      required: [context, records]
+      properties:
+        context: { $ref: "#/components/schemas/RequestContext" }
+        records:
+          type: array
+          items: { $ref: "#/components/schemas/OutputFloorRecord" }
+
+    OutputFloorResponse:
+      type: object
+      required: [meta, results]
+      properties:
+        meta: { $ref: "#/components/schemas/ResponseMeta" }
+        results:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/RecordStatus"
+              - type: object
+                properties:
+                  floorFactor: { $ref: "#/components/schemas/Decimal" }
+                  floorBinding: { type: boolean }
+                  treaFloored: { $ref: "#/components/schemas/Decimal" }
+
+    # ---------- Risk parameters ----------
+    MacroPoint:
+      type: object
+      required: [variable, year, value]
+      properties:
+        variable: { type: string, example: real_gdp_growth }
+        country: { $ref: "#/components/schemas/CountryCode" }
+        sector: { type: string, description: NACE section, for GVA. }
+        year: { type: integer, description: Projection year (1..n). }
+        value: { $ref: "#/components/schemas/Decimal" }
+
+    ParameterRecord:
+      type: object
+      required: [recordId, level]
+      properties:
+        recordId: { type: string, description: Exposure key or segment key. }
+        level: { type: string, enum: [exposure, segment] }
+        segment: { type: string, example: "NFC_SME_CRE|BE" }
+        stage: { type: string, enum: [stage1, stage2, stage3, poci] }
+        attributes:
+          type: object
+          description: Model features, named as SIM columns (e.g. "product_code", "ltv", "rating_grade").
+          additionalProperties:
+            oneOf: [{ type: string }, { type: boolean }, { type: integer }]
+
+    ParameterRequest:
+      type: object
+      required: [context, parameters, years, records]
+      properties:
+        context: { $ref: "#/components/schemas/RequestContext" }
+        parameters:
+          type: array
+          items:
+            type: string
+            enum: [pd12m_s1, pd12m_s2, tr1_2, tr2_1, tr3_1, tr3_2,
+                   lgd_s1, lgd_s2, lgd_s3, lrlt_s2, ccf, pd_lifetime, pd_reg, lgd_reg]
+        years:
+          type: array
+          description: 0 = starting point, 1..n = projection years.
+          items: { type: integer, minimum: 0 }
+        macroPath:
+          type: array
+          items: { $ref: "#/components/schemas/MacroPoint" }
+        records:
+          type: array
+          items: { $ref: "#/components/schemas/ParameterRecord" }
+
+    ParameterResponse:
+      type: object
+      required: [meta, results]
+      properties:
+        meta: { $ref: "#/components/schemas/ResponseMeta" }
+        results:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/RecordStatus"
+              - type: object
+                properties:
+                  values:
+                    type: array
+                    items:
+                      type: object
+                      required: [year, parameter, value]
+                      properties:
+                        year: { type: integer }
+                        parameter: { type: string }
+                        value: { $ref: "#/components/schemas/Probability" }
+                        source: { type: string, enum: [model, benchmark, override] }
+
+    # ---------- Jobs and errors ----------
+    Job:
+      type: object
+      required: [jobId, status]
+      properties:
+        jobId: { type: string }
+        calculation: { $ref: "#/components/schemas/Calculation" }
+        status: { type: string, enum: [queued, running, succeeded, failed, cancelled] }
+        progress: { type: number, minimum: 0, maximum: 1 }
+        submittedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+        error: { $ref: "#/components/schemas/Problem" }
+
+    Problem:
+      type: object
+      description: RFC 9457 problem details.
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        errors:
+          type: array
+          items: { $ref: "#/components/schemas/Message" }

@@ -2,6 +2,8 @@
 
 Sora is a high-performance C++ engine for applying deterministic stress scenarios to large banking and financial datasets.
 
+Sora is a product for credit institutions (our customers). Customers run it on their own data, with their own risk models and supervisory inputs. The repository contains only the engine, formats, tools and synthetic test data.
+
 Its purpose is to transform a coherent baseline dataset into one or more stressed states while preserving accounting, contractual, and portfolio-level consistency as far as the configured scenario model allows.
 
 The design priorities are:
@@ -41,28 +43,46 @@ Sora can model stresses such as:
 
 A scenario may combine multiple shocks and apply them by country, sector, portfolio, product, rating bucket, counterparty class, or other segmentation dimensions.
 
+## Reference methodology
+
+The primary target is the EBA EU-wide stress test credit-risk methodology: the 2025 final and 2027 draft methodological notes in `docs/`. The engine projects IFRS 9 stage flows and provisions over a 3-year horizon, under baseline and adverse macro scenarios, from 12-month point-in-time starting-point parameters per portfolio segment. See `plans/03_scenario_engine.md` and `plans/09_risk_parameters.md`.
+
+## Inputs
+
+| Input | Location | Notes |
+|---|---|---|
+| Bank data in the Sora Input Model (SIM) | Customer, mapped with SQL | Documented schema in `schemas/sim/`. The reference source is `tests/data/20260630.7z`, mapped by `mappings/cppbank/`. See `plans/10_input_model_and_mapping.md`. |
+| Macro scenario | `docs/` (ESRB/ECB xlsx) | Converted to a normalised CSV by `tools/scenario_import` |
+| Starting-point PD / TR / LGD / LR | Customer model output, or `sora calibrate` | Not present in the dataset. See `plans/09_risk_parameters.md`. |
+| Satellite models | Customer | Macro → parameter sensitivities per segment (synthetic in tests) |
+| ECB benchmark parameters | Customer (received from ECB, confidential) | Loaded in Sora's benchmark format (synthetic in tests) |
+
+## Integration
+
+- **Mapping with SQL on exports:** customers export source tables to files. Mapping SQL, written by hand or with an AI agent, runs on those files with embedded DuckDB. There is no database access.
+- **MCP server (`sora-mcp`):** lets an agent read the model description, profile sources, test mappings, validate, run and explain results. It runs locally, returns metadata only by default, and requires human approval for production mappings.
+- **Regulatory calculator over REST:** PD/LGD models, IRB, SA and the output floor are computed by an external calculator implementing `schemas/calculator/openapi.yaml`. A stub server is used for tests. See `plans/11_integrations.md`.
+
 ## Example scenario
 
 ```yaml
-name: severe_recession
-scenario_id: severe_recession_001
-horizon_months: 36
+name: eba_2027_adverse
+scenario_id: eba2027_adv_v1
+reference_date: 2026-06-30
+steps: 3
+macro_path: scenarios/eba2027_macro.csv
+scenario: adverse
+starting_parameters: params/risk_parameters_20260630.csv
+satellite_models: models/satellites.csv
+constraints:
+  no_cure_from_s3: true
+  no_s3_provision_release: true
+  static_balance_sheet: true
 
-macro:
-  gdp_change_pct: -3.2
-  unemployment_change_pct: 2.1
-  residential_property_change_pct: -18.0
-  commercial_property_change_pct: -25.0
-
-rates:
-  eur_parallel_shift_bps: 150
-
-credit:
-  default_probability_multiplier: 1.70
-  downgrade_bias: 0.25
-
-fx:
-  EURUSD_change_pct: -12.0
+overlays:                      # optional sensitivity shocks
+  - rule: pd_multiplier
+    where: { sector: NFC, country: DE }
+    value: 1.7
 ```
 
 ## Processing model
@@ -70,8 +90,11 @@ fx:
 The engine should be implemented as a staged pipeline:
 
 ```text
-Input Reader
-    -> Scenario Loader
+Dataset Discovery (partitioned CSV)
+    -> Reference & Party Store
+    -> Exposure Assembly (contract + counterparty + collateral + allowance)
+    -> Risk Parameters (external | calibrated | benchmark)
+    -> Scenario Loader & Compiler
     -> Segmentation
     -> Stress Rule Evaluation
     -> Event Generation
@@ -96,26 +119,25 @@ Initial engineering targets:
 - Allow zero-copy parsing where practical
 - Use memory mapping for large immutable input files where beneficial
 - Provide binary output options for high-volume workflows
+- Handle many small partition files efficiently (the reference dataset has 5,651)
 
-## C++ baseline
+## Technology
 
-Recommended baseline:
+- **C++20 engine** (`sora`): everything that touches records at stress time. Low memory, high throughput, deterministic.
+- **Python + DuckDB tooling** (`sora-tools`, `sora-mcp`): mapping SQL on exported files, validation, profiling, scenario import, schema generation, MCP server, test stubs and the reference implementation.
+- **Parquet** is the primary interchange format. CSV is supported.
 
-- C++20 or newer
-- CMake
-- Standard library first
-- Avoid heavy frameworks in the core engine
-- Optional dependencies only where justified by measurable performance or implementation simplicity
+C++ engine baseline:
 
-Potential libraries:
+- C++20, CMake
+- Standard library first. Avoid heavy frameworks in the core engine.
+- Optional dependencies only where justified by measurable performance or implementation simplicity:
+  - Apache Arrow C++ (Parquet component only): row-group streaming with column projection
+  - `libcurl` for the REST calculator client
+  - `simdjson`, `yaml-cpp`/`rapidyaml`, `fmt`, `spdlog`, `xxHash`
+  - `mimalloc` only after profiling shows allocator pressure
 
-- `simdjson` for high-performance JSON input
-- `yaml-cpp` only for human-authored scenario files if YAML is required
-- `fmt` for formatting
-- `spdlog` for logging, preferably asynchronous or compile-time removable in hot paths
-- `mimalloc` or `jemalloc` only after profiling demonstrates allocator pressure
-- `xxHash` for fast fingerprints/checksums
-- Apache Arrow only if interoperability benefits outweigh its memory footprint
+See `plans/12_technology_stack.md`.
 
 ## Repository structure
 
@@ -125,11 +147,26 @@ sora/
 ├── CMakeLists.txt
 ├── include/
 │   └── sora/
-├── src/
+├── src/                      # C++ engine
+├── python/sora_tools/        # Python tooling: map, validate, profile, scenario-import, schema, mcp
+├── mappings/
+│   └── cppbank/              # reference mapping SQL: test dataset -> SIM
+├── tools/
+│   ├── mcp/                  # sora-mcp server
+│   ├── scenario_import/      # xlsx scenarios -> normalised CSV
+│   └── reference/            # independent reference implementation (golden results)
 ├── tests/
+│   ├── data/                 # reference dataset (20260630.7z) + README
+│   ├── golden/               # expected results for the reference dataset
+│   ├── stubs/calculator/     # stub regulatory calculator (fixed / formula / faults)
+│   ├── contract/             # API contract tests (stub and real calculator)
+│   └── scenarios/
 ├── benchmarks/
 ├── examples/
 ├── schemas/
+│   ├── sim/                  # Sora Input Model: the single source of truth
+│   └── calculator/           # REST contract for the regulatory calculator (OpenAPI)
+├── docs/                     # EBA guidelines and EU-wide stress test material (2025, 2027 draft)
 └── plans/
     ├── 01_architecture.md
     ├── 02_data_model.md
@@ -138,7 +175,11 @@ sora/
     ├── 05_execution_pipeline.md
     ├── 06_validation.md
     ├── 07_benchmarking.md
-    └── 08_delivery_roadmap.md
+    ├── 08_delivery_roadmap.md
+    ├── 09_risk_parameters.md
+    ├── 10_input_model_and_mapping.md
+    ├── 11_integrations.md
+    └── 12_technology_stack.md
 ```
 
 ## Non-goals
@@ -149,7 +190,7 @@ Avoid initially:
 
 - GUI development
 - Large dependency stacks
-- Embedded scripting languages
+- Embedded scripting languages (SQL mapping runs in tooling, not in the core engine)
 - Generic workflow engines
 - Distributed execution frameworks
 - Complex database persistence layers

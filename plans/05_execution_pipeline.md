@@ -2,78 +2,100 @@
 
 ## Objective
 
-Define a predictable, restartable, and testable execution sequence.
+Define a predictable, restartable, and testable execution sequence over the partitioned input dataset.
 
-## Pipeline
+## Commands
 
-### Phase 1 - Load dimensions
+```text
+# Python tooling (sora-tools, DuckDB) - see 12_technology_stack.md
+sora-tools map      <mapping.sql…> --export <dir> -o <sim>   # mapping SQL on exported files -> SIM Parquet
+sora-tools validate <sim> [--level full]                     # schema, keys, constraints, reconciliation
 
-Load dictionaries and reference data.
+# C++ engine (sora)
+sora inspect   <sim>                              # tables, partitions, row counts
+sora calibrate <sim> -o params.csv                # derive starting-point PD/TR/LGD/LR (09_risk_parameters.md)
+sora run       <sim> --scenario s.yaml -o out     # project and aggregate
+```
 
-### Phase 2 - Load and compile scenario
+## Pipeline (`sora run`)
+
+### Phase 1 - Discover SIM dataset
+
+Read the run manifest (reference date, SIM version, mapping release). Enumerate the partitions of the required SIM tables. Fail early on missing required tables or columns.
+
+### Phase 2 - Load dimensions and party data
+
+Load reference tables, then counterparties, ratings, collateral, allocations and guarantees. Build dictionaries and dense indices. Freeze.
+
+### Phase 3 - Load and compile scenario
+
+Load the macro path, satellite coefficients, benchmarks, starting parameters and overlays.
 
 Resolve textual identifiers to integer IDs.
 
 Validate all rules.
 
-### Phase 3 - Precompute tables
+### Phase 4 - Precompute tables
 
 Examples:
 
-- Rating migration probabilities
-- Sector multipliers
-- Country multipliers
-- Time-step curves
-- Rate shock tables
+- Parameter table `[scenario][year][segment]` (PD12M_S1/S2, TR1-2, TR2-1, LGD_S1/S2/S3, LRLT_S2)
+- Collateral value indices by year, country and collateral form
+- Stage transition matrices
+- Rate shock and curve tables (NII, later)
 
-### Phase 4 - Stream records
+### Phase 5 - Stream exposures
 
-Process records in bounded chunks.
+For each entity partition, in parallel: read the contract tables, join them to the party store and the latest allowance, and attach the segment and starting parameters.
 
-### Phase 5 - Apply transformations
+### Phase 6 - Apply transformations
 
-Recommended order:
+Order per contract, per year `t0+1 … t0+3`:
 
-1. Macro-derived risk factors
-2. Rating migration
-3. PD/LGD changes
-4. Default determination
-5. Collateral repricing
-6. Stage migration
-7. Impairment impact
-8. Funding/liquidity changes
-9. Interest-rate effects
+1. Collateral repricing (property and financial collateral indices) → LTV, secured share
+2. Segment parameters for the year (satellite or table), plus contract overrides, floors and caps
+3. Stage flows (S1↔S2, S1→S3, S2→S3). No cures from S3.
+4. Provisions per flow (Boxes 4–8) and the old-S3 provision (Box 9)
+5. Maturity and like-for-like replacement (static balance sheet)
+6. Off-balance-sheet exposures: CCF conversion, then the same stage logic
+7. Funding and liquidity changes (later)
+8. Interest-rate and NII effects (later)
 
-Exact ordering must be explicit because later rules may depend on earlier results.
+The ordering is explicit because later rules depend on earlier results.
 
-### Phase 6 - Validate chunk
+### Phase 7 - Validate chunk
 
-Run configured invariant checks.
+Run the configured invariant checks.
 
-### Phase 7 - Aggregate
+### Phase 8 - Aggregate
 
-Update thread-local metrics.
+Update thread-local metrics keyed by `(scenario, year, segment, country)`.
 
-### Phase 8 - Persist
+### Phase 9 - Persist
 
-Write stressed state and/or event results.
+Write the stressed state and/or event results, if requested.
 
-### Phase 9 - Final reduction
+### Phase 10 - Final reduction
 
-Merge worker metrics deterministically.
+Merge worker metrics deterministically, in `(entity_id, file, row_seq)` order.
 
-### Phase 10 - Summary
+### Phase 11 - Summary
 
-Produce compact result summary and diagnostics.
+Produce:
+
+- EBA-layout result tables (CR_SCEN, CR_SCEN_OFF_BS, CR_SECTOR as long CSV)
+- The parameter file actually used
+- Diagnostics
+- Fingerprints
 
 ## Restartability
 
 For very large runs, optionally persist checkpoints at partition boundaries.
 
-A checkpoint should include:
+A checkpoint includes:
 
 - Scenario fingerprint
-- Input fingerprint
+- Input fingerprint (SIM manifest, mapping release, per-file size and xxHash)
 - Last completed partition
 - Aggregation state
 - Output offsets
