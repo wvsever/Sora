@@ -204,7 +204,8 @@ function Get-LineCount {
 # `if (...) { @(...) } else { $null }` expression fed to foreach - a single-element array there unrolls to
 # a scalar and a foreach over $null silently runs zero times (reference_powershell_null_array_unroll_skips_loops).
 function New-ArgList {
-    return [System.Collections.Generic.List[string]]::new()
+    # The comma stops PowerShell unrolling the empty list to $null on return.
+    return ,([System.Collections.Generic.List[string]]::new())
 }
 
 function Invoke-Step {
