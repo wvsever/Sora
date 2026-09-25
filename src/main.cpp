@@ -6,6 +6,9 @@
 //
 // Options: --base <dir> (resolve scenario paths, default: cwd), --memory-limit 1GB, --threads N,
 //          --parameters <file|dir>  customer risk parameters (default: SIM table sim_risk_parameter if present)
+//          --calculator <url>  IRB REA through the regulatory calculator (rea.csv), with --calculator-cache <dir>,
+//          --calculator-ca <file>, --calculator-cert <file> --calculator-key <file>, --calculator-batch <n>;
+//          bearer token from $SORA_CALCULATOR_TOKEN
 
 #include <sys/resource.h>
 
@@ -14,6 +17,7 @@
 #include <cstring>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <string>
 
 #include "sora/output.hpp"
@@ -27,6 +31,7 @@ struct Args {
     std::string command;
     fs::path sim, scenario, out, parameters, base = fs::current_path();
     DuckOptions duck;
+    calc::ClientOptions calculator;
 };
 
 [[noreturn]] void usage() {
@@ -34,7 +39,9 @@ struct Args {
                  "usage: sora inspect <sim> [options]\n"
                  "       sora calibrate <sim> --scenario <yaml> -o <dir> [options]\n"
                  "       sora run <sim> --scenario <yaml> -o <dir> [options]\n"
-                 "options: --base <dir> --parameters <file|dir> --memory-limit <size> --threads <n>\n");
+                 "options: --base <dir> --parameters <file|dir> --memory-limit <size> --threads <n>\n"
+                 "         --calculator <url> [--calculator-cache <dir>] [--calculator-ca <file>]\n"
+                 "         [--calculator-cert <file> --calculator-key <file>] [--calculator-batch <n>]\n");
     std::exit(2);
 }
 
@@ -51,9 +58,16 @@ Args parse(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--parameters")) a.parameters = next();
         else if (!std::strcmp(argv[i], "--memory-limit")) a.duck.memory_limit = next();
         else if (!std::strcmp(argv[i], "--threads")) a.duck.threads = std::stoi(next());
+        else if (!std::strcmp(argv[i], "--calculator")) a.calculator.url = next();
+        else if (!std::strcmp(argv[i], "--calculator-cache")) a.calculator.cache_dir = next();
+        else if (!std::strcmp(argv[i], "--calculator-ca")) a.calculator.ca_file = next();
+        else if (!std::strcmp(argv[i], "--calculator-cert")) a.calculator.cert_file = next();
+        else if (!std::strcmp(argv[i], "--calculator-key")) a.calculator.key_file = next();
+        else if (!std::strcmp(argv[i], "--calculator-batch")) a.calculator.max_batch = std::stoul(next());
         else usage();
     }
     if (a.command != "inspect" && (a.scenario.empty() || a.out.empty())) usage();
+    if (a.calculator.cert_file.empty() != a.calculator.key_file.empty()) usage();
     return a;
 }
 
@@ -158,7 +172,18 @@ int main(int argc, char** argv) {
                 return 1;
             }
         }
-        { Timer t("write outputs"); write_outputs({d, seg, cal, run ? &proj : nullptr, macro, cfg, diag}, a.out); }
+        std::optional<ReaResult> rea;
+        if (run && !a.calculator.url.empty()) {
+            Timer t("calculator (IRB REA)");
+            rea = project_rea(duck, {d, seg, proj, cfg, sats, macro, ext.empty() ? nullptr : &ext, ext_source}, a.calculator);
+            diag.findings.insert(diag.findings.end(), rea->findings.begin(), rea->findings.end());
+            if (rea->all_rejected) {
+                print_findings(diag);
+                std::fprintf(stderr, "sora: the calculator rejected every record; no results written\n");
+                return 1;
+            }
+        }
+        { Timer t("write outputs"); write_outputs({d, seg, cal, run ? &proj : nullptr, macro, cfg, diag, rea ? &*rea : nullptr}, a.out); }
         print_findings(diag);
         std::fprintf(stderr, "  %zu exposures, %zu segments -> %s (peak RSS %.1f MB)\n", seg.in_scope,
                      seg.segments.size(), a.out.string().c_str(), peak_rss_mb());

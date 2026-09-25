@@ -107,6 +107,15 @@ def test_record_level_rejection(base_url):
     assert body["results"][1]["errors"]
 
 
+def test_zero_results_are_plain_decimals(base_url):
+    """Zero values must still match the Decimal pattern (no exponent notation such as "0E-9")."""
+    rec = {**IRB_RECORDS[3], "recordId": "DEF-ZERO", "lgd": "0.50", "elbe": "0.50"}      # K = max(0, LGD - ELBE) = 0
+    status, body, _ = call(base_url, "POST", "/v1/credit-risk/irb", {"context": context(), "records": [rec]})
+    assert status == 200
+    assert_schema(body, "IrbResponse")
+    assert body["results"][0]["status"] == "ok"
+
+
 def test_deterministic(base_url):
     req = {"context": context(), "records": IRB_RECORDS}
     a = call(base_url, "POST", "/v1/credit-risk/irb", req)[1]

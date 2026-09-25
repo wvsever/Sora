@@ -133,6 +133,7 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
         write_collateral(s, coll, dir / "collateral.csv");
         write_cr_scen(d, s, *run.projection, dir / "cr_scen.csv", &coll);
     }
+    if (run.rea) write_rea_csv(s, *run.rea, dir / "rea.csv");
 
     {
         auto f = open(dir / "summary.json");
@@ -157,7 +158,12 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
             f << "\n    }";
             first = false;
         }
-        f << "\n  }\n}\n";
+        f << "\n  }";
+        if (run.rea) {
+            f << ",\n  \"rea\": ";
+            write_rea_summary(f, *run.rea);
+        }
+        f << "\n}\n";
     }
 
     {
