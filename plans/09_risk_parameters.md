@@ -88,8 +88,8 @@ Mapping rules for the reference dataset. They belong in the mapping SQL (`mappin
 - **Sector:** from `counterparty.esa2010_sector`:
   - S.121 → central banks
   - S.13x → general governments
-  - S.122/S.123 → credit institutions
-  - S.124–S.129 → other financial corporations
+  - S.122 → credit institutions
+  - S.123–S.129 → other financial corporations
   - S.11 → NFCs
   - S.14/S.15 → households
 - **Household purpose:** from `product_code`, refined by `purpose_code`:

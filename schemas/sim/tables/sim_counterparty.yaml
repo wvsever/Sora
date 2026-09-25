@@ -1,0 +1,105 @@
+name: sim_counterparty
+description: >-
+  Obligors, guarantors, collateral providers and issuers. Sora uses it to segment exposures
+  (sector, country, SME), and for group structure and concentration. Personal data is not needed:
+  do not map names, addresses or national identifiers of natural persons.
+grain: One row per counterparty, group-wide (not per entity).
+primary_key: [counterparty_id]
+required_by: [core]
+columns:
+  counterparty_id:
+    type: key
+    required: true
+    description: Counterparty identifier, unique across the whole group.
+    example: CPTY-000001
+  country_of_residence:
+    type: country
+    required: true
+    description: >-
+      Country of residence (natural persons) or of the registered office (legal persons). Drives the
+      EBA country split and macro-scenario country assignment.
+    example: BE
+    reg_ref: AnaCredit counterparty reference data, 'address - country'.
+  esa2010_sector:
+    type: string
+    required: true
+    description: >-
+      Institutional sector according to ESA 2010 (Regulation (EU) 549/2013), e.g. S.11, S.121, S.122,
+      S.1311, S.14, S.15. Use the most granular code available.
+    pattern: "^S\\.1[0-9]{1,4}$"
+    example: S.11
+    reg_ref: ESA 2010 chapter 2; FINREP counterparty sector breakdown.
+  eba_sector:
+    type: enum
+    enum: eba_sector
+    required: true
+    description: >-
+      EBA stress-test sector, derived from `esa2010_sector` with the mapping in the enum description.
+      Provided explicitly so that institution-specific classification decisions are visible in the mapping.
+    example: non_financial_corporation
+  nace_code:
+    type: string
+    required: false
+    description: >-
+      NACE Rev. 2 (or Rev. 2.1) activity code of non-financial corporations. Section letter plus
+      optional division, group and class (e.g. `C`, `C10`, `C10.1`, `C10.11`). Required for
+      `eba_sector = non_financial_corporation` (CR_SECTOR template).
+    pattern: "^[A-U]([0-9]{2}(\\.[0-9]{1,2})?)?$"
+    example: C10.11
+    pitfalls: Source systems often omit the section letter ("10.11"). The mapping must add it.
+  is_natural_person:
+    type: boolean
+    required: true
+    description: True for natural persons (retail customers, sole proprietors treated as persons).
+    example: "false"
+  is_sme:
+    type: boolean
+    required: false
+    description: >-
+      Small or medium-sized enterprise according to Commission Recommendation 2003/361/EC (fewer than 250
+      employees, and turnover ≤ EUR 50m or balance sheet total ≤ EUR 43m). Required for non-financial
+      corporations. It drives the EBA SME / non-SME split.
+    example: "true"
+    pitfalls: Apply the group-level (consolidated) thresholds where the counterparty belongs to a group.
+  annual_turnover_eur:
+    type: amount
+    required: false
+    description: Latest annual turnover in EUR (consolidated at group level where applicable). Used for SME determination and the IRB SME correlation adjustment.
+    example: "12500000.00"
+  total_assets_eur:
+    type: amount
+    required: false
+    description: Latest balance sheet total in EUR.
+    example: "8300000.00"
+  number_of_employees:
+    type: integer
+    required: false
+    description: Number of employees (full-time equivalents).
+    range: [0, null]
+    example: "85"
+  group_id:
+    type: key
+    required: false
+    description: >-
+      Identifier of the group of connected clients (CRR Art. 4(1)(39)), typically the ultimate parent
+      counterparty id. Used for concentration analysis and the CCR largest-counterparty stress.
+    example: CPTY-004120
+  lei:
+    type: string
+    required: false
+    description: Legal Entity Identifier of legal persons.
+    pattern: "^[A-Z0-9]{20}$"
+    example: 529900T8BM49AURSDO55
+checks:
+  - id: CPT-001
+    severity: error
+    description: NFCs must have a NACE code.
+    sql: "eba_sector <> 'non_financial_corporation' OR nace_code IS NOT NULL"
+  - id: CPT-002
+    severity: warning
+    description: NFCs should have an SME indicator.
+    sql: "eba_sector <> 'non_financial_corporation' OR is_sme IS NOT NULL"
+  - id: CPT-003
+    severity: error
+    description: Natural persons are households.
+    sql: "NOT is_natural_person OR eba_sector = 'household'"

@@ -1,0 +1,263 @@
+name: sim_exposure
+description: >-
+  Credit exposures at the reference date: loans and advances, debt securities, finance leases and
+  off-balance-sheet commitments and guarantees given. This is the population the stress engine
+  projects. Include all exposures subject to credit risk, whatever their measurement category, so that
+  totals reconcile with FINREP. The engine selects the ones in scope of each module (e.g. amortised cost
+  only for EBA impairment projections).
+grain: >-
+  One row per contract (facility). A facility with drawn and undrawn parts is one row: the drawn part in
+  `gross_carrying_amount` and the undrawn part in `off_balance_amount`, with `exposure_type` describing the
+  product. Do not also report the undrawn part as a separate row.
+primary_key: [exposure_id]
+partition_by: [entity_id]
+required_by: [core, credit]
+columns:
+  exposure_id:
+    type: key
+    required: true
+    description: Contract identifier, unique across the dataset and stable over time. Used to join history, collateral, guarantees and parameters.
+    example: CL-000001
+  entity_id:
+    type: key
+    required: true
+    description: Legal entity that books the exposure.
+    example: BANK-CPP-001
+  counterparty_id:
+    type: key
+    required: true
+    description: Obligor (debtor). For debt securities, the issuer.
+    example: CPTY-000001
+  exposure_type:
+    type: enum
+    enum: exposure_type
+    required: true
+    description: Kind of exposure. It determines on-balance vs off-balance treatment.
+    example: loan
+  product_code:
+    type: string
+    required: true
+    description: Institution's product code. Used for segmentation and reporting. Not interpreted by the engine unless configured.
+    example: RESI_MTG
+  portfolio_id:
+    type: string
+    required: false
+    description: Institution's accounting or business portfolio.
+    example: PF-RETAIL-MORTGAGE
+  currency:
+    type: currency
+    required: true
+    description: Currency of the contract and of all amounts on this row.
+    example: EUR
+  measurement_category:
+    type: enum
+    enum: measurement_category
+    required: true
+    description: IFRS 9 measurement category. For off-balance items, the category of the expected drawn exposure (normally amortised_cost).
+    example: amortised_cost
+    reg_ref: FINREP F 04.xx accounting portfolios.
+  stage:
+    type: enum
+    enum: stage
+    required: true
+    description: IFRS 9 stage at the reference date. Use `not_applicable` for instruments not subject to impairment.
+    example: stage1
+    reg_ref: IFRS 9 5.5; FINREP F 04.04.1, F 18.00.
+  origination_date:
+    type: date
+    required: false
+    description: Date of initial recognition (or of the latest recognition after substantial modification).
+    example: "2023-07-01"
+  maturity_date:
+    type: date
+    required: false
+    description: Legal final maturity date. NULL for open-ended facilities (current accounts, credit cards).
+    example: "2048-06-24"
+  gross_carrying_amount:
+    type: amount
+    required: false
+    description: >-
+      Gross carrying amount of the on-balance (drawn) part (IFRS 9 Appendix A): amortised cost before
+      deducting the loss allowance, including accrued interest, and after write-offs. For FVTPL/HFT
+      instruments, the carrying amount. Required for on-balance exposure types. For off-balance types, the
+      amount drawn or called and booked on balance, or NULL/0.
+    example: "400000.00"
+    reg_ref: FINREP F 04.04.1 col 015; F 18.00.
+    pitfalls: Do not deduct the allowance. Do not exclude accrued interest.
+  accrued_interest:
+    type: amount
+    required: false
+    description: Accrued interest included in `gross_carrying_amount`. Informational, used for NII.
+    example: "1250.00"
+  off_balance_amount:
+    type: amount
+    required: false
+    description: >-
+      Nominal amount of the off-balance-sheet part: undrawn committed amount of a facility, or the
+      guaranteed amount of a financial guarantee or other commitment given. Required for off-balance
+      exposure types. Optional for loans with an undrawn part.
+    example: "150000.00"
+    reg_ref: FINREP F 09.01.1 (nominal amount).
+  committed_amount:
+    type: amount
+    required: false
+    description: Total committed limit of the facility (drawn plus undrawn).
+    example: "550000.00"
+  loss_allowance:
+    type: amount
+    required: false
+    description: >-
+      Accumulated impairment (on-balance) or provision (off-balance) under IFRS 9 at the reference date,
+      as a positive amount. 0 if none. Required when `stage` is not `not_applicable` (check EXP-005).
+      NULL for instruments not subject to impairment.
+    example: "320.55"
+    reg_ref: FINREP F 04.04.1, F 09.01.1, F 12.01.
+  accumulated_write_off:
+    type: amount
+    required: false
+    description: Cumulative partial write-offs to date (amounts derecognised but still legally claimed).
+    example: "0.00"
+  interest_rate_type:
+    type: enum
+    enum: interest_rate_type
+    required: false
+    description: Interest rate type.
+    example: fixed
+  current_interest_rate:
+    type: rate
+    required: false
+    description: Contractual rate applicable at the reference date, per annum.
+    example: "0.038000000"
+  reference_rate:
+    type: string
+    required: false
+    description: Reference rate index for floating contracts (`EURIBOR_3M`, `ESTR`, ...).
+    example: EURIBOR_3M
+  interest_spread:
+    type: rate
+    required: false
+    description: Spread over the reference rate for floating contracts.
+    example: "0.015000000"
+  next_repricing_date:
+    type: date
+    required: false
+    description: Next date the rate resets (floating) or is renegotiated (fixed with a reset). NULL if fixed to maturity.
+    example: "2026-09-30"
+  amortisation_type:
+    type: string
+    required: false
+    description: Repayment profile (annuity, linear, bullet, interest_only, custom).
+    example: annuity
+  days_past_due:
+    type: integer
+    required: false
+    description: Days past due of the oldest material past-due amount at the reference date (CRR Art. 178 counting). 0 if not past due.
+    range: [0, null]
+    example: "0"
+  is_defaulted:
+    type: boolean
+    required: false
+    description: In default per CRR Art. 178 at the reference date.
+    example: "false"
+  is_credit_impaired:
+    type: boolean
+    required: false
+    description: Credit-impaired per IFRS 9 Appendix A.
+    example: "false"
+  is_forborne:
+    type: boolean
+    required: false
+    description: Forborne exposure per CRR Art. 47b (forbearance measure granted and not yet ended probation).
+    example: "false"
+  is_watchlist:
+    type: boolean
+    required: false
+    description: On the institution's watchlist.
+    example: "false"
+  is_revolving:
+    type: boolean
+    required: false
+    description: Revolving facility (can be redrawn after repayment).
+    example: "false"
+  is_unconditionally_cancellable:
+    type: boolean
+    required: false
+    description: The institution may cancel the undrawn part unconditionally at any time without notice (relevant for CCF).
+    example: "false"
+  is_intragroup:
+    type: boolean
+    required: false
+    description: Exposure to another entity of the same consolidation scope. Intragroup exposures are eliminated in consolidated results.
+    example: "false"
+  household_purpose:
+    type: enum
+    enum: household_purpose
+    required: false
+    description: Purpose of lending to households. Required when the counterparty is a household and `exposure_type = loan`.
+    example: house_purchase
+  is_cre:
+    type: boolean
+    required: false
+    description: >-
+      Commercial real estate lending: exposures to NFCs whose repayment depends on income from, or
+      sale of, commercial immovable property, or which finance its acquisition or development. Required
+      for NFC loans (EBA split SME-CRE / non-SME-CRE).
+    example: "false"
+  country_of_risk:
+    type: country
+    required: false
+    description: Country whose macro scenario drives the exposure if different from the obligor's residence (e.g. project location). NULL = counterparty country of residence.
+    example: DE
+foreign_keys:
+  - columns: [entity_id]
+    references: sim_entity
+    ref_columns: [entity_id]
+  - columns: [counterparty_id]
+    references: sim_counterparty
+    ref_columns: [counterparty_id]
+checks:
+  - id: EXP-001
+    severity: error
+    description: On-balance exposures have a gross carrying amount.
+    sql: "exposure_type NOT IN ('loan','debt_security','finance_lease') OR gross_carrying_amount IS NOT NULL"
+  - id: EXP-002
+    severity: error
+    description: Off-balance exposure types have an off-balance amount.
+    sql: "exposure_type NOT IN ('loan_commitment','financial_guarantee','other_commitment') OR off_balance_amount IS NOT NULL"
+  - id: EXP-003
+    severity: error
+    description: Instruments subject to impairment have a stage other than not_applicable. Others have not_applicable.
+    sql: "(measurement_category IN ('amortised_cost','fvoci')) = (stage <> 'not_applicable')"
+  - id: EXP-004
+    severity: error
+    description: Amounts are not negative.
+    sql: "coalesce(gross_carrying_amount,0) >= 0 AND coalesce(off_balance_amount,0) >= 0 AND coalesce(loss_allowance,0) >= 0 AND coalesce(accumulated_write_off,0) >= 0"
+  - id: EXP-005
+    severity: error
+    description: Impaired instruments report a loss allowance (0 allowed).
+    sql: "stage = 'not_applicable' OR loss_allowance IS NOT NULL"
+  - id: EXP-006
+    severity: warning
+    description: Maturity is not before origination.
+    sql: "maturity_date IS NULL OR origination_date IS NULL OR maturity_date >= origination_date"
+  - id: EXP-007
+    severity: warning
+    description: Loss allowance does not exceed the exposure.
+    sql: "loss_allowance IS NULL OR loss_allowance <= coalesce(gross_carrying_amount,0) + coalesce(off_balance_amount,0) + 0.01"
+  - id: EXP-008
+    severity: warning
+    description: Stage 3 exposures are credit-impaired.
+    sql: "stage <> 'stage3' OR is_credit_impaired IS NULL OR is_credit_impaired"
+table_checks:
+  - id: EXP-101
+    severity: error
+    description: Household loans have a household purpose.
+    violations_sql: |
+      SELECT e.exposure_id FROM sim_exposure e JOIN sim_counterparty c USING (counterparty_id)
+      WHERE c.eba_sector = 'household' AND e.exposure_type = 'loan' AND e.household_purpose IS NULL
+  - id: EXP-102
+    severity: warning
+    description: NFC loans state whether they are CRE.
+    violations_sql: |
+      SELECT e.exposure_id FROM sim_exposure e JOIN sim_counterparty c USING (counterparty_id)
+      WHERE c.eba_sector = 'non_financial_corporation' AND e.exposure_type = 'loan' AND e.is_cre IS NULL

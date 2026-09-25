@@ -1,0 +1,47 @@
+name: cppbank
+description: >-
+  Reference mapping from the synthetic CPPBank export (tests/data/20260630.7z, extracted) to the
+  Sora Input Model. It is the worked example for customers and the input of all golden tests.
+sim_version: 1.0.0-draft
+
+manifest:
+  reference_date: 2026-06-30
+  reporting_currency: EUR
+  reporting_entity_id: BANK-CPP-001
+
+sources:
+  format: csv
+  # Column types exported with the data. Everything not listed is read as VARCHAR.
+  types_file: _csv_column_types.json
+  path_template: "accounting/{table}/**/*.csv"
+  tables:
+    entity: { path: reference/entity.csv }
+    fx_rate: { path: reference/fx_rate.csv }
+    counterparty:
+    counterparty_rating:
+    contract_loan:
+    contract_commitment:
+    contract_lease:
+    contract_security_position:
+    contract_arrears:
+    collateral:
+    collateral_allocation:
+    guarantee_received:
+    impairment_allowance:
+    contract_credit_event:
+    contract_event:
+    contract_recovery_cashflow:
+
+# Execution order: later SQL files may reference earlier SIM tables.
+tables:
+  - sim_entity
+  - sim_fx_rate
+  - sim_counterparty
+  - sim_rating
+  - sim_exposure
+  - sim_collateral
+  - sim_collateral_allocation
+  - sim_guarantee
+  - sim_stage_history
+  - sim_credit_event
+  - sim_recovery_flow

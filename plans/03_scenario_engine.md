@@ -107,7 +107,7 @@ Prov S1-S2(t+1) = S1→S2 flow(t+1) · LRLT_S2(t+1)
 Prov S2-S2(t+1) = Exp S2(t) · [1 − TR2-1(t+1) − PD12M_S2(t+1)] · LRLT_S2(t+1)
 Prov S1-S3(t+1) = Exp S1(t) · PD12M_S1(t+1) · LGD_S1(t+1)          (cumulative)
 Prov S2-S3(t+1) = Exp S2(t) · PD12M_S2(t+1) · LGD_S2(t+1)          (cumulative)
-Prov Old S3(t+1) = max(Exp S3(t0) · LGD_S3(t0+1), Prov S3(t0))
+Prov Old S3(t+1) = Σ over S3 exposures of max(Exp(t0) · LGD_S3(t0+1), Prov(t0))   (per exposure, MN para 141)
 ```
 
 In the adverse final year, the `t+2` parameters are blended 5/6 adverse plus 1/6 baseline (Boxes 4–5).

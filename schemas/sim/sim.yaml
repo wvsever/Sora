@@ -1,0 +1,216 @@
+# Sora Input Model (SIM) - shared definitions.
+# The table definitions live next to this file (one YAML per table).
+# This schema is the single source of truth for the SIM: validators, documentation,
+# DDL and the C++ reader bindings are generated from it.
+
+sim_version: 1.0.0-draft
+
+description: |
+  The Sora Input Model (SIM) is the canonical input of the Sora stress engine. It describes a bank's
+  credit portfolio at one reference date: counterparties, credit exposures, collateral, guarantees,
+  and the history needed to calibrate stress parameters.
+
+  Customers produce SIM tables from their own systems with mapping SQL, usually run by
+  `sora-tools map` on exported source files. Sora never reads customer source layouts directly.
+
+conventions:
+  - Every SIM dataset describes a single reference date, given in `sim_manifest.json`.
+  - Amounts are in the currency of the row (`currency` column), not converted. Sora converts with `sim_fx_rate` at the reference date.
+  - Amounts are positive unless a column says otherwise. Allowances and provisions are positive numbers, not negative contra-amounts.
+  - Probabilities, rates and ratios are decimal fractions (0.0125 = 1.25%), never percentages.
+  - Business keys are strings, stable across reporting dates, and unique within their table across the whole dataset (not only within an entity).
+  - Missing values are NULL. Do not use sentinel values such as 0, -1, '9999-12-31' or 'N/A'.
+  - Code lists (enums) are case-sensitive and use lower_snake_case.
+  - Files are Parquet (preferred) or CSV, stored as `<table>/**/*.parquet` or `<table>/**/*.csv`. Partitioning by `entity_id=` is recommended for large tables.
+
+# Logical types. The storage type is the Parquet/DuckDB type, and csv_format describes the CSV encoding.
+types:
+  string:
+    storage: VARCHAR
+    description: UTF-8 text.
+  key:
+    storage: VARCHAR
+    description: Business key. Stable, case-sensitive, at most 64 characters, no leading or trailing spaces.
+    max_length: 64
+  integer:
+    storage: BIGINT
+    description: Whole number.
+  boolean:
+    storage: BOOLEAN
+    csv_format: "`true` / `false`"
+    description: True or false. NULL means unknown.
+  date:
+    storage: DATE
+    csv_format: YYYY-MM-DD
+    description: Calendar date.
+  amount:
+    storage: DECIMAL(18,2)
+    csv_format: "Decimal with at most 2 decimals, `.` as separator, no thousands separator (`1250000.00`)."
+    description: Monetary amount in the currency of the row, exact to the cent.
+  rate:
+    storage: DECIMAL(18,9)
+    csv_format: "Decimal with at most 9 decimals (`0.038000000`)."
+    description: Interest rate or ratio as a decimal fraction per annum (0.038 = 3.8%). May be negative.
+  probability:
+    storage: DECIMAL(18,9)
+    csv_format: "Decimal with at most 9 decimals."
+    description: Probability or loss rate as a decimal fraction in [0, 1].
+    range: [0, 1]
+  currency:
+    storage: VARCHAR
+    pattern: "^[A-Z]{3}$"
+    description: ISO 4217 alphabetic currency code (EUR, USD, ...).
+  country:
+    storage: VARCHAR
+    pattern: "^[A-Z]{2}$"
+    description: ISO 3166-1 alpha-2 country code (BE, DE, ...). Use `XX` only for supranational organisations.
+
+enums:
+  stage:
+    description: IFRS 9 impairment stage at the reference date (IFRS 9 5.5.3-5.5.5, B5.5.26; purchased or originated credit-impaired per 5.5.13).
+    values:
+      stage1: 12-month expected credit loss. No significant increase in credit risk since initial recognition.
+      stage2: Lifetime expected credit loss, not credit-impaired. Significant increase in credit risk.
+      stage3: Lifetime expected credit loss, credit-impaired (usually aligned with default).
+      poci: Purchased or originated credit-impaired.
+      not_applicable: Not subject to IFRS 9 impairment (fair value through profit or loss, held for trading, equity).
+
+  measurement_category:
+    description: IFRS 9 measurement category (FINREP accounting portfolio).
+    values:
+      amortised_cost: Amortised cost (hold to collect, SPPI passed).
+      fvoci: Fair value through other comprehensive income (debt instruments, with recycling).
+      fvoci_equity: Equity instruments designated at FVOCI (no recycling, no impairment).
+      fvtpl_mandatory: Non-trading, mandatorily at fair value through profit or loss.
+      fvtpl_designated: Designated at fair value through profit or loss (fair value option).
+      held_for_trading: Held for trading.
+
+  exposure_type:
+    description: Kind of credit exposure. It drives on- or off-balance-sheet treatment and the EBA template portfolio (loans vs debt securities vs off-balance).
+    values:
+      loan: Loans and advances, including overdrafts, credit card balances, reverse repos with non-banks, and trade receivables.
+      debt_security: Debt security held (bond, note, commercial paper).
+      finance_lease: Finance lease receivable (lessor).
+      loan_commitment: Loan commitment given (undrawn committed facility).
+      financial_guarantee: Financial guarantee given.
+      other_commitment: Other commitment given (documentary credits, performance guarantees, acceptances, NIFs).
+
+  eba_sector:
+    description: >-
+      Counterparty sector used for EBA stress-test portfolios (CR_SCEN), derived from ESA 2010 sector.
+      Mapping: S.121 → central_bank. S.13x → general_government. S.122 → credit_institution.
+      S.123-S.129 → other_financial. S.11 → non_financial_corporation. S.14, S.15 → household.
+    values:
+      central_bank: Central banks (ESA S.121).
+      general_government: General governments, including regional, local and social security (ESA S.13).
+      credit_institution: Credit institutions (ESA S.122 deposit-taking corporations except the central bank).
+      other_financial: Other financial corporations (ESA S.123-S.129 - money market funds, investment funds, other financial intermediaries, auxiliaries, captives, insurance, pension funds).
+      non_financial_corporation: Non-financial corporations (ESA S.11).
+      household: Households, including sole proprietors and non-profit institutions serving households (ESA S.14, S.15).
+
+  household_purpose:
+    description: Purpose of household lending (FINREP F 06 / EBA CR_SCEN).
+    values:
+      house_purchase: Lending for house purchase, secured by residential property (includes remortgage).
+      consumption: Consumer credit (credit cards, personal loans, car loans, instalment credit).
+      other: Other household lending (e.g. equity release, lending to sole proprietors for business purposes).
+
+  collateral_type:
+    description: Type of collateral or funded credit protection.
+    values:
+      residential_property: Residential immovable property.
+      commercial_property: Commercial immovable property (offices, retail, industrial, hotels, land).
+      cash: Cash or deposits held with the institution.
+      debt_security: Debt securities.
+      equity_security: Equities.
+      fund_unit: Units in collective investment undertakings.
+      gold: Gold.
+      life_policy: Life insurance policies pledged or assigned.
+      receivables: Receivables.
+      other_physical: Other physical collateral (vehicles, equipment, ships, aircraft, inventory).
+      other: Other collateral.
+
+  protection_type:
+    description: Type of unfunded credit protection received.
+    values:
+      guarantee: Guarantee.
+      counter_guarantee: Counter-guarantee.
+      credit_derivative: Credit derivative (e.g. CDS).
+      credit_insurance: Credit insurance.
+
+  interest_rate_type:
+    description: Interest rate type.
+    values:
+      fixed: Fixed until maturity.
+      floating: Floating (resets to a reference rate).
+      mixed: Fixed for an initial period, then floating, or other combinations.
+
+  rating_source:
+    description: Origin of a rating.
+    values:
+      internal: Institution's internal rating system.
+      sp: S&P Global Ratings.
+      moodys: Moody's.
+      fitch: Fitch Ratings.
+      dbrs: DBRS Morningstar.
+      other_ecai: Other ECAI.
+
+  credit_event_type:
+    description: Credit events relevant for default and loss history.
+    values:
+      default: Default per CRR Art. 178 (unlikely to pay and/or more than 90 days past due).
+      forbearance: Forbearance measure granted to an obligor in financial difficulty.
+      bankruptcy: Obligor has entered bankruptcy or similar protection.
+      non_accrual: Interest accrual stopped (non-accrued status).
+      distressed_sale: Sale of the exposure at a material credit-related economic loss.
+      specific_credit_adjustment: Specific credit risk adjustment booked due to credit deterioration.
+      cure: Return to non-defaulted status.
+      write_off: Full or partial write-off.
+
+  recovery_flow_type:
+    description: Type of cash flow after default.
+    values:
+      recovery: Cash recovered (payments, collateral liquidation proceeds, guarantee calls).
+      workout_cost: Direct cost of the workout (legal, external collection, liquidation costs).
+      write_off: Amount written off (a non-cash loss event).
+
+  parameter_source:
+    description: Origin of a risk parameter.
+    values:
+      external: Supplied by the institution's own models.
+      derived: Derived by `sora calibrate` from SIM history.
+      benchmark: Supervisory benchmark (e.g. ECB benchmark parameters).
+      override: Expert override (must be documented).
+
+  scenario:
+    description: Scenario identifier for parameters and results.
+    values:
+      actual: Observed or starting-point values at the reference date.
+      baseline: Baseline scenario.
+      adverse: Adverse scenario.
+
+tables:
+  - sim_entity
+  - sim_counterparty
+  - sim_rating
+  - sim_exposure
+  - sim_collateral
+  - sim_collateral_allocation
+  - sim_guarantee
+  - sim_stage_history
+  - sim_credit_event
+  - sim_recovery_flow
+  - sim_fx_rate
+  - sim_risk_parameter
+
+manifest:
+  file: sim_manifest.json
+  description: Dataset-level metadata, stored at the root of the SIM directory.
+  fields:
+    sim_version: { type: string, required: true, description: SIM schema version the dataset conforms to. }
+    reference_date: { type: date, required: true, description: Reference (reporting) date of all stock data. }
+    reporting_currency: { type: currency, required: true, description: Currency of results. }
+    reporting_entity_id: { type: key, required: true, description: Top entity of the consolidation scope (must exist in sim_entity). }
+    mapping_release: { type: string, required: false, description: Identifier of the mapping release that produced the dataset. }
+    source_fingerprint: { type: string, required: false, description: Fingerprint of the source export. }
+    created_at: { type: string, required: false, description: ISO 8601 timestamp of creation. }

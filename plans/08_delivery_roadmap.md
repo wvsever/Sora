@@ -2,6 +2,15 @@
 
 Every phase is delivered against the reference dataset `tests/data/20260630.7z` (see `tests/data/README.md`).
 
+## Status
+
+| Phase | Status |
+|---|---|
+| 0 Reference and test assets | Done, except the synthetic ECB benchmark file (moved to phase 5) |
+| 1 Core skeleton and input | Done: SIM reader (DuckDB), dataset, segmentation, input checks, `sora inspect` |
+| 2 Starting-point parameters | Done (derived calibration). External parameter file still open. |
+| 3 Credit stress projection | Done for on-balance amortised cost, matching the golden results exactly. Like-for-like replacement, collateral repricing and CR_SCEN layout still open. |
+
 ## Phase 0 - Reference and test assets
 
 Deliver:
@@ -12,7 +21,7 @@ Deliver:
 - `tools/scenario_import`: EBA/ESRB/ECB xlsx in `docs/` → normalised macro CSV
 - `tools/reference/`: independent Python + DuckDB implementation of calibration and the EBA credit projection
 - Synthetic stand-ins for customer inputs: satellite coefficients and an ECB-style benchmark file
-- Regulatory calculator REST contract (`schemas/calculator/openapi.yaml`), stub server (`tests/stubs/calculator/`) and contract tests
+- Regulatory calculator REST contract (`schemas/calculator/openapi.yaml`), stub server (`sora-tools calculator-stub`) and contract tests (`python/tests/contract/`)
 - Export specification and source data dictionary format
 - A fixed test scenario and golden results in `tests/golden/20260630/`
 - Hand-computed unit cases for EBA Boxes 3–9

@@ -1,0 +1,160 @@
+#include "sora/output.hpp"
+
+#include <cstdio>
+#include <fstream>
+#include <map>
+
+namespace sora {
+
+namespace fs = std::filesystem;
+
+namespace {
+
+std::string money(double x) {
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "%.2f", x);
+    return buf;
+}
+
+std::string rate(double x) {
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "%.9f", x);
+    return buf;
+}
+
+std::string json_escape(const std::string& s) {
+    std::string o;
+    for (char c : s) {
+        if (c == '"' || c == '\\') o += '\\';
+        o += c;
+    }
+    return o;
+}
+
+std::ofstream open(const fs::path& p) {
+    std::ofstream f(p, std::ios::binary);
+    if (!f) throw Error("cannot write " + p.string());
+    return f;
+}
+
+void write_params_row(std::ofstream& f, const std::string& key, const char* scen, int year, const Params& p,
+                      const std::string& levels) {
+    f << "segment," << key << ',' << scen << ',' << year << ',' << rate(p.pd12m_s1) << ',' << rate(p.pd12m_s2) << ','
+      << rate(p.tr1_2) << ',' << rate(p.tr2_1) << ',' << rate(p.tr3_1) << ',' << rate(p.tr3_2) << ','
+      << rate(p.lgd_s1) << ',' << rate(p.lgd_s2) << ',' << rate(p.lgd_s3) << ',' << rate(p.lrlt_s2)
+      << ",derived," << levels << '\n';
+}
+
+}  // namespace
+
+void write_outputs(const RunOutput& run, const fs::path& dir) {
+    fs::create_directories(dir);
+    const auto& d = run.dataset;
+    const auto& s = run.segmentation;
+    const auto nseg = s.segments.size();
+
+    // t0 stocks per segment: [S1,S2,S3,POCI] x [exposure, provision]
+    std::vector<std::array<std::array<double, 2>, 4>> stock(nseg);
+    std::vector<std::size_t> contracts(nseg, 0);
+    for (std::size_t i = 0; i < d.exposures.size(); ++i) {
+        const auto sid = s.segment_of[i];
+        if (sid < 0) continue;
+        const auto& e = d.exposures[i];
+        const auto st = static_cast<std::size_t>(e.stage);
+        contracts[static_cast<std::size_t>(sid)] += 1;
+        if (st > 3) continue;
+        stock[static_cast<std::size_t>(sid)][st][0] += to_double(e.gca) * s.fx[i];
+        stock[static_cast<std::size_t>(sid)][st][1] += to_double(e.allowance) * s.fx[i];
+    }
+
+    {
+        auto f = open(dir / "segments.csv");
+        f << "segment,instrument,portfolio,country,macro_key,contracts,exp_s1,exp_s2,exp_s3,exp_poci,"
+             "prov_s1,prov_s2,prov_s3,prov_poci\n";
+        for (std::size_t i = 0; i < nseg; ++i) {
+            const auto& g = s.segments[i];
+            f << g.key << ',' << g.instrument << ',' << g.portfolio << ',' << g.bucket << ','
+              << macro_key(run.macro, g.bucket, run.config) << ',' << contracts[i];
+            for (int k = 0; k < 2; ++k)
+                for (int st = 0; st < 4; ++st) f << ',' << money(stock[i][static_cast<std::size_t>(st)][static_cast<std::size_t>(k)]);
+            f << '\n';
+        }
+    }
+    {
+        auto f = open(dir / "parameters.csv");
+        f << "level,key,scenario,year,pd12m_s1,pd12m_s2,tr1_2,tr2_1,tr3_1,tr3_2,lgd_s1,lgd_s2,lgd_s3,lrlt_s2,source,"
+             "calibration_levels\n";
+        for (std::size_t i = 0; i < nseg; ++i) {
+            const auto& src = run.calibration.sources[i];
+            // Sorted by part name, as in the reference: lgd, lrlt, stage1, stage2, stage3.
+            const std::string levels = "lgd=" + src[3] + ";lrlt=" + src[4] + ";stage1=" + src[0] + ";stage2=" + src[1] +
+                                       ";stage3=" + src[2];
+            write_params_row(f, s.segments[i].key, "actual", 0, run.calibration.params[i], levels);
+            if (run.projection) {
+                for (std::size_t sc = 0; sc < 2; ++sc)
+                    for (int t = 1; t <= 3; ++t)
+                        write_params_row(f, s.segments[i].key, kScenarios[sc], t,
+                                         run.projection->params[i][sc][static_cast<std::size_t>(t)], "");
+            }
+        }
+    }
+
+    std::map<std::string, std::array<double, 21>> totals;   // "scenario/year" -> sums
+    if (run.projection) {
+        auto f = open(dir / "projection.csv");
+        f << "segment,scenario,year";
+        for (auto name : kYearResultFields) f << ',' << name;
+        f << '\n';
+        for (std::size_t i = 0; i < nseg; ++i) {
+            for (std::size_t sc = 0; sc < 2; ++sc) {
+                for (std::size_t t = 0; t < 3; ++t) {
+                    const auto v = fields(run.projection->results[i][sc][t]);
+                    f << s.segments[i].key << ',' << kScenarios[sc] << ',' << (t + 1);
+                    for (double x : v) f << ',' << money(x);
+                    f << '\n';
+                    auto& tot = totals[std::string(kScenarios[sc]) + "/" + std::to_string(t + 1)];
+                    for (std::size_t k = 0; k < v.size(); ++k) tot[k] += v[k];
+                }
+            }
+        }
+    }
+
+    {
+        auto f = open(dir / "summary.json");
+        double sp[8] = {};
+        for (std::size_t i = 0; i < nseg; ++i)
+            for (int st = 0; st < 4; ++st) {
+                sp[st] += stock[i][static_cast<std::size_t>(st)][0];
+                sp[4 + st] += stock[i][static_cast<std::size_t>(st)][1];
+            }
+        const char* spn[8] = {"exp_s1", "exp_s2", "exp_s3", "exp_poci", "prov_s1", "prov_s2", "prov_s3", "prov_poci"};
+        f << "{\n  \"reference_date\": \"" << d.manifest.reference_date << "\",\n"
+          << "  \"sim_mapping_release\": \"" << json_escape(d.manifest.mapping_release) << "\",\n"
+          << "  \"scenario\": \"" << json_escape(run.config.name) << "\",\n"
+          << "  \"segments\": " << nseg << ",\n  \"exposures\": " << s.in_scope << ",\n  \"starting_point\": {";
+        for (int k = 0; k < 8; ++k) f << (k ? ",\n" : "\n") << "    \"" << spn[k] << "\": " << money(sp[k]);
+        f << "\n  },\n  \"totals\": {";
+        bool first = true;
+        for (const auto& [key, tot] : totals) {
+            f << (first ? "\n" : ",\n") << "    \"" << key << "\": {";
+            for (std::size_t k = 0; k < tot.size(); ++k)
+                f << (k ? ",\n" : "\n") << "      \"" << kYearResultFields[k] << "\": " << money(tot[k]);
+            f << "\n    }";
+            first = false;
+        }
+        f << "\n  }\n}\n";
+    }
+
+    {
+        auto f = open(dir / "diagnostics.json");
+        f << "{\n  \"findings\": [";
+        for (std::size_t i = 0; i < run.diagnostics.findings.size(); ++i) {
+            const auto& x = run.diagnostics.findings[i];
+            f << (i ? ",\n" : "\n") << "    {\"id\": \"" << x.id << "\", \"severity\": \"" << x.severity
+              << "\", \"count\": " << x.count << ", \"message\": \"" << json_escape(x.message) << "\"}";
+        }
+        f << "\n  ]\n}\n";
+    }
+}
+
+}  // namespace sora

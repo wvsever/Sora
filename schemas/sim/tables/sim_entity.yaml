@@ -1,0 +1,51 @@
+name: sim_entity
+description: Legal entities in the consolidation scope. Every exposure, collateral and history row belongs to one entity.
+grain: One row per legal entity.
+primary_key: [entity_id]
+required_by: [core]
+columns:
+  entity_id:
+    type: key
+    required: true
+    description: Identifier of the legal entity. Used as the partition key of other SIM tables.
+    example: BANK-CPP-001
+  parent_entity_id:
+    type: key
+    required: false
+    description: Direct parent entity within the scope. NULL for the top entity.
+    example: BANK-CPP-001
+  lei:
+    type: string
+    required: false
+    description: Legal Entity Identifier (ISO 17442), 20 characters.
+    pattern: "^[A-Z0-9]{20}$"
+    example: 549300000081VT639246
+  country:
+    type: country
+    required: true
+    description: Country of incorporation.
+    example: BE
+  functional_currency:
+    type: currency
+    required: true
+    description: Functional currency of the entity (IAS 21).
+    example: EUR
+  entity_type:
+    type: string
+    required: false
+    description: Free-text or institution-defined entity type (credit institution, leasing company, insurer, ...). Informational.
+    example: credit_institution
+  consolidation_method:
+    type: string
+    required: false
+    description: Accounting consolidation method (full, proportional, equity, not_consolidated). NULL for the top entity.
+    example: full
+  ownership_pct:
+    type: probability
+    required: false
+    description: Share held by the parent, as a fraction (1.0 = 100%).
+    example: "1.000000000"
+foreign_keys:
+  - columns: [parent_entity_id]
+    references: sim_entity
+    ref_columns: [entity_id]

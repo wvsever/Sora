@@ -1,0 +1,117 @@
+name: sim_risk_parameter
+description: >-
+  Credit risk parameters supplied by the institution (IFRS 9 / IRB models, satellite models,
+  benchmarks) or produced by `sora calibrate`. They are given per exposure or per segment, for the
+  starting point (`scenario = actual`, `year = 0`) and optionally for projection years. All are
+  12-month point-in-time values unless stated otherwise (EBA methodology).
+grain: One row per level, key, scenario and projection year.
+primary_key: [level, key, scenario, year]
+required_by: [credit]
+columns:
+  level:
+    type: string
+    required: true
+    description: "`exposure` (key = exposure_id) or `segment` (key = segment key, see the segmentation configuration)."
+    allowed: [exposure, segment]
+    example: segment
+  key:
+    type: key
+    required: true
+    description: Exposure id or segment key (e.g. `LOANS|NFC|SME_CRE|BE`).
+    example: LOANS|NFC|SME_CRE|BE
+  scenario:
+    type: enum
+    enum: scenario
+    required: true
+    description: "`actual` for the starting point; `baseline`/`adverse` for projected values."
+    example: actual
+  year:
+    type: integer
+    required: true
+    description: 0 = reference date (starting point), 1..n = projection year.
+    range: [0, 10]
+    example: "0"
+  pd12m_s1:
+    type: probability
+    required: false
+    description: 12-month probability of moving from stage 1 to stage 3 (EBA TR1-3 / PD 12M S1).
+    example: "0.004000000"
+  pd12m_s2:
+    type: probability
+    required: false
+    description: 12-month probability of moving from stage 2 to stage 3 (EBA TR2-3 / PD 12M S2).
+    example: "0.090000000"
+  tr1_2:
+    type: probability
+    required: false
+    description: 12-month transition rate from stage 1 to stage 2.
+    example: "0.060000000"
+  tr2_1:
+    type: probability
+    required: false
+    description: 12-month transition rate from stage 2 to stage 1.
+    example: "0.250000000"
+  tr3_1:
+    type: probability
+    required: false
+    description: 12-month cure rate from stage 3 to stage 1 (starting point only).
+    example: "0.010000000"
+  tr3_2:
+    type: probability
+    required: false
+    description: 12-month cure rate from stage 3 to stage 2 (starting point only).
+    example: "0.050000000"
+  lgd_s1:
+    type: probability
+    required: false
+    description: Loss given default for exposures defaulting from stage 1.
+    example: "0.220000000"
+  lgd_s2:
+    type: probability
+    required: false
+    description: Loss given default for exposures defaulting from stage 2.
+    example: "0.240000000"
+  lgd_s3:
+    type: probability
+    required: false
+    description: Lifetime loss rate on the existing stage 3 stock.
+    example: "0.350000000"
+  lrlt_s2:
+    type: probability
+    required: false
+    description: Lifetime loss rate on stage 2 exposures (lifetime ECL / exposure).
+    example: "0.090000000"
+  ccf:
+    type: probability
+    required: false
+    description: Credit conversion factor for off-balance amounts.
+    example: "0.400000000"
+  pd_reg:
+    type: probability
+    required: false
+    description: Regulatory (IRB) PD, through the cycle, including floors.
+    example: "0.005000000"
+  lgd_reg:
+    type: probability
+    required: false
+    description: Regulatory (IRB) LGD, downturn, including floors.
+    example: "0.250000000"
+  source:
+    type: enum
+    enum: parameter_source
+    required: true
+    description: Origin of the values.
+    example: external
+checks:
+  - id: RPA-001
+    severity: error
+    description: Starting point uses scenario actual and year 0, and only it does.
+    sql: "(scenario = 'actual') = (year = 0)"
+  - id: RPA-002
+    severity: error
+    description: Stage 1 outflows do not exceed 100%.
+    sql: "coalesce(pd12m_s1,0) + coalesce(tr1_2,0) <= 1"
+  - id: RPA-003
+    severity: error
+    description: Stage 2 outflows do not exceed 100%.
+    sql: "coalesce(pd12m_s2,0) + coalesce(tr2_1,0) <= 1"

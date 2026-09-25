@@ -1,0 +1,69 @@
+name: sim_stage_history
+description: >-
+  Month-end history of stage and loss allowance per exposure. Used by `sora calibrate` to estimate
+  stage transition rates (TR1-2, TR2-1, PD12M S1/S2) and loss rates. Provide at least 12 months,
+  preferably 5 years. Include the reference date.
+grain: One row per exposure and period end.
+primary_key: [exposure_id, period_end]
+partition_by: [entity_id]
+required_by: [calibration]
+columns:
+  exposure_id:
+    type: key
+    required: true
+    description: Exposure. It may no longer exist at the reference date (matured, written off, sold). Such exposures are still needed for unbiased transition rates.
+    example: CL-000001
+  entity_id:
+    type: key
+    required: true
+    description: Booking entity.
+    example: BANK-CPP-001
+  period_end:
+    type: date
+    required: true
+    description: Last calendar day of the observed month.
+    example: "2026-05-31"
+  stage:
+    type: enum
+    enum: stage
+    required: true
+    description: Stage at period end.
+    example: stage2
+  currency:
+    type: currency
+    required: true
+    description: Currency of the amounts.
+    example: EUR
+  gross_carrying_amount:
+    type: amount
+    required: false
+    description: Gross carrying amount at period end (on-balance). Used as the exposure weight.
+    example: "398500.00"
+  off_balance_amount:
+    type: amount
+    required: false
+    description: Off-balance nominal at period end.
+    example: "0.00"
+  loss_allowance:
+    type: amount
+    required: true
+    description: Loss allowance or provision at period end (positive).
+    example: "4120.00"
+  write_off_in_period:
+    type: amount
+    required: false
+    description: Amount written off during the month.
+    example: "0.00"
+foreign_keys:
+  - columns: [entity_id]
+    references: sim_entity
+    ref_columns: [entity_id]
+checks:
+  - id: STH-001
+    severity: error
+    description: Period end is a month end.
+    sql: "period_end = last_day(period_end)"
+  - id: STH-002
+    severity: error
+    description: Stage history covers impaired instruments only.
+    sql: "stage <> 'not_applicable'"

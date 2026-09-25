@@ -1,0 +1,47 @@
+name: sim_recovery_flow
+description: Cash flows after default (recoveries and workout costs) and write-offs. Used to estimate realised (workout) LGD.
+grain: One row per exposure, flow date and flow type (aggregate multiple flows of the same type on the same day).
+primary_key: [exposure_id, flow_date, flow_type]
+partition_by: [entity_id]
+required_by: [calibration]
+columns:
+  exposure_id:
+    type: key
+    required: true
+    description: Defaulted exposure.
+    example: CL-004512
+  entity_id:
+    type: key
+    required: true
+    description: Booking entity.
+    example: BANK-CPP-001
+  flow_date:
+    type: date
+    required: true
+    description: Date of the cash flow.
+    example: "2026-02-10"
+  flow_type:
+    type: enum
+    enum: recovery_flow_type
+    required: true
+    description: Type of flow.
+    example: recovery
+  currency:
+    type: currency
+    required: true
+    description: Currency of the amount.
+    example: EUR
+  amount:
+    type: amount
+    required: true
+    description: Amount, positive.
+    example: "18000.00"
+foreign_keys:
+  - columns: [entity_id]
+    references: sim_entity
+    ref_columns: [entity_id]
+checks:
+  - id: REC-001
+    severity: error
+    description: Amounts are positive.
+    sql: "amount >= 0"

@@ -1,0 +1,13 @@
+portfolio,beta_gdp,beta_unemployment,beta_property,lgd_property_sensitivity,description
+CB,0,0,0,0,Central banks: zero loss rate (EBA MN para 146)
+GG,-0.06,0.04,0,0,General governments
+CI,-0.10,0.05,0,0,Credit institutions
+OFC,-0.10,0.05,0,0,Other financial corporations
+NFC,-0.12,0.08,0,0,Non-financial corporations (debt securities)
+NFC_SME_CRE,-0.14,0.08,-0.020,0.8,NFC SME commercial real estate
+NFC_SME_OTHER,-0.14,0.08,0,0,NFC SME other
+NFC_LARGE_CRE,-0.12,0.06,-0.020,0.8,NFC non-SME commercial real estate
+NFC_LARGE_OTHER,-0.12,0.06,0,0,NFC non-SME other
+HH_HOUSE,-0.08,0.12,-0.015,1.0,Households: lending for house purchase
+HH_CONS,-0.10,0.15,0,0,Households: consumer credit
+HH_OTHER,-0.10,0.12,0,0,Households: other lending

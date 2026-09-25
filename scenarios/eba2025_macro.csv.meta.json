@@ -1,0 +1,45 @@
+{
+  "generated_by": "sora-tools scenario-import",
+  "rows": 7796,
+  "sources": [
+    {
+      "file": "2025 EU-wide stress test - Macro financial scenario (updated 26 February 2025)-incl disclaimer for EBA (5).xlsx",
+      "sha256": "26877a4f3ba576703955f766b104bc02ce2bac8b427f5150afabeb9cc9f383c9",
+      "sheets": [
+        "CRE prices",
+        "Exchange rates",
+        "ForeignDemandall",
+        "GDP",
+        "HICP",
+        "Itraxx",
+        "Long-term rates",
+        "RRE prices",
+        "SWAP rates",
+        "Stock prices",
+        "Unemployment"
+      ]
+    },
+    {
+      "file": "2025 EU-wide stress test - Real GVA by sector.xlsx",
+      "sha256": "1252cc127a12d79c1189995518e10efd1acfc456f02d39bdb6ffcd549e983512",
+      "sheets": [
+        "Real_GVA_A",
+        "Real_GVA_B",
+        "Real_GVA_C_high",
+        "Real_GVA_C_low",
+        "Real_GVA_D",
+        "Real_GVA_E",
+        "Real_GVA_F",
+        "Real_GVA_G",
+        "Real_GVA_H",
+        "Real_GVA_I",
+        "Real_GVA_J",
+        "Real_GVA_K",
+        "Real_GVA_L",
+        "Real_GVA_MN",
+        "Real_GVA_OPQ",
+        "Real_GVA_RSTU"
+      ]
+    }
+  ]
+}
