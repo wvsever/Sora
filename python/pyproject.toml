@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8", "py7zr>=0.21"]
+test = ["pytest>=8", "py7zr>=0.21", "jsonschema>=4.18"]
 
 [project.scripts]
 sora-tools = "sora_tools.cli:main"
@@ -23,3 +23,4 @@ include = ["sora_tools*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["stub_only: checks specific to the built-in calculator stub"]

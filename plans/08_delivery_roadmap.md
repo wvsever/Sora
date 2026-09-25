@@ -12,7 +12,7 @@ Deliver:
 - `tools/scenario_import`: EBA/ESRB/ECB xlsx in `docs/` → normalised macro CSV
 - `tools/reference/`: independent Python + DuckDB implementation of calibration and the EBA credit projection
 - Synthetic stand-ins for customer inputs: satellite coefficients and an ECB-style benchmark file
-- Regulatory calculator REST contract (`schemas/calculator/openapi.yaml`), stub server (`tests/stubs/calculator/`) and contract tests
+- Regulatory calculator REST contract (`schemas/calculator/openapi.yaml`), stub server (`sora-tools calculator-stub`) and contract tests (`python/tests/contract/`)
 - Export specification and source data dictionary format
 - A fixed test scenario and golden results in `tests/golden/20260630/`
 - Hand-computed unit cases for EBA Boxes 3–9

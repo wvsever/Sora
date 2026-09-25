@@ -61,7 +61,7 @@ The primary target is the EBA EU-wide stress test credit-risk methodology: the 2
 
 - **Mapping with SQL on exports:** customers export source tables to files. Mapping SQL, written by hand or with an AI agent, runs on those files with embedded DuckDB. There is no database access.
 - **MCP server (`sora-mcp`):** lets an agent read the model description, profile sources, test mappings, validate, run and explain results. It runs locally, returns metadata only by default, and requires human approval for production mappings.
-- **Regulatory calculator over REST:** PD/LGD models, IRB, SA and the output floor are computed by an external calculator implementing `schemas/calculator/openapi.yaml`. A stub server is used for tests. See `plans/11_integrations.md`.
+- **Regulatory calculator over REST:** PD/LGD models, IRB, SA and the output floor are computed by an external calculator implementing `schemas/calculator/openapi.yaml`. A stub server (`sora-tools calculator-stub`) and contract tests are used for testing. See `plans/11_integrations.md`.
 
 ## Example scenario
 
@@ -148,7 +148,7 @@ sora/
 ├── include/
 │   └── sora/
 ├── src/                      # C++ engine
-├── python/sora_tools/        # Python tooling: map, validate, profile, scenario-import, schema, mcp
+├── python/                   # sora-tools: schema, map, validate, calculator stub (+ tests, contract tests)
 ├── mappings/
 │   └── cppbank/              # reference mapping SQL: test dataset -> SIM
 ├── tools/
@@ -158,8 +158,6 @@ sora/
 ├── tests/
 │   ├── data/                 # reference dataset (20260630.7z) + README
 │   ├── golden/               # expected results for the reference dataset
-│   ├── stubs/calculator/     # stub regulatory calculator (fixed / formula / faults)
-│   ├── contract/             # API contract tests (stub and real calculator)
 │   └── scenarios/
 ├── benchmarks/
 ├── examples/

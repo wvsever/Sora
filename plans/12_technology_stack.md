@@ -37,8 +37,8 @@ The rule is simple: **anything that touches every record at stress time is C++.*
 | `sora-tools schema` | Generate docs, DDL, LLM description and C++ bindings from `schemas/sim/` |
 | `sora-mcp` | MCP server wrapping the above plus `sora` runs |
 | `tools/reference/` | Independent reference implementation for golden results (not shipped) |
-| `tests/stubs/calculator/` | Stub REST calculator (FastAPI) |
-| `tests/contract/` | Calculator contract tests |
+| `sora_tools/calculator_stub.py` | Stub REST calculator (standard library, no dependencies) |
+| `python/tests/contract/` | Calculator contract tests (stub or real calculator) |
 
 The engine re-checks its own inputs on load (fast validation). It never depends on `sora-tools validate` having run, and never trusts inputs blindly.
 

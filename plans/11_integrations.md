@@ -93,7 +93,7 @@ Contract rules (normative, in the spec):
 
 ### Stubs for testing
 
-`tests/stubs/calculator/` holds a stub server that implements the full OpenAPI contract, in three modes:
+`python/sora_tools/calculator_stub.py` (`sora-tools calculator-stub`) is a dependency-free stub server (Python standard library) that implements the full OpenAPI contract, in three modes:
 
 | Mode | Behaviour | Used for |
 |---|---|---|
@@ -103,7 +103,7 @@ Contract rules (normative, in the spec):
 
 Also delivered:
 
-- Contract tests: the stub and any real calculator can be run against `tests/contract/`, which checks the OpenAPI schema, idempotency, determinism and record echo. You can use it to verify your calculator adaptation.
+- Contract tests: the stub and any real calculator can be run against `python/tests/contract/` (`SORA_CALCULATOR_URL=… pytest python/tests/contract -m "not stub_only"`), which checks the OpenAPI schema, idempotency, determinism and record echo. You can use it to verify your calculator adaptation.
 - An in-memory stub in the C++ test suite, so unit tests need no network.
 
 ## 3. Phasing

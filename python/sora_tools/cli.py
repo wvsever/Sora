@@ -58,6 +58,17 @@ def cmd_validate(args) -> int:
     return _report(validate(args.sim, modules=args.modules, schema=_schema(args), samples=args.samples), args)
 
 
+def cmd_calculator_stub(args) -> int:
+    from .calculator_stub import serve
+    server = serve(args.mode, args.host, args.port, args.latency)
+    print(f"Sora calculator stub ({args.mode}) on http://{args.host}:{server.server_address[1]}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="sora-tools", description="Sora data tooling")
     p.add_argument("--schema", help="path to schemas/sim (default: auto-detect or $SORA_SIM_SCHEMA)")
@@ -84,6 +95,13 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--samples", type=int, default=5, help="sample keys per finding (0 = none)")
     v.add_argument("--report", help="write the report as JSON")
     v.set_defaults(func=cmd_validate)
+
+    c = sub.add_parser("calculator-stub", help="run the stub regulatory calculator (REST, for tests and demos)")
+    c.add_argument("--mode", choices=["fixed", "formula", "faults"], default="formula")
+    c.add_argument("--host", default="127.0.0.1")
+    c.add_argument("--port", type=int, default=8080)
+    c.add_argument("--latency", type=float, default=0.0, help="seconds added to every request")
+    c.set_defaults(func=cmd_calculator_stub)
 
     args = p.parse_args(argv)
     return args.func(args)
