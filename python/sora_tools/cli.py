@@ -58,6 +58,13 @@ def cmd_validate(args) -> int:
     return _report(validate(args.sim, modules=args.modules, schema=_schema(args), samples=args.samples), args)
 
 
+def cmd_scenario_import(args) -> int:
+    from .scenario_import import import_scenarios
+    n = import_scenarios(args.workbooks, args.output)
+    print(f"{n:,d} scenario values written to {args.output}")
+    return 0
+
+
 def cmd_calculator_stub(args) -> int:
     from .calculator_stub import serve
     server = serve(args.mode, args.host, args.port, args.latency)
@@ -95,6 +102,11 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--samples", type=int, default=5, help="sample keys per finding (0 = none)")
     v.add_argument("--report", help="write the report as JSON")
     v.set_defaults(func=cmd_validate)
+
+    si = sub.add_parser("scenario-import", help="convert EBA/ESRB scenario workbooks (xlsx) to a normalised CSV")
+    si.add_argument("workbooks", nargs="+", help="macro-financial scenario and/or real GVA workbooks")
+    si.add_argument("-o", "--output", required=True)
+    si.set_defaults(func=cmd_scenario_import)
 
     c = sub.add_parser("calculator-stub", help="run the stub regulatory calculator (REST, for tests and demos)")
     c.add_argument("--mode", choices=["fixed", "formula", "faults"], default="formula")
