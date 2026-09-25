@@ -1,0 +1,81 @@
+name: sim_guarantee
+description: >-
+  Unfunded credit protection received (guarantees, credit derivatives, credit insurance). It protects
+  either one exposure or all exposures to a counterparty.
+grain: One row per protection item.
+primary_key: [guarantee_id]
+required_by: [credit]
+columns:
+  guarantee_id:
+    type: key
+    required: true
+    description: Protection identifier.
+    example: GUAR-000001
+  entity_id:
+    type: key
+    required: true
+    description: Entity receiving the protection.
+    example: BANK-CPP-001
+  protection_type:
+    type: enum
+    enum: protection_type
+    required: true
+    description: Type of protection.
+    example: guarantee
+  guarantor_counterparty_id:
+    type: key
+    required: true
+    description: Protection provider. Its sector and rating determine substitution effects.
+    example: CPTY-000789
+  protected_exposure_id:
+    type: key
+    required: false
+    description: Protected exposure. NULL if the protection covers a counterparty as a whole.
+    example: CL-000123
+  protected_counterparty_id:
+    type: key
+    required: false
+    description: Protected counterparty, when the protection is not exposure-specific.
+    example: CPTY-000001
+  currency:
+    type: currency
+    required: true
+    description: Currency of the protected amount.
+    example: EUR
+  protected_amount:
+    type: amount
+    required: true
+    description: Maximum amount covered.
+    example: "250000.00"
+  start_date:
+    type: date
+    required: false
+    description: Start of the protection.
+    example: "2024-01-15"
+  end_date:
+    type: date
+    required: false
+    description: End of the protection. NULL = open-ended or aligned with the exposure maturity.
+    example: "2029-01-15"
+foreign_keys:
+  - columns: [entity_id]
+    references: sim_entity
+    ref_columns: [entity_id]
+  - columns: [guarantor_counterparty_id]
+    references: sim_counterparty
+    ref_columns: [counterparty_id]
+  - columns: [protected_exposure_id]
+    references: sim_exposure
+    ref_columns: [exposure_id]
+  - columns: [protected_counterparty_id]
+    references: sim_counterparty
+    ref_columns: [counterparty_id]
+checks:
+  - id: GUA-001
+    severity: error
+    description: Protection covers an exposure or a counterparty.
+    sql: "protected_exposure_id IS NOT NULL OR protected_counterparty_id IS NOT NULL"
+  - id: GUA-002
+    severity: error
+    description: Protected amount is not negative.
+    sql: "protected_amount >= 0"

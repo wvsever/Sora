@@ -1,0 +1,96 @@
+name: sim_collateral
+description: Collateral items and funded credit protection received. Values are at the reference date. Linked to exposures through `sim_collateral_allocation`.
+grain: One row per collateral item.
+primary_key: [collateral_id]
+partition_by: [entity_id]
+required_by: [credit]
+columns:
+  collateral_id:
+    type: key
+    required: true
+    description: Collateral identifier.
+    example: COLL-000001
+  entity_id:
+    type: key
+    required: true
+    description: Entity holding the collateral.
+    example: BANK-CPP-001
+  collateral_type:
+    type: enum
+    enum: collateral_type
+    required: true
+    description: Type of collateral. Drives haircuts and the collateral value path in scenarios.
+    example: residential_property
+  currency:
+    type: currency
+    required: true
+    description: Currency of the collateral value.
+    example: EUR
+  market_value:
+    type: amount
+    required: true
+    description: >-
+      Current market value (financial collateral) or latest appraised value (physical collateral),
+      before regulatory or internal haircuts, and before prior-ranking claims.
+    example: "487369.82"
+    reg_ref: CRR Art. 229; AnaCredit protection value.
+  valuation_date:
+    type: date
+    required: true
+    description: Date of the latest valuation.
+    example: "2026-06-13"
+  valuation_method:
+    type: string
+    required: false
+    description: Valuation method (full_appraisal, desktop_appraisal, indexed, statistical, mark_to_market, mark_to_model).
+    example: full_appraisal
+  value_at_origination:
+    type: amount
+    required: false
+    description: Value at origination of the secured exposure (used for LTV at origination).
+    example: "380605.16"
+  property_country:
+    type: country
+    required: false
+    description: Country where the property is located. Required for property collateral, because property price shocks are country-specific.
+    example: AT
+  lien_rank:
+    type: integer
+    required: false
+    description: Rank of the institution's lien (1 = first lien). Property collateral only.
+    range: [1, null]
+    example: "1"
+  prior_ranking_claims:
+    type: amount
+    required: false
+    description: Claims of third parties ranking before the institution's lien.
+    example: "0.00"
+  issuer_counterparty_id:
+    type: key
+    required: false
+    description: Issuer of securities collateral.
+    example: CPTY-000456
+  provider_counterparty_id:
+    type: key
+    required: false
+    description: Counterparty that provided the collateral, if different from the obligor.
+    example: CPTY-011566
+foreign_keys:
+  - columns: [entity_id]
+    references: sim_entity
+    ref_columns: [entity_id]
+  - columns: [issuer_counterparty_id]
+    references: sim_counterparty
+    ref_columns: [counterparty_id]
+  - columns: [provider_counterparty_id]
+    references: sim_counterparty
+    ref_columns: [counterparty_id]
+checks:
+  - id: COL-001
+    severity: error
+    description: Property collateral has a property country.
+    sql: "collateral_type NOT IN ('residential_property','commercial_property') OR property_country IS NOT NULL"
+  - id: COL-002
+    severity: error
+    description: Market value is not negative.
+    sql: "market_value >= 0"

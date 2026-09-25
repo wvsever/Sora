@@ -105,6 +105,10 @@ Observed average monthly stage transitions for loans (from `impairment_allowance
 | stage2 | 9.73% | 82.70% | 7.56% |
 | stage3 | – | 11.23% | 88.77% |
 
+## Known issues
+
+Issues found in the dataset (for the generator) are tracked in [`DATASET_ISSUES.md`](DATASET_ISSUES.md).
+
 ## What the dataset does not contain
 
 - **No PD, LGD, EAD, CCF or lifetime-PD per contract.** Neither the IRB parameters nor the IFRS 9 model outputs are present. See `plans/09_risk_parameters.md`.
@@ -113,8 +117,10 @@ Observed average monthly stage transitions for loans (from `impairment_allowance
 
 ## Usage
 
-The archive is not extracted by the build. Tests extract it into the build tree:
+The archive is not extracted by the build. Tests extract it into the build tree (skipping the GL tables unless `--all` is given):
 
 ```sh
-7z x tests/data/20260630.7z -obuild/testdata/20260630
+python tools/extract_testdata.py            # uses 7z if installed, else py7zr
 ```
+
+The reference mapping `mappings/cppbank/` turns the export into a SIM dataset (see `python/README.md`).

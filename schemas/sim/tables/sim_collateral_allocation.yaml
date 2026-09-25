@@ -1,0 +1,49 @@
+name: sim_collateral_allocation
+description: >-
+  Allocation of collateral to exposures (many-to-many). Sora uses the allocated amounts to compute
+  LTV and secured/unsecured parts. If the institution has no allocation, provide the full market value
+  with one row per exposure–collateral pair. Sora then applies a pro-rata allocation (configurable).
+grain: One row per exposure and collateral item.
+primary_key: [exposure_id, collateral_id]
+required_by: [credit]
+columns:
+  exposure_id:
+    type: key
+    required: true
+    description: Secured exposure.
+    example: CL-000001
+  collateral_id:
+    type: key
+    required: true
+    description: Collateral item.
+    example: COLL-000001
+  allocated_amount:
+    type: amount
+    required: false
+    description: Part of the collateral value allocated to this exposure, in the collateral's currency. NULL = not allocated by the institution.
+    example: "400000.00"
+  allocation_rank:
+    type: integer
+    required: false
+    description: Order in which collateral is applied to the exposure (1 = first).
+    range: [1, null]
+    example: "1"
+foreign_keys:
+  - columns: [exposure_id]
+    references: sim_exposure
+    ref_columns: [exposure_id]
+  - columns: [collateral_id]
+    references: sim_collateral
+    ref_columns: [collateral_id]
+checks:
+  - id: CAL-001
+    severity: error
+    description: Allocated amount is not negative.
+    sql: "allocated_amount IS NULL OR allocated_amount >= 0"
+table_checks:
+  - id: CAL-101
+    severity: warning
+    description: Total allocations of a collateral item do not exceed its market value.
+    violations_sql: |
+      SELECT a.collateral_id FROM sim_collateral_allocation a JOIN sim_collateral c USING (collateral_id)
+      GROUP BY a.collateral_id, c.market_value HAVING sum(a.allocated_amount) > c.market_value + 0.01

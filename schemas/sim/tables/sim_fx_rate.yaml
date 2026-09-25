@@ -1,0 +1,29 @@
+name: sim_fx_rate
+description: >-
+  Exchange rates to the reporting currency. At least the reference date is required for every currency
+  used in the dataset. History is optional (used to convert history tables).
+grain: One row per currency and rate date.
+primary_key: [currency, rate_date]
+required_by: [core]
+columns:
+  currency:
+    type: currency
+    required: true
+    description: Currency being converted.
+    example: USD
+  rate_date:
+    type: date
+    required: true
+    description: Date of the rate (closing rate).
+    example: "2026-06-30"
+  rate_to_reporting:
+    type: rate
+    required: true
+    description: "Units of reporting currency per 1 unit of `currency` (amount_reporting = amount × rate). 1 for the reporting currency itself."
+    example: "0.912345678"
+    pitfalls: Many sources quote the inverse (units of foreign currency per EUR). Invert when needed.
+checks:
+  - id: FXR-001
+    severity: error
+    description: Rates are positive.
+    sql: "rate_to_reporting > 0"

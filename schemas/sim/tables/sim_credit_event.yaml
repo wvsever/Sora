@@ -1,0 +1,42 @@
+name: sim_credit_event
+description: Credit events per exposure (defaults, cures, forbearance, write-offs, distressed sales). Used for default rates and to delimit workout periods for LGD.
+grain: One row per exposure, event type and event date.
+primary_key: [exposure_id, event_type, event_date]
+partition_by: [entity_id]
+required_by: [calibration]
+columns:
+  exposure_id:
+    type: key
+    required: true
+    description: Exposure concerned.
+    example: CL-004512
+  entity_id:
+    type: key
+    required: true
+    description: Booking entity.
+    example: BANK-CPP-001
+  event_type:
+    type: enum
+    enum: credit_event_type
+    required: true
+    description: Type of event.
+    example: default
+  event_date:
+    type: date
+    required: true
+    description: Date the event occurred (not the booking date).
+    example: "2025-11-03"
+  currency:
+    type: currency
+    required: false
+    description: Currency of `amount`.
+    example: EUR
+  amount:
+    type: amount
+    required: false
+    description: Amount associated with the event (exposure at default for `default`, amount written off for `write_off`, sale price for `distressed_sale`).
+    example: "125000.00"
+foreign_keys:
+  - columns: [entity_id]
+    references: sim_entity
+    ref_columns: [entity_id]

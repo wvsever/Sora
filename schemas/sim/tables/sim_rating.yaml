@@ -1,0 +1,58 @@
+name: sim_rating
+description: >-
+  Ratings of counterparties at the reference date, both internal and external. Used for
+  segmentation, as a fallback PD source (master scale), and for SA risk weights (credit quality step).
+grain: One row per counterparty, rating source and rating scale (the latest rating on or before the reference date).
+primary_key: [counterparty_id, rating_source, rating_scale]
+required_by: [credit]
+columns:
+  counterparty_id:
+    type: key
+    required: true
+    description: Rated counterparty.
+    example: CPTY-000123
+  rating_source:
+    type: enum
+    enum: rating_source
+    required: true
+    description: Who assigned the rating.
+    example: sp
+  rating_scale:
+    type: string
+    required: true
+    description: >-
+      Scale identifier, unique per source (e.g. `SNP_LT` for S&P long-term issuer, `INTERNAL_CORP_MS`
+      for an internal corporate master scale).
+    example: SNP_LT
+  is_long_term:
+    type: boolean
+    required: true
+    description: True for long-term scales, false for short-term scales.
+    example: "true"
+  rating_grade:
+    type: string
+    required: true
+    description: Grade as published on the scale (`BBB`, `Baa`, `R-1 M`, internal grade `5`).
+    example: BBB
+  credit_quality_step:
+    type: integer
+    required: false
+    description: >-
+      Credit quality step 1-6 according to the ECAI mapping (Commission Implementing Regulation (EU)
+      2016/1799, as amended). Required for external long-term ratings used under SA. NULL for internal ratings.
+    range: [1, 6]
+    example: "3"
+  pd_master_scale:
+    type: probability
+    required: false
+    description: Through-the-cycle PD of the grade on the institution's master scale, if available (internal ratings).
+    example: "0.004200000"
+  rating_date:
+    type: date
+    required: true
+    description: Date the rating was assigned or last confirmed.
+    example: "2026-03-14"
+foreign_keys:
+  - columns: [counterparty_id]
+    references: sim_counterparty
+    ref_columns: [counterparty_id]
