@@ -65,7 +65,7 @@ customer source systems / DWH
         │  customer export job (their tooling, their access rights)
         ▼
 source export files (Parquet or CSV, one folder per source table) + source data dictionary
-        │  mapping SQL, run by `sora map` (embedded DuckDB, files only)
+        │  mapping SQL, run by `sora-tools map` (embedded DuckDB, files only)
         ▼
 SIM tables (Parquet or CSV, partitioned by entity)
         │  sora validate
@@ -75,8 +75,8 @@ Sora engine
 
 1. **Export.** The customer exports the needed source tables to files, using their own tooling and access rights. Sora publishes an *export specification*: formats and conventions (as in `tests/data/README.md`), and the minimal source content per SIM table. A *source data dictionary* comes with the export (table and column names, types, descriptions, code lists). The dictionary contains no data values, so it can be shared with a mapping agent even when the data itself cannot.
 2. **Map.** Mapping SQL is written per SIM table against the exported files, by hand or with an AI agent through `sora-mcp` (`11_integrations.md`). The agent works from the SIM schema and the source dictionary, plus profiling statistics computed locally.
-3. **Run.** `sora map` executes the SQL with embedded DuckDB directly on the export folder (`read_parquet('export/contract_loan/**/*.parquet')`). No database connection is involved. DuckDB runs with external access disabled beyond the export directory.
-4. **Validate.** `sora validate` checks the output against the schema: types, keys, referential integrity, constraints, and reconciliation totals (e.g. SIM gross carrying amount vs control totals exported with the data).
+3. **Run.** `sora-tools map` executes the SQL with embedded DuckDB directly on the export folder (`read_parquet('export/contract_loan/**/*.parquet')`). No database connection is involved. DuckDB runs with external access disabled beyond the export directory.
+4. **Validate.** `sora-tools validate` checks the output against the schema: types, keys, referential integrity, constraints, and reconciliation totals (e.g. SIM gross carrying amount vs control totals exported with the data).
 5. **Release.** The mapping SQL, source dictionary version, validation report and export and SIM fingerprints are stored together as an auditable mapping release.
 
 Everything runs where the export is: normally on the customer's premises. If a customer chooses to send an export to us (e.g. anonymised onboarding samples), the same tooling runs unchanged. That route is a contractual decision, not a technical requirement.
@@ -85,7 +85,7 @@ The test dataset in `tests/data/` is exactly such an export (Hive-partitioned CS
 
 Customers who prefer to run the mapping inside their own warehouse can use the generated DDL and run the same SQL there. The output is identical SIM files.
 
-DuckDB lives in the tooling (`sora map`, `sora validate`, MCP server), not in the C++ core engine. The core engine reads only SIM files.
+DuckDB lives in the tooling (`sora-tools map`, `sora-tools validate`, MCP server), not in the C++ core engine. The core engine reads only SIM files.
 
 ## Interchange format
 

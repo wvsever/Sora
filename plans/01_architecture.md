@@ -23,7 +23,7 @@ Design rules:
 - Use buffered I/O or memory mapping
 - Parse directly into final internal types where possible
 - Process partitions in parallel. Many small files are the norm.
-- Keep the `.7z` archive and SQL mapping out of the engine. `sora map` (DuckDB-based tooling) produces the SIM files first.
+- Keep the `.7z` archive and SQL mapping out of the engine. `sora-tools map` (DuckDB-based tooling) produces the SIM files first.
 
 ### 2. Reference and party store
 
@@ -160,7 +160,7 @@ Support:
 | Component | Role |
 |---|---|
 | `schemas/sim/` | Single source of truth for the input model. Generates C++ bindings, docs, DDL and the LLM description. |
-| `sora map` / `sora validate` | Run customer mapping SQL (embedded DuckDB) on exported source files, and validate the SIM output |
+| `sora-tools map` / `sora-tools validate` | Run customer mapping SQL (embedded DuckDB) on exported source files, and validate the SIM output |
 | `sora-mcp` | MCP server for AI agents: model description, profiling, mapping tests, validation, runs, explanations |
 | Calculator client | REST client for the regulatory calculator (batching, retries, replay cache); stub server for tests |
 

@@ -20,7 +20,7 @@ MCP is designed for agents. Engine-to-calculator calls must be deterministic, bu
 
 ## 1. Sora MCP server
 
-A separate process (`sora-mcp`), shipped with Sora and run on the customer's premises next to the engine. It wraps the Sora tooling (`sora map`, `sora validate`, `sora run`). No engine logic lives in it.
+A separate process (`sora-mcp`), shipped with Sora and run on the customer's premises next to the engine. It wraps the Sora tooling (`sora-tools map`, `sora-tools validate`, `sora run`). No engine logic lives in it.
 
 ### Resources (read-only context for the agent)
 
@@ -111,7 +111,7 @@ Also delivered:
 | Phase | Integration |
 |---|---|
 | 0–1 | OpenAPI contract v0.1, stub server (`fixed`, `faults`), contract tests |
-| 1–3 | SIM schema v1, export spec, reference mapping, `sora map` / `sora validate`; `Impairment` internal |
+| 1–3 | SIM schema v1, export spec, reference mapping, `sora-tools map` / `sora-tools validate`; `Impairment` internal |
 | 4–5 | REST client (batching, retries, replay cache); `/v1/parameters/credit` integration; stub `formula` mode |
 | 5b | `sora-mcp` (describe, profile, test_mapping, validate) |
 | 6–7 | IRB, SA and output floor through the calculator; `explain_result`, `diff_runs`; Parquet bodies |

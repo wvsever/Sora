@@ -121,25 +121,23 @@ Initial engineering targets:
 - Provide binary output options for high-volume workflows
 - Handle many small partition files efficiently (the reference dataset has 5,651)
 
-## C++ baseline
+## Technology
 
-Recommended baseline:
+- **C++20 engine** (`sora`): everything that touches records at stress time. Low memory, high throughput, deterministic.
+- **Python + DuckDB tooling** (`sora-tools`, `sora-mcp`): mapping SQL on exported files, validation, profiling, scenario import, schema generation, MCP server, test stubs and the reference implementation.
+- **Parquet** is the primary interchange format. CSV is supported.
 
-- C++20 or newer
-- CMake
-- Standard library first
-- Avoid heavy frameworks in the core engine
-- Optional dependencies only where justified by measurable performance or implementation simplicity
+C++ engine baseline:
 
-Potential libraries:
+- C++20, CMake
+- Standard library first. Avoid heavy frameworks in the core engine.
+- Optional dependencies only where justified by measurable performance or implementation simplicity:
+  - Apache Arrow C++ (Parquet component only): row-group streaming with column projection
+  - `libcurl` for the REST calculator client
+  - `simdjson`, `yaml-cpp`/`rapidyaml`, `fmt`, `spdlog`, `xxHash`
+  - `mimalloc` only after profiling shows allocator pressure
 
-- `simdjson` for high-performance JSON input
-- `yaml-cpp` only for human-authored scenario files if YAML is required
-- `fmt` for formatting
-- `spdlog` for logging, preferably asynchronous or compile-time removable in hot paths
-- `mimalloc` or `jemalloc` only after profiling demonstrates allocator pressure
-- `xxHash` for fast fingerprints/checksums
-- Apache Arrow only if interoperability benefits outweigh its memory footprint
+See `plans/12_technology_stack.md`.
 
 ## Repository structure
 
@@ -149,7 +147,8 @@ sora/
 ├── CMakeLists.txt
 ├── include/
 │   └── sora/
-├── src/
+├── src/                      # C++ engine
+├── python/sora_tools/        # Python tooling: map, validate, profile, scenario-import, schema, mcp
 ├── mappings/
 │   └── cppbank/              # reference mapping SQL: test dataset -> SIM
 ├── tools/
@@ -179,7 +178,8 @@ sora/
     ├── 08_delivery_roadmap.md
     ├── 09_risk_parameters.md
     ├── 10_input_model_and_mapping.md
-    └── 11_integrations.md
+    ├── 11_integrations.md
+    └── 12_technology_stack.md
 ```
 
 ## Non-goals

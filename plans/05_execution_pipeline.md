@@ -7,8 +7,11 @@ Define a predictable, restartable, and testable execution sequence over the part
 ## Commands
 
 ```text
-sora map       <mapping.sql…> -o <sim>            # run customer mapping SQL (DuckDB) -> SIM files
-sora validate  <sim> [--level full]               # schema, keys, constraints, reconciliation
+# Python tooling (sora-tools, DuckDB) - see 12_technology_stack.md
+sora-tools map      <mapping.sql…> --export <dir> -o <sim>   # mapping SQL on exported files -> SIM Parquet
+sora-tools validate <sim> [--level full]                     # schema, keys, constraints, reconciliation
+
+# C++ engine (sora)
 sora inspect   <sim>                              # tables, partitions, row counts
 sora calibrate <sim> -o params.csv                # derive starting-point PD/TR/LGD/LR (09_risk_parameters.md)
 sora run       <sim> --scenario s.yaml -o out     # project and aggregate

@@ -8,7 +8,7 @@ Deliver:
 
 - `tools/extract_testdata` (extract the `.7z` into the build tree; used by CTest)
 - SIM schema v1 (`schemas/sim/`) with full descriptions, and generators for docs, DDL and the LLM description
-- Reference mapping `mappings/cppbank/*.sql` (test dataset → SIM) and `sora map` / `sora validate` (DuckDB)
+- Reference mapping `mappings/cppbank/*.sql` (test dataset → SIM) and `sora-tools map` / `sora-tools validate` (DuckDB)
 - `tools/scenario_import`: EBA/ESRB/ECB xlsx in `docs/` → normalised macro CSV
 - `tools/reference/`: independent Python + DuckDB implementation of calibration and the EBA credit projection
 - Synthetic stand-ins for customer inputs: satellite coefficients and an ECB-style benchmark file
