@@ -63,9 +63,10 @@ void project_exposure(Stage stage, double gca, double allowance, const std::arra
                       const ScenarioConfig& cfg, std::array<std::array<YearResult, 3>, 2>& acc,
                       std::array<std::array<ParamAccum, 4>, 2>* param_acc = nullptr);
 
-// `external` may be null (derived parameters only).
+// `external` may be null (derived parameters only). `workers` threads project the segments in parallel
+// (0 = hardware concurrency); the results are bit-identical for any number of workers.
 Projection project(const Dataset& d, const Segmentation& s, const Calibration& cal,
                    const std::map<std::string, Satellite>& satellites, const MacroTable& macro,
-                   const ScenarioConfig& cfg, const ExternalParameters* external = nullptr);
+                   const ScenarioConfig& cfg, const ExternalParameters* external = nullptr, unsigned workers = 1);
 
 }  // namespace sora

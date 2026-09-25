@@ -42,6 +42,10 @@ build/release/sora run build/sim/20260630 --scenario tests/scenarios/test_eba202
     --calculator http://127.0.0.1:8080 --calculator-cache build/calculator-cache
 #   TLS: --calculator-ca <file>, mTLS: --calculator-cert <file> --calculator-key <file>,
 #   bearer token from $SORA_CALCULATOR_TOKEN (never on the command line)
+#   --workers N engine threads (default: all cores; results are identical for any N), --threads N DuckDB threads
+
+# Scaling benchmarks (plans/07_benchmarking.md): 10x/100x replicas of the reference SIM, results in benchmarks/RESULTS.md
+python benchmarks/run_benchmarks.py
 ```
 
 ## Core use cases

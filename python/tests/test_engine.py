@@ -202,3 +202,29 @@ def test_collateral_matches_golden_and_cr_scen_ltv(base_run):
     assert float(cr[("Actual", "2026")]["LTV ratio - Stage 1 (%)"]) < ltv[0] < ltv[1] < ltv[2]
     # Portfolios without real-estate collateral have blank LTV.
     assert all(not r["LTV ratio - Stage 1 (%)"] for r in csv.DictReader(open(base_run / "cr_scen.csv")) if r["RowNum"] == "1")
+
+
+def test_results_do_not_depend_on_workers(reference_sim, tmp_path):
+    """Engine worker threads partition the projection by segment: outputs are byte-identical for any count,
+    including exposure-level parameters and the order of reported parameter errors."""
+    import duckdb
+    ids = [r[0] for r in duckdb.sql(f"""SELECT exposure_id FROM read_parquet('{reference_sim}/sim_exposure/**/*.parquet')
+                                        WHERE stage IN ('stage1', 'stage2') AND measurement_category = 'amortised_cost'
+                                        ORDER BY hash(exposure_id) LIMIT 40""").fetchall()]
+    rows = [{"level": "exposure", "key": e, "scenario": "actual", "year": 0, "pd12m_s1": "0.05", "lgd_s1": "0.3"} for e in ids]
+    rows += [{"level": "exposure", "key": e, "scenario": "adverse", "year": 3, "pd12m_s2": "0.4"} for e in ids[:10]]
+    write_params(tmp_path / "p.csv", rows)
+    outputs = {}
+    for w in (1, 3, 8):
+        run(reference_sim, tmp_path / f"w{w}", "--workers", str(w), "--parameters", str(tmp_path / "p.csv"))
+        outputs[w] = {f.name: f.read_bytes() for f in sorted((tmp_path / f"w{w}").iterdir())}
+    assert "projection.csv" in outputs[1] and "cr_scen.csv" in outputs[1]
+    assert outputs[1] == outputs[3] == outputs[8]
+
+    write_params(tmp_path / "bad.csv", [{"level": "exposure", "key": e, "scenario": "actual", "year": 0, "lgd_s2": "1.5"}
+                                        for e in ids])
+    errors = {w: run(reference_sim, tmp_path / f"bad{w}", "--workers", str(w), "--parameters", str(tmp_path / "bad.csv"),
+                     check=False) for w in (1, 4)}
+    assert errors[1].returncode == errors[4].returncode == 1
+    lines = {w: [x for x in r.stderr.splitlines() if "PAR-010" in x] for w, r in errors.items()}
+    assert len(lines[1]) == 10 and lines[1] == lines[4]

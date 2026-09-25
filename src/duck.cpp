@@ -1,5 +1,8 @@
 #include "sora/duck.hpp"
 
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 
 namespace sora {
@@ -29,51 +32,8 @@ Chunk::Chunk(duckdb_data_chunk chunk, const std::vector<duckdb_type>& types, con
 
 Chunk::~Chunk() { duckdb_destroy_data_chunk(&chunk_); }
 
-bool Chunk::valid(std::size_t col, std::size_t row) const noexcept {
-    return validity_[col] == nullptr || duckdb_validity_row_is_valid(validity_[col], row);
-}
-
-void Chunk::expect(std::size_t col, duckdb_type t, int scale) const {
-    if (col >= types_.size() || types_[col] != t || (scale >= 0 && scales_[col] != scale)) {
-        throw Error("column " + std::to_string(col) + ": unexpected type (engine query and SIM schema disagree)");
-    }
-}
-
-std::string_view Chunk::str(std::size_t col, std::size_t row) const {
-    expect(col, DUCKDB_TYPE_VARCHAR);
-    auto* s = static_cast<duckdb_string_t*>(data_[col]) + row;
-    const std::uint32_t len = s->value.inlined.length;
-    return {len <= 12 ? s->value.inlined.inlined : s->value.pointer.ptr, len};
-}
-
-std::int64_t Chunk::i64(std::size_t col, std::size_t row) const {
-    expect(col, DUCKDB_TYPE_BIGINT);
-    return static_cast<const std::int64_t*>(data_[col])[row];
-}
-
-Date Chunk::date(std::size_t col, std::size_t row) const {
-    expect(col, DUCKDB_TYPE_DATE);
-    return static_cast<const std::int32_t*>(data_[col])[row];
-}
-
-bool Chunk::boolean(std::size_t col, std::size_t row) const {
-    expect(col, DUCKDB_TYPE_BOOLEAN);
-    return static_cast<const bool*>(data_[col])[row];
-}
-
-double Chunk::f64(std::size_t col, std::size_t row) const {
-    expect(col, DUCKDB_TYPE_DOUBLE);
-    return static_cast<const double*>(data_[col])[row];
-}
-
-Cents Chunk::cents(std::size_t col, std::size_t row) const {
-    expect(col, DUCKDB_TYPE_DECIMAL, 2);   // DECIMAL(18,2): stored as int64 = cents
-    return static_cast<const std::int64_t*>(data_[col])[row];
-}
-
-Nano Chunk::nano(std::size_t col, std::size_t row) const {
-    expect(col, DUCKDB_TYPE_DECIMAL, 9);   // DECIMAL(18,9): stored as int64 = 1e-9 units
-    return static_cast<const std::int64_t*>(data_[col])[row];
+void Chunk::type_error(std::size_t col) const {
+    throw Error("column " + std::to_string(col) + ": unexpected type (engine query and SIM schema disagree)");
 }
 
 // ------------------------------------------------------------------------------------------ Duck
@@ -83,6 +43,7 @@ Duck::Duck(const DuckOptions& options) {
     if (duckdb_create_config(&config) != DuckDBSuccess) throw Error("duckdb: cannot create config");
     duckdb_set_config(config, "memory_limit", options.memory_limit.c_str());
     if (options.threads > 0) duckdb_set_config(config, "threads", std::to_string(options.threads).c_str());
+    if (!options.temp_directory.empty()) duckdb_set_config(config, "temp_directory", options.temp_directory.c_str());
     duckdb_set_config(config, "autoinstall_known_extensions", "false");
     duckdb_set_config(config, "autoload_known_extensions", "false");
     char* err = nullptr;
@@ -109,7 +70,21 @@ void Duck::exec(const std::string& sql) {
     if (state != DuckDBSuccess) throw Error("duckdb: " + err);
 }
 
+namespace {
+// SORA_TRACE=1: per query, wall time and the part spent in the engine's chunk callbacks (to tell DuckDB
+// time from engine time in benchmarks). Printed to stderr.
+bool trace_enabled() {
+    static const bool on = [] { const char* v = std::getenv("SORA_TRACE"); return v && *v && *v != '0'; }();
+    return on;
+}
+}  // namespace
+
 void Duck::query(const std::string& sql, const std::function<void(const Chunk&)>& on_chunk) {
+    using clock = std::chrono::steady_clock;
+    const bool trace = trace_enabled();
+    const auto t0 = clock::now();
+    clock::duration in_callbacks{};
+    std::size_t rows = 0;
     duckdb_prepared_statement stmt;
     if (duckdb_prepare(con_, sql.c_str(), &stmt) != DuckDBSuccess) {
         std::string err = duckdb_prepare_error(stmt);
@@ -155,7 +130,19 @@ void Duck::query(const std::string& sql, const std::function<void(const Chunk&)>
         if (!dc) break;
         Chunk chunk(dc, types, scales);
         if (chunk.size() == 0) break;
-        on_chunk(chunk);
+        if (trace) {
+            const auto t1 = clock::now();
+            on_chunk(chunk);
+            in_callbacks += clock::now() - t1;
+            rows += chunk.size();
+        } else {
+            on_chunk(chunk);
+        }
+    }
+    if (trace) {
+        const auto ms = [](clock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
+        std::fprintf(stderr, "  trace %9.1f ms (engine %9.1f ms) %10zu rows  %.70s\n", ms(clock::now() - t0), ms(in_callbacks),
+                     rows, sql.c_str());
     }
     const char* err = duckdb_result_error(&result);
     if (err && *err) throw Error(std::string("duckdb: ") + err);

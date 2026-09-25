@@ -1,8 +1,12 @@
 #include "sora/projection.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <exception>
 #include <limits>
+#include <thread>
+#include <utility>
 
 namespace sora {
 
@@ -106,7 +110,7 @@ void project_exposure(Stage stage, double gca, double allowance, const std::arra
 
 Projection project(const Dataset& d, const Segmentation& s, const Calibration& cal,
                    const std::map<std::string, Satellite>& satellites, const MacroTable& macro,
-                   const ScenarioConfig& cfg, const ExternalParameters* external) {
+                   const ScenarioConfig& cfg, const ExternalParameters* external, unsigned workers) {
     Projection out;
     const auto nseg = s.segments.size();
     out.results.resize(nseg);
@@ -140,35 +144,98 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
             for (int t = 1; t <= 3; ++t) check(path[static_cast<std::size_t>(t)], seg.key + " " + kScenarios[sc] + "/" + std::to_string(t));
         }
     }
-    for (std::size_t i = 0; i < d.exposures.size(); ++i) {
-        const auto sid = s.segment_of[i];
-        if (sid < 0) continue;
-        const auto& e = d.exposures[i];
-        if (e.stage == Stage::NotApplicable) continue;
-        const auto seg = static_cast<std::size_t>(sid);
-        const double gca = to_double(e.gca) * s.fx[i], allowance = to_double(e.allowance) * s.fx[i];
-        if (external && external->has_exposure(i)) {
-            // Exposure-level parameters: own starting point and path (same macro drivers as the segment).
-            Params p0 = start[seg];
-            external->apply_exposure(i, {0, 0}, p0);
-            std::array<ParamPath, 2> own;
-            for (std::size_t sc = 0; sc < 2; ++sc) {
-                own[sc] = project_parameters(s.segments[seg], p0, *sat[seg], macro, kScenarios[sc], cfg);
-                for (int t = 1; t <= 3; ++t) {
-                    const ParamKey k{static_cast<int>(sc) + 1, t};
-                    external->apply_segment(s, s.segments[seg], k, own[sc][static_cast<std::size_t>(t)]);
-                    external->apply_exposure(i, k, own[sc][static_cast<std::size_t>(t)]);
-                    check(own[sc][static_cast<std::size_t>(t)], d.exposure_ids.at(e.id) + " " + kScenarios[sc] + "/" + std::to_string(t));
-                }
-                own[sc][4] = own[sc][3];
-            }
-            check(p0, d.exposure_ids.at(e.id) + " actual/0");
-            ++out.exposures_with_own_parameters;
-            project_exposure(e.stage, gca, allowance, own, cfg, out.results[seg], &out.accum[seg]);
-        } else {
-            project_exposure(e.stage, gca, allowance, out.params[seg], cfg, out.results[seg], &out.accum[seg]);
-        }
+    // Exposures, in parallel by segment. Each segment is processed entirely by one worker, in exposure order,
+    // into its own result slot, so every floating-point sum is formed in the same order whatever the number
+    // of workers or their scheduling: the results are bit-identical for 1 or N workers.
+    std::vector<std::size_t> first(nseg + 1, 0);   // exposures per segment (CSR, in exposure order)
+    std::vector<std::uint32_t> members;
+    for (std::size_t i = 0; i < d.exposures.size(); ++i)
+        if (s.segment_of[i] >= 0 && d.exposures[i].stage != Stage::NotApplicable) ++first[static_cast<std::size_t>(s.segment_of[i]) + 1];
+    for (std::size_t g = 0; g < nseg; ++g) first[g + 1] += first[g];
+    members.resize(first[nseg]);
+    {
+        std::vector<std::size_t> fill(first.begin(), first.end() - 1);
+        for (std::size_t i = 0; i < d.exposures.size(); ++i)
+            if (s.segment_of[i] >= 0 && d.exposures[i].stage != Stage::NotApplicable) members[fill[static_cast<std::size_t>(s.segment_of[i])]++] = static_cast<std::uint32_t>(i);
     }
+    struct SegmentLog {
+        std::size_t own = 0;                                     // exposures with own parameters
+        std::vector<std::pair<std::size_t, std::string>> errors;   // (exposure, message)
+        std::exception_ptr failure;
+    };
+    std::vector<SegmentLog> logs(nseg);
+    auto run_segment = [&](std::size_t seg) {
+        auto& log = logs[seg];
+        // Local accumulators (no false sharing between workers), copied to the result slot at the end.
+        std::array<std::array<YearResult, 3>, 2> acc{};
+        std::array<std::array<ParamAccum, 4>, 2> pacc{};
+        for (std::size_t m = first[seg]; m < first[seg + 1]; ++m) {
+            const std::size_t i = members[m];
+            const auto& e = d.exposures[i];
+            const double gca = to_double(e.gca) * s.fx[i], allowance = to_double(e.allowance) * s.fx[i];
+            if (external && external->has_exposure(i)) {
+                // Exposure-level parameters: own starting point and path (same macro drivers as the segment).
+                auto check_own = [&](const Params& p, const std::string& what) {
+                    for (const auto& msg : check_parameters(p)) log.errors.emplace_back(i, what + ": " + msg);
+                };
+                Params p0 = start[seg];
+                external->apply_exposure(i, {0, 0}, p0);
+                std::array<ParamPath, 2> own;
+                for (std::size_t sc = 0; sc < 2; ++sc) {
+                    own[sc] = project_parameters(s.segments[seg], p0, *sat[seg], macro, kScenarios[sc], cfg);
+                    for (int t = 1; t <= 3; ++t) {
+                        const ParamKey k{static_cast<int>(sc) + 1, t};
+                        external->apply_segment(s, s.segments[seg], k, own[sc][static_cast<std::size_t>(t)]);
+                        external->apply_exposure(i, k, own[sc][static_cast<std::size_t>(t)]);
+                        check_own(own[sc][static_cast<std::size_t>(t)], d.exposure_ids.at(e.id) + " " + kScenarios[sc] + "/" + std::to_string(t));
+                    }
+                    own[sc][4] = own[sc][3];
+                }
+                check_own(p0, d.exposure_ids.at(e.id) + " actual/0");
+                ++log.own;
+                project_exposure(e.stage, gca, allowance, own, cfg, acc, &pacc);
+            } else {
+                project_exposure(e.stage, gca, allowance, out.params[seg], cfg, acc, &pacc);
+            }
+        }
+        out.results[seg] = acc;
+        out.accum[seg] = pacc;
+    };
+    // Largest segments first, handed out dynamically; the assignment affects timing only, never results.
+    std::vector<std::size_t> order(nseg);
+    for (std::size_t g = 0; g < nseg; ++g) order[g] = g;
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+        return first[a + 1] - first[a] > first[b + 1] - first[b];
+    });
+    std::atomic<std::size_t> next{0};
+    auto worker = [&] {
+        for (std::size_t k = next++; k < nseg; k = next++) {
+            try {
+                run_segment(order[k]);
+            } catch (...) {
+                logs[order[k]].failure = std::current_exception();
+            }
+        }
+    };
+    if (workers == 0) workers = std::max(1U, std::thread::hardware_concurrency());
+    workers = static_cast<unsigned>(std::min<std::size_t>(workers, std::max<std::size_t>(nseg, 1)));
+    if (workers <= 1) {
+        worker();
+    } else {
+        std::vector<std::thread> pool;
+        pool.reserve(workers);
+        for (unsigned w = 0; w < workers; ++w) pool.emplace_back(worker);
+        for (auto& t : pool) t.join();
+    }
+    // Deterministic reduction: the first failure by segment order; errors in exposure order.
+    std::vector<std::pair<std::size_t, std::string>> errors;
+    for (auto& log : logs) {
+        if (log.failure) std::rethrow_exception(log.failure);
+        out.exposures_with_own_parameters += log.own;
+        for (auto& e : log.errors) errors.push_back(std::move(e));
+    }
+    std::stable_sort(errors.begin(), errors.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (auto& [_, msg] : errors) out.parameter_errors.push_back(std::move(msg));
     return out;
 }
 

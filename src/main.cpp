@@ -4,7 +4,9 @@
 //   sora calibrate <sim> --scenario <yaml> -o <dir>            starting-point parameters only
 //   sora run       <sim> --scenario <yaml> -o <dir>            calibration + projection (+ cr_scen.csv)
 //
-// Options: --base <dir> (resolve scenario paths, default: cwd), --memory-limit 1GB, --threads N,
+// Options: --base <dir> (resolve scenario paths, default: cwd), --memory-limit 1GB, --threads N (DuckDB),
+//          --temp-dir <dir> (DuckDB spill files for sorts beyond the memory limit),
+//          --workers N (engine threads, default: hardware concurrency; results do not depend on it),
 //          --parameters <file|dir>  customer risk parameters (default: SIM table sim_risk_parameter if present)
 //          --calculator <url>  IRB REA through the regulatory calculator (rea.csv), with --calculator-cache <dir>,
 //          --calculator-ca <file>, --calculator-cert <file> --calculator-key <file>, --calculator-batch <n>;
@@ -32,6 +34,7 @@ struct Args {
     fs::path sim, scenario, out, parameters, base = fs::current_path();
     DuckOptions duck;
     calc::ClientOptions calculator;
+    unsigned workers = 0;   // 0 = hardware concurrency
 };
 
 [[noreturn]] void usage() {
@@ -39,7 +42,8 @@ struct Args {
                  "usage: sora inspect <sim> [options]\n"
                  "       sora calibrate <sim> --scenario <yaml> -o <dir> [options]\n"
                  "       sora run <sim> --scenario <yaml> -o <dir> [options]\n"
-                 "options: --base <dir> --parameters <file|dir> --memory-limit <size> --threads <n>\n"
+                 "options: --base <dir> --parameters <file|dir> --memory-limit <size> --threads <n> --workers <n>\n"
+                 "         --temp-dir <dir>\n"
                  "         --calculator <url> [--calculator-cache <dir>] [--calculator-ca <file>]\n"
                  "         [--calculator-cert <file> --calculator-key <file>] [--calculator-batch <n>]\n");
     std::exit(2);
@@ -64,6 +68,8 @@ Args parse(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--calculator-cert")) a.calculator.cert_file = next();
         else if (!std::strcmp(argv[i], "--calculator-key")) a.calculator.key_file = next();
         else if (!std::strcmp(argv[i], "--calculator-batch")) a.calculator.max_batch = std::stoul(next());
+        else if (!std::strcmp(argv[i], "--temp-dir")) a.duck.temp_directory = next();
+        else if (!std::strcmp(argv[i], "--workers")) a.workers = static_cast<unsigned>(std::stoul(next()));
         else usage();
     }
     if (a.command != "inspect" && (a.scenario.empty() || a.out.empty())) usage();
@@ -162,7 +168,7 @@ int main(int argc, char** argv) {
         const bool run = a.command == "run";
         if (run) {
             Timer t("project");
-            proj = project(d, seg, cal, sats, macro, cfg, ext.empty() ? nullptr : &ext);
+            proj = project(d, seg, cal, sats, macro, cfg, ext.empty() ? nullptr : &ext, a.workers);
             if (proj.exposures_with_own_parameters)
                 diag.findings.push_back({"PAR-003", "info", "exposures with exposure-level parameters", proj.exposures_with_own_parameters});
             if (!proj.parameter_errors.empty()) {

@@ -4,12 +4,10 @@
 // flat arrays. Large tables (stage history, cash flows) are streamed by the modules that need them.
 
 #include <cstdint>
-#include <deque>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 #include "sora/duck.hpp"
@@ -20,16 +18,28 @@ namespace sora {
 inline constexpr std::uint32_t kNone = UINT32_MAX;
 
 // String interning: dense integer ids for repeated strings and business keys.
+// Compact for millions of keys (exposure and counterparty ids at 100x scale): the strings live in one
+// contiguous arena, and the index is an open-addressing table of 8-byte slots (32-bit hash tag + id),
+// 30-40 bytes per key instead of about 100 for std::string + std::unordered_map nodes.
 class Dictionary {
 public:
     std::uint32_t intern(std::string_view s);
     std::optional<std::uint32_t> find(std::string_view s) const;
-    const std::string& at(std::uint32_t id) const { return names_.at(id); }
-    std::size_t size() const noexcept { return names_.size(); }
+    std::string at(std::uint32_t id) const { return std::string(view(id)); }
+    std::string_view view(std::uint32_t id) const;
+    std::size_t size() const noexcept { return size_; }
+    void reserve(std::size_t n, std::size_t bytes = 0);   // n keys with `bytes` characters in total
+    std::size_t memory_bytes() const noexcept;
 
 private:
-    std::deque<std::string> names_;  // stable addresses for the string_view keys
-    std::unordered_map<std::string_view, std::uint32_t> index_;
+    static std::uint32_t hash(std::string_view s) noexcept;
+    std::uint64_t* probe(std::string_view s, std::uint32_t h) const noexcept;
+    void rehash(std::size_t capacity);
+
+    std::string arena_;                   // all strings, back to back
+    std::vector<std::uint32_t> offsets_;  // start of string i; size_ + 1 entries
+    std::vector<std::uint64_t> slots_;    // 0 = empty, else (hash << 32) | (id + 1); power-of-two size
+    std::size_t size_ = 0;
 };
 
 struct Manifest {
