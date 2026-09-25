@@ -208,12 +208,14 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
         return first[a + 1] - first[a] > first[b + 1] - first[b];
     });
     std::atomic<std::size_t> next{0};
+    std::atomic<bool> stop{false};   // set on the first failure: the run is lost, so stop handing out segments
     auto worker = [&] {
-        for (std::size_t k = next++; k < nseg; k = next++) {
+        for (std::size_t k = next++; k < nseg && !stop.load(std::memory_order_relaxed); k = next++) {
             try {
                 run_segment(order[k]);
             } catch (...) {
                 logs[order[k]].failure = std::current_exception();
+                stop.store(true, std::memory_order_relaxed);
             }
         }
     };
@@ -227,7 +229,8 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
         for (unsigned w = 0; w < workers; ++w) pool.emplace_back(worker);
         for (auto& t : pool) t.join();
     }
-    // Deterministic reduction: the first failure by segment order; errors in exposure order.
+    // Deterministic reduction: errors in exposure order. After a failure, which failure is reported may
+    // depend on scheduling (other segments stop early); results are never written in that case.
     std::vector<std::pair<std::size_t, std::string>> errors;
     for (auto& log : logs) {
         if (log.failure) std::rethrow_exception(log.failure);

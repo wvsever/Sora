@@ -85,6 +85,14 @@ Calibration calibrate(Duck& duck, const Dataset& d, const Segmentation& s, const
     // runs on integers instead of strings and the loop needs no key lookups. History rows of exposures that
     // are not in sim_exposure drop out of the join; they never contributed (no segment).
     if (sim_table_exists(d.sim_dir, "sim_stage_history") && !d.exposures.empty()) {
+        // The index join below relies on load_dataset keeping every sim_exposure row, in the same
+        // ORDER BY CAST(exposure_id AS VARCHAR). Check that invariant instead of trusting it.
+        std::int64_t rows = -1;
+        duck.query("SELECT count(*) FROM " + sim_source(d.sim_dir, "sim_exposure"),
+                   [&](const Chunk& c) { if (c.size()) rows = c.i64(0, 0); });
+        if (rows != static_cast<std::int64_t>(d.exposures.size()))
+            throw Error("calibration: sim_exposure has " + std::to_string(rows) + " rows but " +
+                        std::to_string(d.exposures.size()) + " were loaded; exposure index join would misalign");
         std::uint32_t prev_ex = kNone;
         Date prev_day = 0, prev_next = 0;   // prev_next = next_month_end(prev_day)
         int prev_stage = -1;

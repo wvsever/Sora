@@ -13,7 +13,9 @@
 #include <array>
 #include <filesystem>
 #include <optional>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -62,7 +64,12 @@ public:
 private:
     static std::size_t slot(ParamKey k) { return static_cast<std::size_t>(k.scenario == 0 ? 0 : (k.scenario - 1) * 3 + k.year); }
     using Slots = std::array<OptParams, 7>;   // actual/0, baseline/1..3, adverse/1..3
-    std::unordered_map<std::string, Slots> by_level_;
+    // Transparent hashing: level keys are looked up by string_view, without allocating (per-exposure hot path).
+    struct KeyHash {
+        using is_transparent = void;
+        std::size_t operator()(std::string_view s) const noexcept { return std::hash<std::string_view>{}(s); }
+    };
+    std::unordered_map<std::string, Slots, KeyHash, std::equal_to<>> by_level_;
     std::unordered_map<std::size_t, Slots> by_exposure_;
     std::size_t rows_ = 0;
 };
