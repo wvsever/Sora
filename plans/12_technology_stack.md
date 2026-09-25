@@ -50,8 +50,8 @@ Standard library first. Each dependency must earn its place by measurement.
 |---|---|---|
 | Parquet/CSV reading | **DuckDB C API** (prebuilt `libduckdb`, pinned version and SHA-256) | **Decided.** Streaming results (≤ 2048-row chunks) with column projection. `DECIMAL(18,2)` arrives as `int64` cents and `DECIMAL(18,9)` as `int64` nano-units, with no float parsing. Memory is capped with `memory_limit`. The same engine is used by `sora-tools`, so SQL semantics match. Apache Arrow was rejected: no prebuilt packages, heavy source build. |
 | CSV | Via DuckDB (`read_csv`, all VARCHAR, cast in SQL) | No own parser needed |
-| HTTP client (REST) | `libcurl` (multi interface) or `cpp-httplib` | TLS and mTLS required. Tested against the stub. |
-| JSON | `simdjson` (parse), own writer or `fmt` | Decimals as strings |
+| HTTP client (REST) | `cpp-httplib` 0.18 (vendored single header) with OpenSSL | TLS and mTLS required. Tested against the stub. Chosen over `libcurl`: header-only, and one connection per worker thread is all the client needs. |
+| JSON | `nlohmann/json` 3.11 (vendored single header) for the calculator client | Decimals as strings, parsed exactly into scaled integers. `simdjson` only if parsing shows up in profiles. |
 | YAML (scenario) | `rapidyaml` 0.9.0 single header (pinned download) | Load time only |
 | Hashing | `xxHash` | Fingerprints, replay cache keys |
 | Formatting / logging | `fmt`, `spdlog` (compile-time level) | Not in hot loops |

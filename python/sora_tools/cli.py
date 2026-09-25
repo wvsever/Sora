@@ -75,7 +75,7 @@ def cmd_scenario_import(args) -> int:
 
 def cmd_calculator_stub(args) -> int:
     from .calculator_stub import serve
-    server = serve(args.mode, args.host, args.port, args.latency)
+    server = serve(args.mode, args.host, args.port, args.latency, args.reject)
     print(f"Sora calculator stub ({args.mode}) on http://{args.host}:{server.server_address[1]}")
     try:
         server.serve_forever()
@@ -129,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--host", default="127.0.0.1")
     c.add_argument("--port", type=int, default=8080)
     c.add_argument("--latency", type=float, default=0.0, help="seconds added to every request")
+    c.add_argument("--reject", help="regular expression: reject every record whose recordId it matches")
     c.set_defaults(func=cmd_calculator_stub)
 
     args = p.parse_args(argv)

@@ -46,3 +46,6 @@ if(SORA_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests/cpp)
 endif()
+
+# Regulatory calculator REST client, REA projection and their tests.
+include(cmake/Calculator.cmake)

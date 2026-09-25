@@ -10,6 +10,9 @@ Modes:
   faults   Like `formula`, plus injected failures: the first call of every third idempotency key gets
            429 or 503, records whose id ends with "-REJECT" are rejected, and optional latency.
 
+In any mode, ``reject`` (a regular expression, ``--reject``) rejects every record whose recordId it matches
+(``re.search``), e.g. ``--reject '7\\|adverse\\|3$'`` for Sora's ``exposure_id|scenario|year`` record ids.
+
 Run: ``sora-tools calculator-stub --mode formula --port 8080``
 """
 
@@ -23,7 +26,6 @@ import threading
 import time
 import uuid
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
-from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from statistics import NormalDist
 from typing import Any, Callable
@@ -58,7 +60,7 @@ def dec(value: Any, field: str) -> Decimal:
 
 def fmt(x: float | Decimal, places: int = 9) -> str:
     q = Decimal(1).scaleb(-places)
-    return str(Decimal(str(x)).quantize(q, rounding=ROUND_HALF_EVEN))
+    return format(Decimal(str(x)).quantize(q, rounding=ROUND_HALF_EVEN), "f")   # never exponent notation ("0E-9")
 
 
 def money(x: float | Decimal) -> str:
@@ -214,10 +216,11 @@ PATHS = {"/v1/credit-risk/irb": "irb", "/v1/credit-risk/sa": "sa",
 
 
 class CalculatorStub:
-    def __init__(self, mode: str = "formula", latency: float = 0.0):
+    def __init__(self, mode: str = "formula", latency: float = 0.0, reject: str | None = None):
         if mode not in ("fixed", "formula", "faults"):
             raise ValueError(mode)
         self.mode, self.latency = mode, latency
+        self.reject = re.compile(reject) if reject else None
         self.lock = threading.Lock()
         self.responses: dict[str, tuple[int, dict]] = {}    # idempotency cache
         self.fault_seen: set[str] = set()
@@ -259,6 +262,8 @@ class CalculatorStub:
                     raise ValueError(f"missing fields: {', '.join(missing)}")
                 if self.mode == "faults" and str(rid).endswith("-REJECT"):
                     raise ValueError("rejected by fault injection")
+                if self.reject and self.reject.search(str(rid)):
+                    raise ValueError("rejected by the --reject pattern")
                 if self.mode == "fixed":
                     out = _fixed(calc, r, request)
                 elif calc == "irb":
@@ -373,15 +378,17 @@ def make_handler(stub: CalculatorStub) -> Callable:
     return Handler
 
 
-def serve(mode: str = "formula", host: str = "127.0.0.1", port: int = 8080, latency: float = 0.0):
+def serve(mode: str = "formula", host: str = "127.0.0.1", port: int = 8080, latency: float = 0.0,
+          reject: str | None = None):
     """Start the stub server (blocking unless used via :func:`start_background`)."""
-    stub = CalculatorStub(mode, latency)
+    stub = CalculatorStub(mode, latency, reject)
     server = ThreadingHTTPServer((host, port), make_handler(stub))
     server.stub = stub
     return server
 
 
-def start_background(mode: str = "formula", latency: float = 0.0) -> ThreadingHTTPServer:
-    server = serve(mode, port=0, latency=latency)
+def start_background(mode: str = "formula", latency: float = 0.0, reject: str | None = None,
+                     port: int = 0) -> ThreadingHTTPServer:
+    server = serve(mode, port=port, latency=latency, reject=reject)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
