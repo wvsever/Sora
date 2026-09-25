@@ -1,5 +1,7 @@
 #include "sora/dataset.hpp"
 
+#include "sora/collateral.hpp"
+
 namespace sora {
 
 namespace fs = std::filesystem;
@@ -136,6 +138,7 @@ Dataset load_dataset(Duck& duck, const fs::path& sim_dir) {
                 d.exposures.push_back(e);
             }
         });
+    load_collateral(duck, d);
     if (d.fx_to_reporting.size() < d.currencies.size()) d.fx_to_reporting.resize(d.currencies.size(), 0);
     return d;
 }

@@ -1,5 +1,6 @@
 #include "sora/output.hpp"
 
+#include "sora/collateral.hpp"
 #include "sora/cr_scen.hpp"
 
 #include <cstdio>
@@ -127,7 +128,11 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
         }
     }
 
-    if (run.projection) write_cr_scen(d, s, *run.projection, dir / "cr_scen.csv");
+    if (run.projection) {
+        const auto coll = collateral_ltv(d, s, run.macro, run.config);
+        write_collateral(s, coll, dir / "collateral.csv");
+        write_cr_scen(d, s, *run.projection, dir / "cr_scen.csv", &coll);
+    }
 
     {
         auto f = open(dir / "summary.json");

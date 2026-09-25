@@ -67,6 +67,24 @@ struct Exposure {
     Cents allowance = 0;       // loss allowance / provision (0 if NULL)
 };
 
+// Collateral (sim_collateral) and its allocation to exposures (sim_collateral_allocation). Loaded by
+// load_collateral (collateral.hpp); empty if the SIM has no collateral tables.
+enum class CollateralType : std::uint8_t { ResidentialProperty, CommercialProperty, Other };
+
+struct Collateral {
+    CollateralType type = CollateralType::Other;
+    std::uint32_t currency = kNone;
+    std::uint32_t property_country = kNone;   // countries dictionary
+    Cents market_value = 0;
+};
+
+struct CollateralAllocation {
+    std::uint32_t exposure = kNone;     // index into Dataset::exposures
+    std::uint32_t collateral = kNone;   // index into Dataset::collateral
+    bool has_amount = false;            // false: allocated pro rata (see collateral.hpp)
+    Cents amount = 0;                   // in the collateral's currency
+};
+
 struct Dataset {
     std::filesystem::path sim_dir;
     Manifest manifest;
@@ -74,6 +92,9 @@ struct Dataset {
     std::vector<Counterparty> counterparties;     // indexed by counterparty_ids
     std::vector<Exposure> exposures;               // ordered by exposure_id
     std::vector<Nano> fx_to_reporting;             // by currency id; 0 = no rate at the reference date
+    Dictionary collateral_ids;
+    std::vector<Collateral> collateral;                        // indexed by collateral_ids
+    std::vector<CollateralAllocation> collateral_allocations;  // ordered by exposure, collateral
 
     double fx(std::uint32_t currency) const {
         return currency < fx_to_reporting.size() ? nano_to_double(fx_to_reporting[currency]) : 0.0;
@@ -84,7 +105,7 @@ struct Dataset {
 std::string sim_source(const std::filesystem::path& sim_dir, std::string_view table);
 bool sim_table_exists(const std::filesystem::path& sim_dir, std::string_view table);
 
-// Loads manifest, FX, counterparties and exposures.
+// Loads manifest, FX, counterparties, exposures and collateral.
 Dataset load_dataset(Duck& duck, const std::filesystem::path& sim_dir);
 
 }  // namespace sora

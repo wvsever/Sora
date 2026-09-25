@@ -5,10 +5,13 @@
 
 #include <filesystem>
 
+#include "sora/collateral.hpp"
 #include "sora/projection.hpp"
 
 namespace sora {
 
-void write_cr_scen(const Dataset& d, const Segmentation& s, const Projection& p, const std::filesystem::path& file);
+// `collateral` fills the LTV columns (blank without it).
+void write_cr_scen(const Dataset& d, const Segmentation& s, const Projection& p, const std::filesystem::path& file,
+                   const CollateralResult* collateral = nullptr);
 
 }  // namespace sora
