@@ -17,6 +17,23 @@ The design priorities are:
 - Clear separation between scenario definition, stress rules, transformation, validation, and output
 - Easy embedding in batch pipelines and server-side services
 
+## Quick start
+
+```sh
+# Python tooling
+pip install -e "python[test,scenario]"
+python tools/extract_testdata.py
+sora-tools map mappings/cppbank --export build/testdata/20260630 -o build/sim/20260630 --validate
+
+# C++ engine (downloads pinned DuckDB and rapidyaml on first configure)
+cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release
+cmake --build build/release -j
+ctest --test-dir build/release --output-on-failure          # unit tests + golden comparison
+
+build/release/sora inspect build/sim/20260630
+build/release/sora run build/sim/20260630 --scenario tests/scenarios/test_eba2025.yaml -o build/out
+```
+
 ## Core use cases
 
 Sora can model stresses such as:

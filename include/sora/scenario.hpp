@@ -1,0 +1,61 @@
+#pragma once
+// Scenario configuration (YAML), normalised macro paths (CSV from `sora-tools scenario-import`) and
+// satellite model coefficients.
+
+#include <array>
+#include <filesystem>
+#include <map>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "sora/calibration.hpp"
+#include "sora/segmentation.hpp"
+
+namespace sora {
+
+struct ScenarioConfig {
+    std::string name;
+    std::filesystem::path macro_path;
+    std::filesystem::path satellites_path;
+    std::map<int, int> year_map;            // projection year -> scenario year
+    int history_year = 0;
+    double normal_gdp_growth = 0.0;
+    std::vector<std::string> country_fallback;
+    ScopeConfig scope;
+    CalibrationConfig calibration;
+    bool no_cure_from_s3 = true;
+    double blend_adverse = 5.0 / 6.0, blend_baseline = 1.0 / 6.0;
+};
+
+// Relative paths in the YAML resolve against `base_dir` (the repository or working directory).
+ScenarioConfig load_scenario(const std::filesystem::path& yaml, const std::filesystem::path& base_dir);
+
+class MacroTable {
+public:
+    std::optional<double> get(const std::string& variable, const std::string& key, const std::string& scenario, int year) const;
+    void set(const std::string& variable, const std::string& key, const std::string& scenario, int year, double v);
+    std::size_t size() const noexcept { return values_.size(); }
+
+private:
+    static std::string k(const std::string& v, const std::string& key, const std::string& s, int y);
+    std::unordered_map<std::string, double> values_;
+};
+
+MacroTable load_macro(Duck& duck, const std::filesystem::path& csv);
+
+struct Satellite {
+    double beta_gdp = 0, beta_unemployment = 0, beta_property = 0, lgd_property_sensitivity = 0;
+};
+std::map<std::string, Satellite> load_satellites(Duck& duck, const std::filesystem::path& csv);
+
+// Macro key used for a country bucket (falls back to aggregates when the country has no scenario data).
+std::string macro_key(const MacroTable& macro, const std::string& bucket, const ScenarioConfig& cfg);
+
+// Parameters for years 1..3 plus year 4 (flat continuation) under one scenario. Index 0 is the starting point.
+using ParamPath = std::array<Params, 5>;
+ParamPath project_parameters(const Segment& seg, const Params& p0, const Satellite& sat, const MacroTable& macro,
+                             const std::string& scenario, const ScenarioConfig& cfg);
+
+}  // namespace sora

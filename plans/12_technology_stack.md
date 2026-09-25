@@ -48,22 +48,22 @@ Standard library first. Each dependency must earn its place by measurement.
 
 | Need | Choice | Notes |
 |---|---|---|
-| Parquet read/write | **Apache Arrow C++ / `parquet`** (Parquet component only, no compute/dataset modules) | Read per row group with column projection, so memory is bounded by row-group size × projected columns. Decimals are read as `DECIMAL(18,2)` → `int64` cents directly. Benchmark against the DuckDB C API in phase 1 before locking in. |
-| CSV | Own parser | Exact decimal → scaled integer, as described in `02_data_model.md` |
+| Parquet/CSV reading | **DuckDB C API** (prebuilt `libduckdb`, pinned version and SHA-256) | **Decided.** Streaming results (≤ 2048-row chunks) with column projection. `DECIMAL(18,2)` arrives as `int64` cents and `DECIMAL(18,9)` as `int64` nano-units, with no float parsing. Memory is capped with `memory_limit`. The same engine is used by `sora-tools`, so SQL semantics match. Apache Arrow was rejected: no prebuilt packages, heavy source build. |
+| CSV | Via DuckDB (`read_csv`, all VARCHAR, cast in SQL) | No own parser needed |
 | HTTP client (REST) | `libcurl` (multi interface) or `cpp-httplib` | TLS and mTLS required. Tested against the stub. |
 | JSON | `simdjson` (parse), own writer or `fmt` | Decimals as strings |
-| YAML (scenario) | `yaml-cpp` or `rapidyaml` | Load time only |
+| YAML (scenario) | `rapidyaml` 0.9.0 single header (pinned download) | Load time only |
 | Hashing | `xxHash` | Fingerprints, replay cache keys |
 | Formatting / logging | `fmt`, `spdlog` (compile-time level) | Not in hot loops |
-| Tests / benchmarks | `doctest` or `Catch2`, Google Benchmark | |
+| Tests / benchmarks | `doctest` 2.4.11 (vendored in `third_party/`), Google Benchmark later | |
 | Allocator | Default. `mimalloc` only if profiling shows allocator pressure. | |
 
-Dependencies come through vcpkg (manifest mode) or CMake `FetchContent`, with pinned versions.
+Dependencies come through CMake `FetchContent` with pinned URLs and SHA-256 hashes (`cmake/Dependencies.cmake`). `SORA_DUCKDB_ROOT` and `SORA_RYML_HEADER` point to local copies for offline builds. The CA bundle from `SSL_CERT_FILE` is used behind TLS-intercepting proxies.
 
 ## Memory and performance rules (engine)
 
-- Parquet is read per row group and per projected column. It is never loaded as a full table.
-- Arrow arrays are converted immediately into Sora's compact records (`02_data_model.md`), and the Arrow buffers are released. Arrow types do not leak past the reader.
+- SIM tables are read as streamed DuckDB results with only the needed columns. They are never loaded as full tables.
+- DuckDB chunks are converted immediately into Sora's compact records (`02_data_model.md`) and released. DuckDB types do not leak past `sora/duck.hpp`.
 - Large SIM tables (`sim_cashflow`, history tables) are streamed. Party and collateral data are held in packed arrays.
 - The mapping step (DuckDB) runs as a separate process before `sora run`. Its memory is never added to the engine's. DuckDB's `memory_limit` is set by `sora-tools`.
 - The Python and C++ implementations of the same calculation (reference vs engine) must agree to the cent. This is enforced by the golden tests.

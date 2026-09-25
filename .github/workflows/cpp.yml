@@ -1,0 +1,31 @@
+name: cpp
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        preset: [release, asan]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install sora-tools (reference mapping for the golden test)
+        run: pip install -e "python[test]"
+      - name: Configure
+        run: |
+          if [ "${{ matrix.preset }}" = asan ]; then
+            cmake -S . -B build/ci -DCMAKE_BUILD_TYPE=RelWithDebInfo -DSORA_SANITIZE=ON
+          else
+            cmake -S . -B build/ci -DCMAKE_BUILD_TYPE=Release
+          fi
+      - name: Build
+        run: cmake --build build/ci -j
+      - name: Test (unit + golden)
+        run: ctest --test-dir build/ci --output-on-failure

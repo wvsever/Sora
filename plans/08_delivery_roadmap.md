@@ -2,6 +2,15 @@
 
 Every phase is delivered against the reference dataset `tests/data/20260630.7z` (see `tests/data/README.md`).
 
+## Status
+
+| Phase | Status |
+|---|---|
+| 0 Reference and test assets | Done, except the synthetic ECB benchmark file (moved to phase 5) |
+| 1 Core skeleton and input | Done: SIM reader (DuckDB), dataset, segmentation, input checks, `sora inspect` |
+| 2 Starting-point parameters | Done (derived calibration). External parameter file still open. |
+| 3 Credit stress projection | Done for on-balance amortised cost, matching the golden results exactly. Like-for-like replacement, collateral repricing and CR_SCEN layout still open. |
+
 ## Phase 0 - Reference and test assets
 
 Deliver:
