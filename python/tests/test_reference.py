@@ -94,13 +94,44 @@ def test_matrix_annualisation():
     assert 0.015 < a12[0][2] < 0.025          # ≈ 2%: 1%/month to S2, then 5%/month to S3
 
 
+MACRO_CFG = {"year_map": {1: 2025, 2: 2026, 3: 2027}, "country_fallback": ["WR", "EU"]}
+
+
+def test_collateral_index_and_country_fallback():
+    macro = {("real_gdp", k, "baseline", 2025): 1.0 for k in ("BE", "WR", "EU")}
+    for sc, g in (("baseline", (2.0, 2.0, 2.0)), ("adverse", (-10.0, -5.0, 0.0))):
+        for y, v in zip((2025, 2026, 2027), g):
+            macro[("residential_property_prices", "BE", sc, y)] = v
+            macro[("commercial_property_prices", "WR", sc, y)] = v / 2
+    idx = ref.collateral_index("residential_property", "BE", macro, MACRO_CFG)
+    assert approx(idx[("adverse", 0)], 1) and approx(idx[("adverse", 1)], 0.9)
+    assert approx(idx[("adverse", 3)], 0.9 * 0.95) and approx(idx[("baseline", 2)], 1.02 ** 2)
+    # IS has no scenario data: WR is used.
+    assert approx(ref.collateral_index("commercial_property", "IS", macro, MACRO_CFG)[("adverse", 1)], 0.95)
+    # Other collateral keeps its value.
+    assert all(v == 1.0 for v in ref.collateral_index("cash", None, macro, MACRO_CFG).values())
+
+
+def test_collateral_pro_rata_allocation():
+    """NULL allocated amounts: market value pro rata to the GCA of the in-scope exposures; out of scope ignored."""
+    allocs = [("E1", "C1", None, "residential_property", 300.0, "BE", 2.0),
+              ("E2", "C1", None, "residential_property", 300.0, "BE", 2.0),
+              ("E9", "C1", None, "residential_property", 300.0, "BE", 2.0),      # out of scope
+              ("E1", "C2", 50.0, "commercial_property", 999.0, "BE", 1.0),
+              ("E3", "C3", None, "cash", 10.0, None, 1.0)]
+    v = {(e, t): x for e, t, _, x in ref.allocated_values(allocs, {"E1": 100.0, "E2": 300.0, "E3": 0.0})}
+    assert approx(v[("E1", "residential_property")], 600 * 0.25) and approx(v[("E2", "residential_property")], 600 * 0.75)
+    assert approx(v[("E1", "commercial_property")], 50) and approx(v[("E3", "cash")], 10)
+    assert not any(e == "E9" for e, _ in v)
+
+
 def test_golden_results_are_reproducible(reference_sim, tmp_path):
     """tests/golden/20260630 is produced by the reference implementation from the reference mapping.
     Regenerate: python tools/reference/sora_reference.py --sim <sim> --scenario tests/scenarios/test_eba2025.yaml \
     --out tests/golden/20260630"""
     ref.run(reference_sim, REPO / "tests" / "scenarios" / "test_eba2025.yaml", tmp_path, REPO)
     golden = REPO / "tests" / "golden" / "20260630"
-    for name in ("segments.csv", "parameters.csv", "projection.csv"):
+    for name in ("segments.csv", "parameters.csv", "projection.csv", "collateral.csv"):
         assert (tmp_path / name).read_text() == (golden / name).read_text(), name
     a, b = json.loads((tmp_path / "summary.json").read_text()), json.loads((golden / "summary.json").read_text())
     a.pop("sim_mapping_release"), b.pop("sim_mapping_release")
@@ -116,6 +147,15 @@ def test_golden_invariants():
         now = sum(float(r[k]) for k in ("exp_s1", "exp_s2", "exp_s3_old", "exp_s3_new"))
         assert abs(start - now) < 0.05, r["segment"]                       # static balance sheet
         assert float(r["prov_old_s3"]) >= float(s["prov_s3"]) - 0.005        # no S3 release
+    actual = {}
+    for r in csv.DictReader(open(golden / "collateral.csv")):             # static balance sheet LTV
+        secured = [r[f"secured_exp_s{i}"] for i in (1, 2, 3)]
+        assert actual.setdefault(r["segment"], secured) == secured          # t0 exposure in every year
+        for st in ("s1", "s2", "s3"):
+            if r[f"ltv_{st}"]:
+                assert abs(float(r[f"ltv_{st}"]) - float(r[f"secured_exp_{st}"]) / float(r[f"re_collateral_{st}"])) < 1e-6
+            else:
+                assert float(r[f"re_collateral_{st}"]) == 0
     for r in csv.DictReader(open(golden / "parameters.csv")):
         assert float(r["pd12m_s1"]) + float(r["tr1_2"]) <= 1 + 1e-9
         assert float(r["pd12m_s2"]) + float(r["tr2_1"]) <= 1 + 1e-9
