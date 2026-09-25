@@ -47,7 +47,7 @@ Responsibilities:
 
 - Attach starting-point PD, TR, LGD, LRLT and CCF per contract or segment, from an external file, derived calibration, or benchmarks (`09_risk_parameters.md`)
 - Run calibration (`sora calibrate`) from the history tables. This is a separate command whose output is a reviewable parameter file.
-- Call parameter models and regulatory calculators (SA, IRB, output floor) through ports with built-in reference implementations and external adapters (`11_integrations.md`)
+- Call the external regulatory calculator over REST (`schemas/calculator/openapi.yaml`) for parameter models, IRB, SA and output floor (`11_integrations.md`)
 
 ### 5. Scenario
 
@@ -160,9 +160,9 @@ Support:
 | Component | Role |
 |---|---|
 | `schemas/sim/` | Single source of truth for the input model. Generates C++ bindings, docs, DDL and the LLM description. |
-| `sora map` / `sora validate` | Run customer mapping SQL (embedded DuckDB) and validate the SIM output |
+| `sora map` / `sora validate` | Run customer mapping SQL (embedded DuckDB) on exported source files, and validate the SIM output |
 | `sora-mcp` | MCP server for AI agents: model description, profiling, mapping tests, validation, runs, explanations |
-| Calculator adapters | Batch-file and service adapters to customer PD/LGD models and regulatory calculators |
+| Calculator client | REST client for the regulatory calculator (batching, retries, replay cache); stub server for tests |
 
 ## Architectural constraints
 

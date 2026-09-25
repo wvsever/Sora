@@ -44,7 +44,7 @@ Sora is vendor software. The customer (the institution) runs it on its own data.
 | Input | Owner | Sora's role |
 |---|---|---|
 | Bank dataset | Customer | Input format, mapping, validation |
-| Starting-point PD/TR/LGD/LR | Customer (IFRS 9 / IRB models) | Import format (`sim_risk_parameter`), `ParameterModel` port, checks, optional derivation (`sora calibrate`) |
+| Starting-point PD/TR/LGD/LR | Customer (IFRS 9 / IRB models) | Import format (`sim_risk_parameter`), REST calculator `/v1/parameters/credit`, checks, optional derivation (`sora calibrate`) |
 | Satellite model coefficients / projected parameters | Customer | Import format, evaluation engine |
 | ECB benchmark parameters | ECB → customer, confidential, per exercise | Import format and application rules (10% rule, portfolio level, no adjustment) |
 | Macro / market scenarios | EBA / ESRB / ECB, public | Converter (`tools/scenario_import`) |

@@ -12,6 +12,8 @@ Deliver:
 - `tools/scenario_import`: EBA/ESRB/ECB xlsx in `docs/` → normalised macro CSV
 - `tools/reference/`: independent Python + DuckDB implementation of calibration and the EBA credit projection
 - Synthetic stand-ins for customer inputs: satellite coefficients and an ECB-style benchmark file
+- Regulatory calculator REST contract (`schemas/calculator/openapi.yaml`), stub server (`tests/stubs/calculator/`) and contract tests
+- Export specification and source data dictionary format
 - A fixed test scenario and golden results in `tests/golden/20260630/`
 - Hand-computed unit cases for EBA Boxes 3–9
 
@@ -74,8 +76,8 @@ Deliver:
 Deliver:
 
 - `sora-mcp` (describe, profile_source, test_mapping, validate_sim, reconcile)
-- `ParameterModel` port with a batch-file adapter
-- IRB reference calculator (CRR Art. 153/154) and the `CreditRiskIRB` port
+- REST calculator client (batching, retries, idempotency, replay cache), tested against the stub
+- `/v1/parameters/credit` and `/v1/credit-risk/irb` in the pipeline
 - `explain_result`, `diff_runs`
 
 ## Phase 6 - Funding and rates
@@ -102,7 +104,7 @@ Deliver:
 
 Only after profiling or explicit need:
 
-- CRR3 SA coverage, output floor and service adapters for external calculators
+- SA and output floor through the calculator; Parquet request/response bodies
 - Market risk revaluation and CCR
 - Explicit SIMD
 - Alternative allocators

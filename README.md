@@ -59,9 +59,9 @@ The primary target is the EBA EU-wide stress test credit-risk methodology: the 2
 
 ## Integration
 
-- **Mapping with SQL:** customers map their source data to SIM with SQL views, written by hand or with an AI agent.
+- **Mapping with SQL on exports:** customers export source tables to files. Mapping SQL, written by hand or with an AI agent, runs on those files with embedded DuckDB. There is no database access.
 - **MCP server (`sora-mcp`):** lets an agent read the model description, profile sources, test mappings, validate, run and explain results. It runs locally, returns metadata only by default, and requires human approval for production mappings.
-- **Calculator ports:** PD/LGD models and regulatory calculators (SA, IRB, output floor) connect through ports, each with a built-in reference implementation and batch-file or service adapters. See `plans/11_integrations.md`.
+- **Regulatory calculator over REST:** PD/LGD models, IRB, SA and the output floor are computed by an external calculator implementing `schemas/calculator/openapi.yaml`. A stub server is used for tests. See `plans/11_integrations.md`.
 
 ## Example scenario
 
@@ -159,11 +159,14 @@ sora/
 ├── tests/
 │   ├── data/                 # reference dataset (20260630.7z) + README
 │   ├── golden/               # expected results for the reference dataset
+│   ├── stubs/calculator/     # stub regulatory calculator (fixed / formula / faults)
+│   ├── contract/             # API contract tests (stub and real calculator)
 │   └── scenarios/
 ├── benchmarks/
 ├── examples/
 ├── schemas/
-│   └── sim/                  # Sora Input Model: the single source of truth
+│   ├── sim/                  # Sora Input Model: the single source of truth
+│   └── calculator/           # REST contract for the regulatory calculator (OpenAPI)
 ├── docs/                     # EBA guidelines and EU-wide stress test material (2025, 2027 draft)
 └── plans/
     ├── 01_architecture.md
