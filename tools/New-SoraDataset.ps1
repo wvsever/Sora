@@ -190,6 +190,18 @@ function Resolve-ExePath {
     return $Path
 }
 
+function New-SoraToolsArgList {
+    # sora-tools is a pip console script; when it is not on PATH (pip installs into a per-user Scripts dir
+    # that often is not), run the same entry point from this Sora checkout with the pipeline's Python.
+    if (Get-Command $SoraToolsExe -ErrorAction SilentlyContinue) {
+        return @{ File = $SoraToolsExe; Args = (New-ArgList) }
+    }
+    $list = New-ArgList
+    $list.Add('-c')
+    $list.Add("import sys; sys.path.insert(0, r'$(Join-Path $SoraRepo 'python')'); from sora_tools.cli import main; sys.exit(main())")
+    return @{ File = $PythonExe; Args = $list }
+}
+
 function Get-LineCount {
     # Streams the file (never loads it whole) - the reference book runs to millions of rows in some tables.
     param([string] $Path)
@@ -382,14 +394,15 @@ $simRiskParamCsv = Join-Path $ParamsDir 'sim_risk_parameter.csv'
 $extrasCsv = Join-Path $ParamsDir 'vera_extras.csv'
 $convertReport = Join-Path $ParamsDir 'vera_params_report.json'
 
-$convertArgs = New-ArgList
+$convertCmd = New-SoraToolsArgList
+$convertArgs = $convertCmd.Args
 $convertArgs.Add('vera-params')
 $convertArgs.Add($riskParamsCsv)
 $convertArgs.Add('-o'); $convertArgs.Add($simRiskParamCsv)
 $convertArgs.Add('--extras'); $convertArgs.Add($extrasCsv)
 $convertArgs.Add('--report'); $convertArgs.Add($convertReport)
 
-Invoke-Step -Name 'convert' -FilePath $SoraToolsExe -ArgumentList $convertArgs -WorkingDirectory $SoraRepo | Out-Null
+Invoke-Step -Name 'convert' -FilePath $convertCmd.File -ArgumentList $convertArgs -WorkingDirectory $SoraRepo | Out-Null
 
 # ---------------------------------------------------------------------------------------------------------
 # Step 4: validate the conversion (fail closed - a converter that silently produced nothing is a defect)
@@ -421,13 +434,14 @@ if (-not $DryRun) {
 
 $soraRunSummary = $null
 if ($RunSora) {
-    $mapArgs = New-ArgList
+    $mapCmd = New-SoraToolsArgList
+    $mapArgs = $mapCmd.Args
     $mapArgs.Add('map'); $mapArgs.Add('mappings/cppbank')
     $mapArgs.Add('--export'); $mapArgs.Add($BookDir)
     $mapArgs.Add('-o'); $mapArgs.Add($SimDir)
     $mapArgs.Add('--validate')
     if ($null -ne $Threads) { $mapArgs.Add('--threads'); $mapArgs.Add([string]$Threads) }
-    Invoke-Step -Name 'map' -FilePath $SoraToolsExe -ArgumentList $mapArgs -WorkingDirectory $SoraRepo | Out-Null
+    Invoke-Step -Name 'map' -FilePath $mapCmd.File -ArgumentList $mapArgs -WorkingDirectory $SoraRepo | Out-Null
 
     $runArgs = New-ArgList
     $runArgs.Add('run'); $runArgs.Add($SimDir)
