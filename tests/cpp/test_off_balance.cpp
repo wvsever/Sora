@@ -160,3 +160,82 @@ TEST_CASE("scenario key off_balance") {
                                    base + "off_balance:\n  exposure_types: [loan_commitment]\n  ccf_fallback: {loan_commitment: 2}\n");
     CHECK_THROWS_AS(load_scenario(bad_ccf, "."), Error);
 }
+
+TEST_CASE("facilities: drawn part of commitments on-balance, allowance split between drawn and undrawn parts") {
+    Dataset d;
+    d.currencies.intern("EUR");
+    d.fx_to_reporting = {1'000'000'000};
+    d.countries.intern("BE");
+    Counterparty cp;
+    cp.country = 0;
+    cp.sector = EbaSector::Household;
+    d.counterparties.push_back(cp);
+    auto add = [&](const char* id, ExposureType type, Stage stage, Cents gca, Cents undrawn, Cents allowance) {
+        Exposure e;
+        e.id = d.exposure_ids.intern(id);
+        e.counterparty = 0;
+        e.currency = 0;
+        e.type = type;
+        e.stage = stage;
+        e.has_gca = gca > 0;
+        e.gca = gca;
+        e.off_balance = undrawn;
+        e.allowance = allowance;
+        d.exposures.push_back(e);
+    };
+    add("L-1", ExposureType::Loan, Stage::S1, 60'000, 40'000, 1'000);              // loan with an undrawn part
+    add("L-2", ExposureType::Loan, Stage::S2, 50'000, 0, 500);                     // fully drawn loan
+    add("C-1", ExposureType::LoanCommitment, Stage::S1, 25'000, 75'000, 2'000);    // partly drawn commitment
+    add("C-2", ExposureType::LoanCommitment, Stage::S1, 0, 10'000, 100);           // undrawn commitment
+    add("G-1", ExposureType::FinancialGuarantee, Stage::S3, 10'000, 30'000, 800);  // called guarantee
+
+    // Default scope: commitments are off-balance only, loans keep their whole allowance.
+    const auto off = segment(d, ScopeConfig{});
+    CHECK(off.in_scope == 2);
+    CHECK(off.segment_of[2] < 0);
+    CHECK(off.allowance[0] == 10.0);
+    CHECK(off.drawn_commitments == 0);
+
+    ScopeConfig scope;
+    scope.drawn_types = {ExposureType::LoanCommitment, ExposureType::FinancialGuarantee};
+    scope.loan_undrawn_off_balance = true;
+    CHECK(undrawn_is_off_balance(d.exposures[0], scope));
+    CHECK(undrawn_is_off_balance(d.exposures[2], scope));
+    CHECK(!undrawn_is_off_balance(d.exposures[0], ScopeConfig{}));
+    const auto on = segment(d, scope);
+    CHECK(on.in_scope == 4);   // L-1, L-2, C-1, G-1; C-2 has no drawn part
+    CHECK(on.drawn_commitments == 2);
+    CHECK(on.segment_of[3] < 0);
+    CHECK(on.segment_of[2] == on.segment_of[0]);   // the loan segment of the counterparty
+    CHECK(on.segments[static_cast<std::size_t>(on.segment_of[2])].key == "LOANS|HH_OTHER|BE");
+    // Drawn share on-balance: allowance x GCA / (GCA + undrawn); the undrawn share is the off-balance provision.
+    CHECK(on.allowance[0] == doctest::Approx(10.0 * 0.6));
+    CHECK(on.allowance[1] == 5.0);   // no undrawn part: the whole allowance
+    CHECK(on.allowance[2] == doctest::Approx(20.0 * 0.25));
+    CHECK(on.allowance[4] == doctest::Approx(8.0 * 0.25));
+    // Without include_loan_undrawn, the loan keeps its whole allowance on-balance.
+    scope.loan_undrawn_off_balance = false;
+    CHECK(segment(d, scope).allowance[0] == 10.0);
+}
+
+TEST_CASE("scenario keys off_balance.include_loan_undrawn and commitment_drawn_on_balance") {
+    const std::string base = "name: t\nmacro_path: m.csv\nsatellites: s.csv\nyear_map: {1: 2025, 2: 2026, 3: 2027}\n"
+                             "history_year: 2024\nnormal_gdp_growth: 1.5\ncountry_fallback: [EU]\n"
+                             "scope:\n  measurement_categories: [amortised_cost]\n  exposure_types: [loan]\n"
+                             "  exclude_intragroup: true\nsegmentation: {top_countries: 10}\n"
+                             "calibration: {min_observations: 100, pd_floor: 0.00001}\n"
+                             "constraints: {no_cure_from_s3: true, adverse_final_year_blend: [0.8, 0.2]}\n"
+                             "off_balance:\n  exposure_types: [loan_commitment, other_commitment]\n";
+    const auto plain = load_scenario(temp_file("sora_facility_plain.yaml", base), ".");
+    CHECK(!plain.off_balance.include_loan_undrawn);
+    CHECK(!plain.off_balance.commitment_drawn_on_balance);
+    CHECK(plain.scope.drawn_types.empty());
+    CHECK(!plain.scope.loan_undrawn_off_balance);
+    const auto both = load_scenario(temp_file("sora_facility_both.yaml", base + "  include_loan_undrawn: true\n"
+                                                                                "  commitment_drawn_on_balance: true\n"), ".");
+    CHECK(both.off_balance.include_loan_undrawn);
+    CHECK(both.scope.loan_undrawn_off_balance);
+    CHECK(both.scope.drawn_types == std::vector<ExposureType>{ExposureType::LoanCommitment, ExposureType::OtherCommitment});
+    const auto bad = temp_file("sora_facility_bad.yaml", base + "  include_loan_undrawn: maybe\n");
+    CHECK_THROWS_AS(load_scenario(bad, "."), Error);
+}

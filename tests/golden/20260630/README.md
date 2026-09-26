@@ -13,7 +13,7 @@ Expected outputs for the C++ engine, produced by the independent reference imple
 | `projection.csv` | Stage flows, exposures, provisions per component (EBA Boxes 3–9) and impairment per segment, scenario and year |
 | `collateral.csv` | Static-balance-sheet LTV per segment, scenario (actual year 0, baseline and adverse 1..3) and t0 stage: secured exposure, real-estate collateral value under the property price paths, LTV (`plans/03_scenario_engine.md`, Collateral repricing and LTV) |
 | `cr_sector.csv` | EBA 2027 draft CSV_CR_SECTOR layout: the NFC portfolio (CR_SCEN rows 6 + 13) by NACE Rev. 2.1 section, with C split into energy-intensive and other, per geography (Total, top countries, Other), scenario and year (actual, baseline and adverse 1..3); 46 template columns, amounts in EUR million, parameters and ratios in percent (`plans/03_scenario_engine.md`, CR_SECTOR) |
-| `off_balance.csv` | Off-balance items (loan commitments, financial guarantees, other commitments given; scenario key `off_balance`) per parameter segment, exposure type, scenario and year (actual year 0, baseline and adverse 1..3): nominal amounts by stage (`nom_*`), post-CCF amounts, stage flows, provisions per component and impairment in the `projection.csv` columns (`plans/03_scenario_engine.md`, Off-balance-sheet exposures) |
+| `off_balance.csv` | Off-balance items (loan commitments, financial guarantees, other commitments given, and `loan`: the undrawn part of loans; scenario key `off_balance`) per parameter segment, exposure type, scenario and year (actual year 0, baseline and adverse 1..3): nominal amounts by stage (`nom_*`), post-CCF amounts, stage flows, provisions per component and impairment in the `projection.csv` columns (`plans/03_scenario_engine.md`, Off-balance-sheet exposures) |
 | `cr_scen_off_bs.csv` | The same in the EBA CSV_CR_SCEN_OFF_BS layout (2027 draft templates): 22 rows per scenario and year (per commitment type a Sum row and six counterparty-sector rows, then Total), EUR million |
 | `summary.json` | Totals (`off_balance`: item counts and off-balance totals per scenario and year) |
 
@@ -38,8 +38,27 @@ Engine tolerance: money is compared per segment, scenario and year to 1 cent, or
 its units (EUR million, percent), plus one unit in the last printed decimal. `cr_scen_off_bs.csv` (EUR million,
 8 decimals) is compared to 2e-8.
 
-Off-balance results: with the regulatory fallback CCFs (no customer CCF in the reference SIM), 13,660 staged
-commitments (EUR 2.41bn nominal, 1.32bn post-CCF). Five `other_commitment` items to general government in SG take
-the parameters of `LOANS|GG|OTHER` (no GG loans in SG). The synthetic book provisions commitments at a flat
-coverage of drawn plus undrawn (about 1% in stage 1), far above PD x LGD of the loan segments, so the year-1
-impairment on off-balance items is a release in both scenarios. This is a property of the data, not of the method.
+Facilities (the test scenario sets `off_balance.include_loan_undrawn` and `commitment_drawn_on_balance`,
+`plans/03_scenario_engine.md`, Off-balance-sheet exposures, item 7): the drawn part (GCA) of 6,455 staged commitments
+is on-balance (loans and advances, EUR 1.03bn), so there are 52,872 in-scope exposures; the undrawn part of 13,619
+loans is a loan commitment given (`exposure_type` `loan` in `off_balance.csv`, EUR 0.73bn nominal, 0.28bn post-CCF).
+Each facility's allowance is split pro rata between its drawn (on-balance) and undrawn (off-balance) parts, so the
+starting provisions, EUR 189.24m on-balance plus 42.01m off-balance, add up to the 231.25m allowance of all staged
+amortised-cost exposures in scope. The drawn commitments move the tenth CR_SCEN country from SG to GB (GB overtakes SG
+by gross carrying amount), which renames the SG segments to GB and moves the SG exposures to OTHER.
+
+Off-balance results: with the regulatory fallback CCFs (no customer CCF in the reference SIM), 27,279 items: 13,660
+staged commitments and 13,619 undrawn loan parts (EUR 3.13bn nominal, 1.61bn post-CCF). The synthetic book provisions
+commitments at a flat coverage of drawn plus undrawn (about 1% in stage 1, DS-044), far above PD x LGD of the loan
+segments, so the year-1 impairment on commitments is a release in both scenarios (also on the drawn part, now
+on-balance). This is a property of the data, not of the method. The undrawn loan parts carry the loans' own coverage
+and show no release.
+
+Golden change log (facilities, 2026-09-26; before -> after, EUR): segments 151 -> 153, exposures 46,417 -> 52,872;
+on-balance t0 exposure 15,307.07m -> 16,332.41m, provisions 195.35m -> 189.24m (+9.80m drawn share of commitment
+allowances that was in neither output before, -15.90m undrawn share of loan allowances moved off-balance);
+off-balance t0 nominal 2,406.00m -> 3,133.89m, post-CCF 1,324.02m -> 1,605.48m, provisions 26.10m -> 42.01m;
+3-year impairment on + off-balance baseline 89.95m -> 86.60m, adverse 271.30m -> 267.37m. Calibrated LGD S3 / LRLT S2
+change because coverage is now the on-balance (drawn) share over GCA, and commitments enter the stage history and
+coverage of their segments; all parameters, projections, LTVs and CR_SECTOR rows change accordingly. With both keys
+removed from the scenario the engine reproduces the previous golden files exactly.

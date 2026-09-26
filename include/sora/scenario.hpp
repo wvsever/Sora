@@ -23,6 +23,12 @@ struct OffBalanceConfig {
     // Regulatory CCF when no customer CCF is supplied (CRR Art. 111(2), Annex I buckets).
     double ccf_loan_commitment = 0.4, ccf_financial_guarantee = 1.0, ccf_other_commitment = 0.5;
     double ccf_unconditionally_cancellable = 0.1;   // loan and other commitments cancellable at any time
+    // Facilities with a drawn and an undrawn part (plans/03_scenario_engine.md, Off-balance-sheet exposures):
+    // include_loan_undrawn: the undrawn part of in-scope loans is a loan commitment given, projected here in the
+    // loan's segment; commitment_drawn_on_balance: the drawn part (GCA) of commitments of `types` is an on-balance
+    // loans-and-advances exposure (ScopeConfig::drawn_types). The allowance is split pro rata in both cases.
+    bool include_loan_undrawn = false;
+    bool commitment_drawn_on_balance = false;
 };
 
 struct ScenarioConfig {
