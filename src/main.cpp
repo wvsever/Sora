@@ -205,6 +205,10 @@ int main(int argc, char** argv) {
                 diag.findings.push_back({"OBS-002", "warning", "off-balance items without an on-balance loan segment of their portfolio: not projected", off_balance->unmatched_items});
             if (off_balance->customer_ccf_items)
                 diag.findings.push_back({"OBS-003", "info", "off-balance items with a customer CCF", off_balance->customer_ccf_items});
+            if (off_balance->loan_undrawn_items)
+                diag.findings.push_back({"OBS-004", "info", "undrawn parts of on-balance loans projected as loan commitments given", off_balance->loan_undrawn_items});
+            if (off_balance->commitment_drawn_exposures)
+                diag.findings.push_back({"OBS-005", "info", "drawn parts of commitments projected on-balance (loans and advances)", off_balance->commitment_drawn_exposures});
         }
         std::optional<ReaResult> rea;
         if (run && !a.calculator.url.empty()) {

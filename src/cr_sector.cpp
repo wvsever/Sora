@@ -216,7 +216,7 @@ void write_cr_sector(const Dataset& d, const Segmentation& s, const Projection& 
         if (sid < 0 || !has_sector_breakdown(s.segments[static_cast<std::size_t>(sid)])) continue;
         const auto& e = d.exposures[i];
         auto& a = cell(0, bucket[static_cast<std::size_t>(sid)], d.counterparties[e.counterparty].nace);
-        const double g = to_double(e.gca) * s.fx[i], al = to_double(e.allowance) * s.fx[i];
+        const double g = to_double(e.gca) * s.fx[i], al = s.allowance[i];
         switch (e.stage) {
             case Stage::S1: a.exp_s1 += g; a.prov_s1 += al; break;
             case Stage::S2: a.exp_s2 += g; a.prov_s2 += al; break;

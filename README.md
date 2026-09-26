@@ -35,7 +35,9 @@ build/release/sora run build/sim/20260630 --scenario tests/scenarios/test_eba202
 #   -> segments.csv, parameters.csv, projection.csv, collateral.csv (LTV), cr_scen.csv (EBA CSV_CR_SCEN layout),
 #      cr_sector.csv (EBA CSV_CR_SECTOR: NFC by NACE section), summary.json, diagnostics.json
 #      with the scenario key off_balance: off_balance.csv (commitments and guarantees given, nominal and post-CCF)
-#      and cr_scen_off_bs.csv (EBA CSV_CR_SCEN_OFF_BS layout)
+#      and cr_scen_off_bs.csv (EBA CSV_CR_SCEN_OFF_BS layout); off_balance.include_loan_undrawn adds the undrawn
+#      part of loans (loan commitments given), off_balance.commitment_drawn_on_balance puts the drawn part of
+#      commitments on-balance (allowance split pro rata; plans/03_scenario_engine.md)
 #   add --parameters <file> to use customer risk parameters (plans/09_risk_parameters.md)
 
 # IRB REA through a regulatory calculator (here the stub): adds rea.csv and summary.json "rea"

@@ -328,3 +328,36 @@ def test_off_balance_customer_ccf(reference_sim, base_run, tmp_path):
     # CCF 1 everywhere except that exposure (0): post-CCF stage 1 = nominal stage 1 - its nominal.
     assert abs(t["exp_s1"] - (t["nom_s1"] - nominal)) < 0.05
     assert t["exp_s1"] > b["exp_s1"]
+
+
+def test_facility_switches(reference_sim, base_run, tmp_path):
+    """off_balance.include_loan_undrawn moves the undrawn share of loan allowances off-balance (exposures unchanged,
+    provisions on- plus off-balance unchanged); without both switches, loans keep their whole allowance and no
+    commitment is on-balance."""
+    text = SCENARIO.read_text()
+    assert "include_loan_undrawn: true" in text and "commitment_drawn_on_balance: true" in text
+    runs = {}
+    for name, drop in (("undrawn", ("commitment_drawn_on_balance",)),
+                       ("none", ("commitment_drawn_on_balance", "include_loan_undrawn"))):
+        yaml = tmp_path / f"{name}.yaml"
+        yaml.write_text("".join(line for line in text.splitlines(keepends=True) if not any(k in line for k in drop)))
+        out = tmp_path / name
+        r = subprocess.run([str(ENGINE), "run", str(reference_sim), "--scenario", str(yaml), "-o", str(out),
+                            "--base", str(REPO)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        runs[name] = (out, json.loads((out / "summary.json").read_text()), r.stderr)
+    (u, su, eu), (n, sn, en) = runs["undrawn"], runs["none"]
+    assert "OBS-004" in eu and "OBS-004" not in en and "OBS-005" not in eu
+    assert su["exposures"] == sn["exposures"] and sn["off_balance"]["loan_undrawn_items"] == 0
+    for k in ("exp_s1", "exp_s2", "exp_s3", "exp_poci"):
+        assert su["starting_point"][k] == sn["starting_point"][k]
+    prov = lambda s: (sum(s["starting_point"][k] for k in ("prov_s1", "prov_s2", "prov_s3", "prov_poci")) +  # noqa: E731
+                      sum(s["off_balance"]["totals"]["actual/0"][k]
+                          for k in ("prov_stock_s1", "prov_stock_s2", "prov_stock_s3", "prov_stock_poci")))
+    assert abs(prov(su) - prov(sn)) < 1.0                                      # moved, not double counted
+    assert su["starting_point"]["prov_s1"] < sn["starting_point"]["prov_s1"]
+    assert "loan" not in {r["exposure_type"] for r in csv.DictReader(open(n / "off_balance.csv"))}
+    # The drawn part of commitments adds exposure and the drawn share of their allowance (base run: both switches).
+    base = json.loads((base_run / "summary.json").read_text())
+    assert base["exposures"] - sn["exposures"] == base["off_balance"]["commitment_drawn_exposures"] > 0
+    assert prov(base) > prov(su)

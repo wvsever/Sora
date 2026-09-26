@@ -228,7 +228,7 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
         for (std::size_t m = first[seg]; m < first[seg + 1]; ++m) {
             const std::size_t i = members[m];
             const auto& e = d.exposures[i];
-            const double gca = to_double(e.gca) * s.fx[i], allowance = to_double(e.allowance) * s.fx[i];
+            const double gca = to_double(e.gca) * s.fx[i], allowance = s.allowance[i];
             auto& res = by_sector ? one : acc;
             auto& pres = by_sector ? pone : pacc;
             if (by_sector) {

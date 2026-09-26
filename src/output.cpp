@@ -60,7 +60,7 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
         contracts[static_cast<std::size_t>(sid)] += 1;
         if (st > 3) continue;
         stock[static_cast<std::size_t>(sid)][st][0] += to_double(e.gca) * s.fx[i];
-        stock[static_cast<std::size_t>(sid)][st][1] += to_double(e.allowance) * s.fx[i];
+        stock[static_cast<std::size_t>(sid)][st][1] += s.allowance[i];
     }
 
     {

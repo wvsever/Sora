@@ -9,6 +9,12 @@
 // the same stage flows. CCF: customer parameter (`ccf`, actual/0, exposure row then segment hierarchy), else the
 // regulatory fallback of the scenario (CRR Art. 111(2)). The starting provision is the undrawn share of the
 // facility's loss allowance. The balance sheet is static, POCI is static and there are no cures from stage 3.
+//
+// With off_balance.include_loan_undrawn, the undrawn part of each in-scope loan (off_balance_amount) is an item
+// too: a loan commitment given (CR_SCEN_OFF_BS), grouped as exposure type `loan` in its own on-balance segment,
+// with CCF fallback LoanCommitment (or unconditionally cancellable). With off_balance.commitment_drawn_on_balance
+// the drawn part of commitments is on-balance (ScopeConfig::drawn_types); in both cases the allowance is split
+// pro rata between the drawn (Segmentation::allowance) and undrawn parts, so it is counted once.
 
 #include <array>
 #include <filesystem>
@@ -59,6 +65,8 @@ struct OffBalanceResult {
     std::vector<OffBalanceGroup> groups;   // sorted by segment key, then exposure type name
     std::vector<ExposureType> types;       // configured exposure types
     std::size_t items = 0, fallback_items = 0, unmatched_items = 0, customer_ccf_items = 0;
+    std::size_t loan_undrawn_items = 0;           // of `items`: undrawn part of in-scope loans (include_loan_undrawn)
+    std::size_t commitment_drawn_exposures = 0;   // commitments whose drawn part is on-balance (Segmentation::drawn_commitments)
     std::size_t exposures_with_own_parameters = 0;
 };
 
