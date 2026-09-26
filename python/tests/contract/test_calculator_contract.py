@@ -22,7 +22,7 @@ from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
-SPEC = yaml.safe_load((Path(__file__).resolve().parents[3] / "schemas" / "calculator" / "openapi.yaml").read_text())
+SPEC = yaml.safe_load((Path(__file__).resolve().parents[3] / "schemas" / "calculator" / "openapi.yaml").read_text(encoding="utf-8"))
 REGISTRY = Registry().with_resource("urn:sora-calculator", Resource(SPEC, specification=DRAFT202012))
 
 

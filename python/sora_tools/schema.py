@@ -155,10 +155,10 @@ def _table(d: dict[str, Any]) -> Table:
 
 def load_schema(path: Path | str | None = None) -> Schema:
     root = Path(path) if path else find_schema_dir()
-    meta = yaml.safe_load((root / "sim.yaml").read_text())
+    meta = yaml.safe_load((root / "sim.yaml").read_text(encoding="utf-8"))
     tables = {}
     for name in meta["tables"]:
-        tables[name] = _table(yaml.safe_load((root / "tables" / f"{name}.yaml").read_text()))
+        tables[name] = _table(yaml.safe_load((root / "tables" / f"{name}.yaml").read_text(encoding="utf-8")))
     return Schema(
         version=meta["sim_version"],
         description=str(meta["description"]).strip(),

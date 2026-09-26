@@ -33,3 +33,24 @@ jobs:
         env:
           SORA_ENGINE: build/ci/sora
         run: python -m pytest python/tests/test_engine.py -q
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Install sora-tools (reference mapping for the golden test)
+        run: pip install -e "python[test]" py7zr
+      - name: Configure
+        run: cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DSORA_CALCULATOR_TLS=OFF
+      - name: Build
+        run: cmake --build build/ci -j
+      - name: Test (unit + golden + calculator)
+        run: ctest --test-dir build/ci --output-on-failure
+      - name: Engine integration tests
+        env:
+          SORA_ENGINE: build/ci/sora.exe
+        run: python -m pytest python/tests/test_engine.py -q

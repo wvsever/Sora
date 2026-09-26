@@ -22,6 +22,24 @@ using namespace sora;
 using namespace sora::calc;
 using json = nlohmann::json;
 namespace fs = std::filesystem;
+
+namespace {
+// POSIX setenv/unsetenv do not exist on Windows; _putenv_s with an empty value removes the variable there.
+void set_env(const std::string& name, const char* value) {
+#ifdef _WIN32
+    _putenv_s(name.c_str(), value);
+#else
+    ::setenv(name.c_str(), value, 1);
+#endif
+}
+void unset_env(const std::string& name) {
+#ifdef _WIN32
+    _putenv_s(name.c_str(), "");
+#else
+    ::unsetenv(name.c_str());
+#endif
+}
+}  // namespace
 
 TEST_CASE("decimals are formatted and parsed exactly") {
     CHECK(format_decimal(12345, 2) == "123.45");
@@ -525,14 +543,14 @@ TEST_CASE("a bearer token is never sent over plain http to another host") {
 
     ClientOptions o;
     o.token_env = "SORA_TEST_CALCULATOR_TOKEN";
-    ::setenv(o.token_env.c_str(), "secret", 1);
+    set_env(o.token_env, "secret");
     o.url = "http://calc.bank.internal:8080";
     CHECK_THROWS_WITH_AS(http_transport(o), doctest::Contains("refusing to send the bearer token"), CalculatorError);
     o.url = "http://127.0.0.1:8080";
     CHECK_NOTHROW(http_transport(o));
     o.url = "http://[::1]:8080/prefix";
     CHECK_NOTHROW(http_transport(o));
-    ::unsetenv(o.token_env.c_str());
+    unset_env(o.token_env);
     o.url = "http://calc.bank.internal:8080";   // no token: plain http is allowed (the stub)
     CHECK_NOTHROW(http_transport(o));
 }

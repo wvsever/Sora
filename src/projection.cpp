@@ -155,8 +155,8 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
             auto& path = out.params[i][sc];
             path = project_parameters(seg, start[i], *sat[i], macro, kScenarios[sc], cfg);
             for (int t = 1; t <= 3; ++t) {
-                const std::size_t n = external ? external->apply_segment(s, seg, {static_cast<int>(sc) + 1, t}, path[static_cast<std::size_t>(t)]) : 0;
-                out.path_source[i][sc][static_cast<std::size_t>(t - 1)] = n == 0 ? "derived" : n >= kParamCount ? "external" : "mixed";
+                const std::size_t applied = external ? external->apply_segment(s, seg, {static_cast<int>(sc) + 1, t}, path[static_cast<std::size_t>(t)]) : 0;
+                out.path_source[i][sc][static_cast<std::size_t>(t - 1)] = applied == 0 ? "derived" : applied >= kParamCount ? "external" : "mixed";
             }
             path[4] = path[3];
             for (int t = 1; t <= 3; ++t) check(path[static_cast<std::size_t>(t)], seg.key + " " + kScenarios[sc] + "/" + std::to_string(t));

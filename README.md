@@ -76,7 +76,25 @@ It maps Vera's per-exposure PD/LGD (`pd12m_pit`, `lgd_ifrs9`, `lgd_s3`, `lrlt`) 
 `declared_stage`, passes `ccf`/`pd_reg`/`lgd_reg` through unchanged, and never fabricates a value: anything
 it cannot place is left empty and counted, never defaulted or clamped. See
 `python/sora_tools/vera_params.py` and `plans/09_risk_parameters.md`.
+
 
+### Windows
+
+The engine builds with MSVC (Visual Studio 2022, x64). Configure from a *Developer PowerShell for VS* so `cl`, `cmake` and `ninja` are on the path:
+
+```powershell
+pip install -e "python[test,scenario]" py7zr      # py7zr extracts the test archive when 7-Zip is not installed
+python tools/extract_testdata.py
+sora-tools map mappings/cppbank --export build/testdata/20260630 -o build/sim/20260630 --validate
+
+cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release   # add -DSORA_CALCULATOR_TLS=OFF without OpenSSL
+cmake --build build/release -j
+ctest --test-dir build/release --output-on-failure
+
+build\release\sora.exe run build\sim\20260630 --scenario tests\scenarios\test_eba2025.yaml -o build\out
+```
+
+The build copies `duckdb.dll` next to `sora.exe` and `sora_tests.exe` (Windows has no rpath). Peak memory in the run log is the peak working set.
 ## Core use cases
 
 Sora can model stresses such as:

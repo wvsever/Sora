@@ -146,7 +146,7 @@ def import_scenarios(paths: list[Path | str], output: Path | str) -> int:
         if k in seen:
             raise ValueError(f"duplicate scenario value {k} ({r['source']} / {r['sheet']})")
         seen.add(k)
-    with open(output, "w", newline="") as f:
+    with open(output, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=FIELDS, lineterminator="\n", extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)

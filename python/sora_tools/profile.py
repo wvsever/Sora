@@ -59,7 +59,7 @@ def profile_export(export_dir: Path | str, output: Path | str, max_codes: int = 
                    list_codes: bool = True, types_file: str | None = None) -> dict[str, Any]:
     export_dir = Path(export_dir).resolve()
     con = sandboxed_connection([export_dir])
-    types = json.loads((export_dir / types_file).read_text()) if types_file else {}
+    types = json.loads((export_dir / types_file).read_text(encoding="utf-8")) if types_file else {}
     doc: dict[str, Any] = {
         "source": export_dir.name,
         "profiled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

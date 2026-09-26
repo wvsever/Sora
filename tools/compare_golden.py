@@ -71,7 +71,7 @@ def main() -> int:
     sim = args.sim or ensure_sim()
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp)
-        subprocess.run([args.engine, "run", str(sim), "--scenario", str(args.scenario), "-o", str(out),
+        subprocess.run([str(Path(args.engine).resolve()), "run", str(sim), "--scenario", str(args.scenario), "-o", str(out),
                         "--base", str(REPO)], check=True)
         errors = []
         errors += compare("segments.csv", args.golden, out, ["segment"], money=True)

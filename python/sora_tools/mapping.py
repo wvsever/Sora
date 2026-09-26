@@ -45,7 +45,7 @@ class Mapping:
     tables: list[str]          # SIM tables in execution order
 
     def sql_for(self, table: str) -> str:
-        return (self.root / f"{table}.sql").read_text()
+        return (self.root / f"{table}.sql").read_text(encoding="utf-8")
 
     def release_id(self) -> str:
         h = hashlib.sha256()
@@ -58,12 +58,12 @@ class Mapping:
 
 def load_mapping(root: Path | str, export_dir: Path | None = None) -> Mapping:
     root = Path(root)
-    m = yaml.safe_load((root / "mapping.yaml").read_text())
+    m = yaml.safe_load((root / "mapping.yaml").read_text(encoding="utf-8"))
     src_cfg = m["sources"]
     types_by_table: dict[str, dict[str, str]] = {}
     types_file = src_cfg.get("types_file")
     if types_file and export_dir is not None:
-        raw = json.loads((Path(export_dir) / types_file).read_text())
+        raw = json.loads((Path(export_dir) / types_file).read_text(encoding="utf-8"))
         types_by_table = {t: {c: _CSV_TYPE.get(v, "VARCHAR") for c, v in cols.items()} for t, cols in raw.items()}
     default_fmt = src_cfg.get("format", "csv")
     sources = {}

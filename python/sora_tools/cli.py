@@ -29,7 +29,7 @@ def cmd_schema(args) -> int:
         return 1 if problems else 0
     text = {"markdown": docs.markdown, "llm": docs.llm, "ddl": docs.ddl}[args.action](schema)
     if args.output:
-        Path(args.output).write_text(text)
+        Path(args.output).write_text(text, encoding="utf-8")
     else:
         sys.stdout.write(text)
     return 0

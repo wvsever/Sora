@@ -16,7 +16,7 @@ def test_every_column_is_documented():
 
 def test_generated_reference_is_up_to_date(repo):
     """schemas/sim/SIM_REFERENCE.md is generated. Regenerate with `sora-tools schema markdown -o ...`."""
-    committed = (repo / "schemas" / "sim" / "SIM_REFERENCE.md").read_text()
+    committed = (repo / "schemas" / "sim" / "SIM_REFERENCE.md").read_text(encoding="utf-8")
     assert committed == docs.markdown(load_schema())
 
 

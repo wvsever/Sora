@@ -124,7 +124,7 @@ class Validator:
             self.add("MAN-001", "error", "sim_manifest", "sim_manifest.json is missing")
             return
         try:
-            self.manifest = json.loads(p.read_text())
+            self.manifest = json.loads(p.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
             self.add("MAN-002", "error", "sim_manifest", f"invalid JSON: {e}")
             return

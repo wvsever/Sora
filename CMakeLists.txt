@@ -12,6 +12,11 @@ endif()
 option(SORA_BUILD_TESTS "Build unit tests" ON)
 option(SORA_SANITIZE "Build with address and undefined-behaviour sanitizers" OFF)
 
+if(WIN32)
+  # windows.h (pulled in by cpp-httplib and psapi) must not define min/max macros over std::min/std::max.
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+endif()
+
 include(cmake/Dependencies.cmake)
 
 add_library(sora_core
@@ -36,6 +41,12 @@ target_compile_options(sora_core PRIVATE
 
 add_executable(sora src/main.cpp)
 target_link_libraries(sora PRIVATE sora_core)
+if(WIN32)
+  # Windows has no rpath: put duckdb.dll next to the engine (tests copy it too, see tests/cpp).
+  target_link_libraries(sora PRIVATE psapi)
+  add_custom_command(TARGET sora POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${SORA_DUCKDB_ROOT}/duckdb.dll" "$<TARGET_FILE_DIR:sora>")
+endif()
 
 if(SORA_SANITIZE)
   # PUBLIC: everything linking sora_core (engine, tests) is instrumented too.

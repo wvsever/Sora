@@ -2,6 +2,10 @@
 #include "sora/json_text.hpp"
 
 #include <algorithm>
+#include <cstdint>
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
 #include <atomic>
 #include <cmath>
 #include <fstream>
@@ -35,9 +39,17 @@ namespace {
 // Exact conversion of an amount to the reporting currency: cents x rate (1e-9) rounded half to even.
 Cents to_reporting(Cents c, Nano fx) {
     if (fx == 1'000'000'000) return c;
+#if defined(_MSC_VER) && !defined(__clang__)
+    // MSVC has no __int128: the 128-bit product and its division by 1e9 use the x64 intrinsics.
+    std::int64_t hi = 0;
+    const std::int64_t lo = _mul128(c, fx, &hi);
+    std::int64_t r = 0;
+    std::int64_t q = _div128(hi, lo, 1'000'000'000, &r);   // truncates toward zero
+#else
     __extension__ typedef __int128 i128;
     const i128 p = static_cast<i128>(c) * fx;
     i128 q = p / 1'000'000'000, r = p % 1'000'000'000;
+#endif
     if (r < 0) { r += 1'000'000'000; q -= 1; }   // floor division
     if (r > 500'000'000 || (r == 500'000'000 && (q & 1))) q += 1;
     return static_cast<Cents>(q);
