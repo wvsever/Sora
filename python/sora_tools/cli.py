@@ -157,6 +157,9 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--reject", help="regular expression: reject every record whose recordId it matches")
     c.set_defaults(func=cmd_calculator_stub)
 
+    from .satellites import register as register_satellites
+    register_satellites(sub)
+
     args = p.parse_args(argv)
     return args.func(args)
 

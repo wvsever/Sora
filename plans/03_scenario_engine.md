@@ -290,6 +290,88 @@ level), so off-balance items (which use the on-balance loan segment's path) and 
 it too. Year 4 (beyond the horizon, flat) repeats year 3, and the final adverse year's 5/6-1/6 blend uses the
 benchmarked baseline year 3 where the baseline is benchmarked.
 
+## Satellite estimation
+
+`sora-tools estimate-satellites` (`python/sora_tools/satellites.py`) estimates the satellite coefficients from the SIM
+stage history and writes them in the layout of `tests/params/synthetic_satellites.csv`, so a scenario can point its
+`satellites` key at the result. It is tooling (a challenger or starting point for the customer's own models), not part
+of the engine; the engine only reads the file.
+
+```sh
+sora-tools estimate-satellites build/sim/20260630 --cycle-index build/testdata/20260630/reference/macro_cycle_index.csv \
+    --prior tests/params/synthetic_satellites.csv -o build/satellites_estimated.csv --report build/satellites_fit.json
+sora-tools estimate-satellites <sim> --macro-history history.csv --macro-key EU -o satellites.csv   # real drivers
+```
+
+**Target.** The model the engine applies (rule class 9): per portfolio one slope vector `β` with
+`logit(P_t) = logit(P_0) + z_t` for PD12M_S1, PD12M_S2 and TR1-2, `−z_t` for TR2-1, and
+`z_t = β_gdp (gdp_t − normal) + β_u (u_t − u_0) + β_p property_growth_t` (residential prices for HH_HOUSE, commercial
+otherwise). The intercepts (`normal`, `u_0`, `logit(P_0)`) come from the scenario and the starting point, so only the
+slopes are estimated.
+
+**Method.**
+
+1. *Observations.* Consecutive month-ends of `sim_stage_history` (S1/S2 → S1/S2/S3, contract counts), per EBA
+   portfolio with the segmentation of `tools/reference/sora_reference.py` (commitments: NFC_*_OTHER, HH_OTHER). The
+   dependent rate is by default `pd_perf`, the default rate of the performing book (S1 or S2 → S3); `--transitions`
+   also allows `pd_s1`, `pd_s2`, `tr1_2`, `tr2_1`, which then share the slopes (TR2-1 with the reversed sign) as in the
+   engine. Counts are summed over rolling 12-month windows; the window hazard `h` is annualised (`1 − (1 − h)^12`)
+   and taken to the empirical logit (+0.5 correction, so windows without defaults are usable).
+2. *Drivers.* Window means of the macro series (`--lag` shifts them). `--macro-history`: a long CSV
+   (`variable,key,period|year,value`, or the scenario-file layout, whose `historical` rows are used) with `real_gdp`
+   and property prices as growth in % and `unemployment_rate` as a level in %; annual values apply to every month of
+   the year. Property slopes are estimated for the real-estate portfolios only (HH_HOUSE, NFC_*_CRE), 0 elsewhere.
+3. *Equation.* Weighted least squares on `y_{k,t} = α_k + γ_k t + s_k β′x_t` (intercept and linear trend per
+   transition type; `--no-trend` drops the trend), weights = inverse binomial variance of the empirical logit (minimum
+   logit chi-square). Intercepts and trends are removed by the within transformation. The coefficient standard error
+   is the larger of Newey-West (Bartlett, lag 11, scores summed per period) and the binomial one inflated by the
+   window overlap (× 12): the windows overlap, and HAC alone is biased down on 48 periods.
+4. *Pooling and shrinkage.* The same equation on all portfolios stacked (an intercept and trend per portfolio and
+   transition) gives the pooled slopes. Each portfolio's own slopes are shrunk towards them per coefficient with the
+   random-effects weight `τ² / (τ² + se²)` (DerSimonian-Laird `τ²` across portfolios). Portfolios with fewer than
+   `--min-events` (30) defaults over the sample, or without history, take the pooled slopes.
+5. *Sign constraints.* `β_gdp ≤ 0`, `β_u ≥ 0`, `β_p ≤ 0`. Pooled fit: active set, the coefficient with the largest
+   wrong-sign t-value is fixed at 0 and the others re-estimated, until none is wrong. Portfolio: a coefficient that
+   still has the wrong sign after shrinkage takes the pooled value (`pooled_sign_fallback` in the report).
+6. *Not estimated.* `lgd_property_sensitivity` (there is no realised-LGD history against property prices): copied
+   from `--prior`, else 0.
+
+Output: the satellite CSV (all 12 portfolios in the synthetic file's order, 6 decimals, description says how each row
+was obtained) and a JSON report with, per portfolio equation, n, default events, within R², each coefficient's own
+estimate, SE (HAC and binomial), t, shrinkage weight, pooled value and source, plus the pooled fit, `τ²` and the driver
+source. Pure Python and DuckDB (no numpy); the output is byte-identical between runs.
+
+**Reference dataset (v2, 2021-07..2026-06).** `reference/` has no historical GDP, unemployment or property series,
+only the generator's `macro_cycle_index.csv` (0.15 in expansion, trough −0.85 in mid-2024); the scenario file's
+`historical` rows cover 2024 only. The cycle index is therefore a **proxy driver**, mapped to GDP growth as
+`1.5 + 5 × cycle` (`--gdp-per-cycle`, `--normal-gdp-growth`; trough −2.75%). With one driver, `β_gdp` carries the whole
+cycle sensitivity and scales with `1 / gdp_per_cycle`; unemployment and property slopes are not identified and are 0.
+Result (default options): pooled `β_gdp` = −0.055 per pp of GDP growth (SE 0.021, within R² 0.17, 528 window
+observations, 11 portfolios); portfolio values after shrinkage −0.048 (HH_CONS) to −0.061 (HH_OTHER), with
+shrinkage weights of 0.02-0.27 (`τ²` is small: the portfolios' own slopes are consistent with a common one; OFC's own
+estimate is +0.085 ± 0.136 and ends at −0.053). The thin portfolios (GG, CB, CI, NFC, the NFC CRE portfolios and
+NFC_LARGE_OTHER: < 30 defaults) take the pooled value. The sign is right and the size is
+about half of the synthetic coefficients (−0.08 to −0.14 plus unemployment), so the estimated file gives a milder
+adverse. Findings on this data:
+
+- The history is survivor-based and grows from 10k to 51k contracts; the first nine months have no defaults and the
+  default rate drifts up. Without the trend term the default equation still has the right sign, but `pd_s1` alone
+  gets the wrong one; the trend is on by default.
+- Stage migrations move in waves at the regime switches (S1→S2 11% in 2023-07, S2→S1 51% in 2025-04), not smoothly
+  with the cycle, and the S2 → S3 rate is diluted by the SICR wave (higher in expansion). Estimating TR1-2/TR2-1/
+  PD12M_S2 jointly with the default rate gives a wrong-sign pooled slope, which the constraint sets to 0. The default
+  is therefore the default rate of the performing book, and the engine applies that slope to the migrations too.
+- The estimate is sensitive to specification: lag 3 −0.035, lag 6 −0.018, starting in 2022-04 −0.031, window 6
+  −0.050, no trend −0.061. One downturn in 60 months identifies one slope, weakly.
+
+**Limits.** Synthetic data and a proxy driver: the estimated file is a demonstration of the tooling, not a
+calibration, and `tests/params/synthetic_satellites.csv` stays the test scenario's file (goldens unchanged). The
+engine's single slope for PDs and migrations is an assumption that the data do not support well. One macro key for
+all segments (`--macro-key`), no country-specific equations, no sectoral (GVA) drivers, contract counts rather than
+exposure weights, no LGD equation, windows annualise the monthly hazard per transition (not the matrix power of the
+calibration). Customers with real drivers and longer histories should review the report's SEs and signs per
+portfolio before using a file.
+
 ## Determinism
 
 The flow model is deterministic by construction.

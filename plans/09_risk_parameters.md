@@ -250,6 +250,12 @@ The projected parameters come from the scenario engine (`03_scenario_engine.md`)
 
 The risk-parameter module only supplies the starting point and the per-segment sensitivities.
 
+The sensitivities (satellite coefficients) can be estimated from the stage history with
+`sora-tools estimate-satellites` (logit of the rolling 12-month default rate of the performing book on window-mean
+macro drivers, per portfolio, shrunk to the pooled fit, sign-constrained; JSON fit report). The reference dataset has
+no historical macro series, only the generator's cycle index, which is used as a flagged proxy for GDP growth. Method,
+results on the reference data and limits: `03_scenario_engine.md`, "Satellite estimation".
+
 ## Result data
 
 Validating the engine needs expected results. None are included in the test data. The plan (details in `06_validation.md`):
