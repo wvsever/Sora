@@ -2,6 +2,7 @@
 
 #include "sora/collateral.hpp"
 #include "sora/cr_scen.hpp"
+#include "sora/cr_sector.hpp"
 #include "sora/json_text.hpp"
 
 #include <cstdio>
@@ -124,6 +125,7 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
         const auto coll = collateral_ltv(d, s, run.macro, run.config);
         write_collateral(s, coll, dir / "collateral.csv");
         write_cr_scen(d, s, *run.projection, dir / "cr_scen.csv", &coll);
+        write_cr_sector(d, s, *run.projection, dir / "cr_sector.csv");
     }
     if (run.rea) write_rea_csv(s, *run.rea, dir / "rea.csv");
     if (run.off_balance) write_off_balance(d, s, *run.off_balance, dir);

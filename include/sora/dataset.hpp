@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "sora/duck.hpp"
+#include "sora/nace.hpp"
 #include "sora/types.hpp"
 
 namespace sora {
@@ -55,6 +56,7 @@ struct Counterparty {
     std::uint32_t country = kNone;
     EbaSector sector = EbaSector::NonFinancialCorporation;
     Flag is_sme = Flag::Unknown;
+    NaceSector nace = NaceSector::Unknown;   // CR_SECTOR sector of nace_code (NFCs)
 };
 
 struct Exposure {

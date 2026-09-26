@@ -144,6 +144,49 @@ Implemented in `src/collateral.cpp` (engine) and `tools/reference/sora_reference
 
 The reference dataset's allocated amounts are close to the exposure amounts, not to the collateral value, so LTVs are above 100% (DS-018 in `tests/data/DATASET_ISSUES.md`).
 
+## CR_SECTOR (NACE)
+
+Implemented in `src/cr_sector.cpp` (engine, `cr_sector.csv`) and `tools/reference/sora_reference.py` (reference, golden
+`tests/golden/20260630/cr_sector.csv`). Layout: EBA 2027 draft `CSV_CR_SECTOR` (the draft templates that `cr_scen.csv`
+follows), MN 2027 draft section 2.3.8.
+
+1. **Scope.** The non-financial corporations portfolio as in CR_SCEN: the NFC segments (loans and advances
+   `NFC_SME_CRE`, `NFC_SME_OTHER`, `NFC_LARGE_CRE`, `NFC_LARGE_OTHER`, and debt securities `NFC`), i.e. CR_SCEN rows 6 and
+   13. On-balance, amortised cost (the projection scope). Other financial corporations are not in scope, even though
+   NACE has a section for them (K/L): the 2027 draft limits the template to NFC exposures.
+2. **Sector.** From `sim_counterparty.nace_code` (principal activity of the counterparty), mapped to NACE Rev. 2.1
+   sections A–T **by division number** (the two digits after the letter). Division numbers mean the same in Rev. 2 and
+   Rev. 2.1; only the section letters moved (real estate L68 → M68, computer programming J62 → K62, …), so codes of
+   either revision map correctly. Manufacturing is split into *energy-intensive* (divisions C10–C12, C17–C30, 2027 draft
+   template guidance Table 4) and *other*. A bare section letter is read as a Rev. 2.1 section (a bare `C` counts as
+   *other*: the split needs the division). Divisions 97–99 (households as employers, extraterritorial bodies), missing
+   and malformed codes are *unknown*: included in the TOTAL row only (the template has no unknown row; the guidance asks
+   for them in the explanatory note), so TOTAL still reconciles with CR_SCEN. The reference dataset has none.
+3. **Projection: sector carried through, not allocated.** The projection is per exposure with its segment's
+   parameters, so the sector is simply a second aggregation key: each NFC exposure is projected once into a zeroed
+   buffer that is added to its segment and to its (segment, sector) slice (`Projection::sectors`). Adding a value to
+   0 is exact, so the segment results stay bit-identical to the projection without the breakdown, and the slices are
+   bit-identical for any `--workers N` (each segment is still processed by one worker, in exposure order). This equals
+   the MN para 114 loss-distribution option (ii), allocation by sectoral exposure, done per stage and per year: Boxes
+   3–8 are linear in the stage stocks, so a sector gets the segment's flows and provisions pro rata to its t0 exposure
+   per stage; Box 9 (old S3 floor) stays per exposure. It is exact for exposure-level customer parameters too, and
+   sectors sum to the segment. There are no sector-specific (GVA-driven) risk parameters yet: columns 1–2
+   ("percentage of exposures with projections based on sectoral models") are 0. Sectoral satellites would plug into
+   the same slices by giving each (segment, sector) its own parameter path.
+4. **Rows.** Per slot (Actual t0; Baseline, Adverse years 1–3), geography (Total, the CR_SCEN top countries, Other) and
+   23 sector rows: A, B, C (Pivot = energy-intensive + other), the two C o/w rows, D–T, TOTAL exposures to NFC (Sum).
+   All country–sector combinations are written; the MN para 98 materiality threshold (0.5% of NFC exposure) is a
+   reporting filter left to the submission step.
+5. **Columns.** The template's 46 value columns, with the CR_SCEN definitions: exposure-weighted parameters (S1
+   exposure at the start of the year for PD12M S1, TR1-2, LGD S1; S2 for PD12M S2, TR2-1, LGD S2, LRLT S2; old S3 for
+   TR3-1/TR3-2 (actual only) and LGD S3), flows, provisions (within-year and cumulative new S3), end-of-year exposures
+   and provision stocks per stage and POCI, coverage ratios. PD PiT and LGD PiT new are blank, as in `cr_scen.csv`. No
+   overlays, maturity or LTV columns (not in the template). Amounts in EUR million (8 decimals), parameters and ratios
+   in percent (7 decimals).
+6. **Checks.** TOTAL equals CR_SCEN rows 6 + 13 for every geography, scenario and year; C equals its two o/w rows;
+   the sectors add up to TOTAL (`python/tests/test_engine.py`). The golden test compares every cell with the reference
+   to 1 cent (EUR million) and 1e-9 (ratios).
+
 ## Off-balance-sheet exposures (CR_SCEN_OFF_BS)
 
 Implemented in `src/off_balance.cpp` (engine) and `tools/reference/sora_reference.py` (reference), following EBA 2027

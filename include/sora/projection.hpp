@@ -42,6 +42,17 @@ struct ParamAccum {
 };
 std::size_t param_weight_stage(std::size_t param);   // 0 = S1, 1 = S2, 2 = S3
 
+// The projection of the exposures of one NACE sector within a segment (CR_SECTOR). The sector is carried
+// through the per-exposure projection, so the sectors of a segment add up to the segment (to rounding).
+struct SectorSlice {
+    NaceSector sector = NaceSector::Unknown;
+    std::array<std::array<YearResult, 3>, 2> results{};   // [scenario][year 1..3 at 0..2]
+    std::array<std::array<ParamAccum, 4>, 2> accum{};     // [scenario][year 0..3]
+};
+
+// Segments broken down by NACE sector: those of the non-financial corporations portfolios (NFC*).
+bool has_sector_breakdown(const Segment& seg);
+
 struct Projection {
     // [segment][scenario 0=baseline,1=adverse][year 0..2 = years 1..3]
     std::vector<std::array<std::array<YearResult, 3>, 2>> results;
@@ -53,6 +64,8 @@ struct Projection {
     std::vector<std::array<std::array<std::string, 3>, 2>> path_source;
     // [segment][scenario][year 0..3] exposure-weighted parameters, including exposure-level overrides
     std::vector<std::array<std::array<ParamAccum, 4>, 2>> accum;
+    // [segment]: the segment by NACE sector, in sector order (empty unless has_sector_breakdown)
+    std::vector<std::vector<SectorSlice>> sectors;
     std::size_t exposures_with_own_parameters = 0;
     std::vector<std::string> parameter_errors;
 };

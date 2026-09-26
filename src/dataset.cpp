@@ -165,8 +165,14 @@ Dataset load_dataset(Duck& duck, const fs::path& sim_dir) {
     std::size_t rows = 0;
     reserve_keys(duck, sim_source(sim_dir, "sim_counterparty"), "counterparty_id", d.counterparty_ids, rows);
     d.counterparties.reserve(rows);
-    duck.query("SELECT CAST(counterparty_id AS VARCHAR), CAST(country_of_residence AS VARCHAR), "
-               "CAST(eba_sector AS VARCHAR), CAST(is_sme AS BOOLEAN) FROM " +
+    // nace_code is optional in the SIM schema: without the column every counterparty's sector is unknown.
+    bool has_nace = false;
+    duck.query("SELECT count(*) FROM (DESCRIBE SELECT * FROM " + sim_source(sim_dir, "sim_counterparty") +
+                   ") WHERE column_name = 'nace_code'",
+               [&](const Chunk& c) { has_nace = c.size() && c.i64(0, 0) > 0; });
+    duck.query(std::string("SELECT CAST(counterparty_id AS VARCHAR), CAST(country_of_residence AS VARCHAR), "
+                           "CAST(eba_sector AS VARCHAR), CAST(is_sme AS BOOLEAN), ") +
+                   (has_nace ? "CAST(nace_code AS VARCHAR)" : "CAST(NULL AS VARCHAR)") + " FROM " +
                    sim_source(sim_dir, "sim_counterparty") + " ORDER BY 1",
                [&](const Chunk& c) {
                    for (std::size_t r = 0; r < c.size(); ++r) {
@@ -176,6 +182,7 @@ Dataset load_dataset(Duck& duck, const fs::path& sim_dir) {
                        cp.country = d.countries.intern(c.str(1, r));
                        cp.sector = parse_eba_sector(c.str(2, r));
                        cp.is_sme = c.flag(3, r);
+                       if (c.valid(4, r)) cp.nace = nace_sector(c.str(4, r));
                        d.counterparties.push_back(cp);
                    }
                });
