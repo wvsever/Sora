@@ -1,9 +1,12 @@
 #include "doctest.h"
 
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <string>
 
+#include "sora/cr_sector.hpp"
 #include "sora/duck.hpp"
 #include "sora/projection.hpp"
 #include "sora/segmentation.hpp"
@@ -207,4 +210,99 @@ TEST_CASE("exposure_param_paths are the paths project() uses for exposure-level 
                          i == own ? paths : proj.params[g], c, seq);
     }
     CHECK(std::memcmp(&seq, &proj.results[g], sizeof seq) == 0);
+}
+
+TEST_CASE("NACE sector breakdown of the NFC segments adds up to the segments, for any number of workers") {
+    Synthetic x = synthetic(20000);
+    const char* codes[] = {"C24.10", "C13.20", "F41.20", "L68.20", "", "J62.01", "A01.11"};
+    for (std::size_t i = 0; i < x.d.counterparties.size(); ++i)
+        if (x.d.counterparties[i].sector == EbaSector::NonFinancialCorporation) x.d.counterparties[i].nace = nace_sector(codes[i % 7]);
+    const auto& [d, s, c, macro, sats, cal] = x;
+    const Projection one = project(d, s, cal, sats, macro, c, nullptr, 1);
+    std::size_t nfc = 0;
+    for (std::size_t g = 0; g < s.segments.size(); ++g) {
+        const auto& slices = one.sectors[g];
+        if (!has_sector_breakdown(s.segments[g])) {
+            CHECK(slices.empty());
+            continue;
+        }
+        ++nfc;
+        REQUIRE(slices.size() >= 2);
+        for (std::size_t k = 1; k < slices.size(); ++k) CHECK(slices[k - 1].sector < slices[k].sector);
+        for (std::size_t sc = 0; sc < 2; ++sc)
+            for (std::size_t t = 0; t < 3; ++t) {
+                std::array<double, 21> sum{};
+                for (const auto& sl : slices) {
+                    const auto f = fields(sl.results[sc][t]);
+                    for (std::size_t k = 0; k < f.size(); ++k) sum[k] += f[k];
+                }
+                const auto seg = fields(one.results[g][sc][t]);
+                for (std::size_t k = 0; k < seg.size(); ++k) CHECK(sum[k] == doctest::Approx(seg[k]).epsilon(1e-12));
+            }
+    }
+    CHECK(nfc > 2);
+    for (unsigned w : {3U, 8U}) {
+        const Projection many = project(d, s, cal, sats, macro, c, nullptr, w);
+        for (std::size_t g = 0; g < s.segments.size(); ++g) {
+            REQUIRE(many.sectors[g].size() == one.sectors[g].size());
+            for (std::size_t k = 0; k < one.sectors[g].size(); ++k)
+                CHECK(std::memcmp(&one.sectors[g][k], &many.sectors[g][k], sizeof(SectorSlice)) == 0);
+        }
+    }
+}
+
+TEST_CASE("cr_sector.csv: TOTAL rows reconcile with the NFC segments, C with its two parts") {
+    Synthetic x = synthetic(5000);
+    x.d.manifest.reference_date = "2026-06-30";
+    for (std::size_t i = 0; i < x.d.counterparties.size(); ++i)
+        x.d.counterparties[i].nace = nace_sector(i % 3 == 0 ? "C24.10" : i % 3 == 1 ? "C14.10" : "F41.20");
+    const auto& [d, s, c, macro, sats, cal] = x;
+    const Projection p = project(d, s, cal, sats, macro, c, nullptr, 2);
+    const auto file = std::filesystem::temp_directory_path() / "sora_test_cr_sector.csv";
+    write_cr_sector(d, s, p, file);
+    auto split = [](const std::string& l) {   // CSV fields; labels with commas are quoted
+        std::vector<std::string> out(1);
+        bool q = false;
+        for (char ch : l) {
+            if (ch == '"') q = !q;
+            else if (ch == ',' && !q) out.emplace_back();
+            else out.back() += ch;
+        }
+        return out;
+    };
+    std::map<std::string, double> total_exp;   // geography Total: "scenario/year/row" -> total exposure
+    std::size_t rows = 0;
+    {
+        std::ifstream in(file);
+        std::string line;
+        std::getline(in, line);
+        const auto header = split(line);
+        REQUIRE(header.size() == 8 + 46);
+        std::size_t exp_col = 0;
+        for (std::size_t k = 0; k < header.size(); ++k)
+            if (header[k] == "Total exposure (total Exp)") exp_col = k;
+        REQUIRE(exp_col > 0);
+        while (std::getline(in, line)) {
+            const auto f = split(line);
+            REQUIRE(f.size() == header.size());
+            ++rows;
+            if (f[2] == "Total") total_exp[f[3] + "/" + f[4] + "/" + f[0]] = std::stod(f[exp_col]);
+        }
+    }
+    std::filesystem::remove(file);
+    CHECK(rows == 7 * (s.top_countries.size() + 2) * 23);
+    // Adverse 2029: TOTAL = the NFC segments; C = energy-intensive + other.
+    double nfc = 0;
+    for (std::size_t g = 0; g < s.segments.size(); ++g)
+        if (has_sector_breakdown(s.segments[g])) {
+            const auto& r = p.results[g][1][2];
+            nfc += r.exp_s1 + r.exp_s2 + r.exp_s3_old + r.exp_s3_new + r.exp_poci;
+        }
+    CHECK(nfc > 0);
+    CHECK(total_exp["Adverse/2029/23"] == doctest::Approx(nfc / 1e6).epsilon(1e-9));
+    CHECK(total_exp["Adverse/2029/3"] == doctest::Approx(total_exp["Adverse/2029/4"] + total_exp["Adverse/2029/5"]).epsilon(1e-9));
+    CHECK(total_exp["Adverse/2029/4"] > 0);
+    CHECK(total_exp["Adverse/2029/5"] > 0);
+    CHECK(total_exp["Adverse/2029/8"] > 0);
+    CHECK(total_exp["Adverse/2029/1"] == 0);
 }

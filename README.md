@@ -33,7 +33,7 @@ ctest --test-dir build/release --output-on-failure          # unit tests + golde
 build/release/sora inspect build/sim/20260630
 build/release/sora run build/sim/20260630 --scenario tests/scenarios/test_eba2025.yaml -o build/out
 #   -> segments.csv, parameters.csv, projection.csv, collateral.csv (LTV), cr_scen.csv (EBA CSV_CR_SCEN layout),
-#      summary.json, diagnostics.json
+#      cr_sector.csv (EBA CSV_CR_SECTOR: NFC by NACE section), summary.json, diagnostics.json
 #   add --parameters <file> to use customer risk parameters (plans/09_risk_parameters.md)
 
 # IRB REA through a regulatory calculator (here the stub): adds rea.csv and summary.json "rea"
