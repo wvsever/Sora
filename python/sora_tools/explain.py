@@ -32,6 +32,8 @@ SOURCES = {
     "external": "customer parameter file (--parameters or sim_risk_parameter), all fields",
     "mixed": "some fields from the customer file or the ECB benchmark, the others Sora's own values",
     "benchmark": "ECB benchmark parameters for both groups (PD/TR and LGD/LR), without adjustment",
+    "calculator": "exposure-level starting point from the regulatory calculator (/v1/parameters/credit, "
+                  "--calculator-parameters); fields left empty come from the exposure's file row or its segment",
 }
 CALIBRATION_GROUPS = {
     "stage1": ("pd12m_s1", "tr1_2"),
@@ -349,6 +351,18 @@ def _overview(out: RunOutput, scenario: str | None, year: int | None, top: int) 
         narrative.append("Largest contributors over the selected years: " + ", ".join(
             f"{x['segment']} {eur_m(x['impairment'])} ({x['impairment'] / total_imp:.0%})" if total_imp else x["segment"]
             for x in top_segs[:5]) + ".")
+    nii = out.summary.get("nii")
+    if nii:
+        sp, tot = nii.get("starting_point", {}), nii.get("totals", {})
+        line = f"NII (nii.csv, plans/13_nii.md): starting point {eur_m(sp.get('nii') or 0.0)}"
+        for sc in ("baseline", "adverse"):
+            vals = [tot.get(f"{sc}/{y}", {}).get("nii") for y in (1, 2, 3)]
+            if all(v is not None for v in vals):
+                line += f"; {sc} " + " / ".join(eur_m(v) for v in vals)
+        capped = [tot.get(f"adverse/{y}", {}) for y in (1, 2, 3)]
+        if any(c.get("nii_capped") is not None and c.get("nii") is not None and c["nii_capped"] < c["nii"] for c in capped):
+            line += " (the adverse Box 22 cap binds)"
+        narrative.append(line + ".")
     if sector:
         narrative.append(f"Sectoral (GVA) satellites: {sector.get('pd_tr_share', 0):.1%} of the NFC exposure is projected "
                          f"with a sectoral PD/TR model and {sector.get('lgd_lr_share', 0):.1%} with a sectoral LGD/LR model "
@@ -356,5 +370,6 @@ def _overview(out: RunOutput, scenario: str | None, year: int | None, top: int) 
     return {"output_dir": str(out.path), "scenario_filter": scenario, "year_filter": year,
             "run": {k: out.summary.get(k) for k in ("reference_date", "scenario", "sim_mapping_release", "segments", "exposures")},
             "totals": totals, "top_segments": top_segs, "parameter_sources": sources, "sector_satellites": sector,
+            "nii": nii,
             "diagnostics": [{k: d.get(k) for k in ("id", "severity", "count", "message")} for d in out.diagnostics],
             "narrative": "\n".join(narrative)}

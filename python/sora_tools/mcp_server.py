@@ -62,8 +62,11 @@ SCENARIO_PATH_KEYS = (("macro_path",), ("satellites",), ("starting_parameters",)
 
 OUTPUT_FILES = {
     "segments.csv": "Segments and starting-point stocks: exposure and provisions per stage (EUR).",
+    "prior_year.csv": "Stocks per segment at the prior year-end (CR_SCEN/CR_SECTOR prior-year Actual rows; EUR, "
+                      "blank where not derivable).",
     "parameters.csv": "Starting-point and projected parameters per segment, scenario and year, with source "
-                      "(derived/external/mixed/benchmark) and calibration_levels.",
+                      "(derived/external/mixed/benchmark) and calibration_levels; with --calculator-parameters also "
+                      "exposure rows (actual/0) with the fields taken from the calculator (source calculator).",
     "projection.csv": "Stage flows, exposures, provisions per component (EBA Boxes 3-9) and impairment per "
                       "segment, scenario and year.",
     "collateral.csv": "Static-balance-sheet LTV per segment, scenario, year and t0 stage.",
@@ -73,7 +76,11 @@ OUTPUT_FILES = {
     "cr_scen_off_bs.csv": "EBA CSV_CR_SCEN_OFF_BS template.",
     "cr_sector.csv": "EBA CSV_CR_SECTOR template (NFC by NACE section).",
     "rea.csv": "IRB REA and expected loss per segment, scenario and year (with --calculator).",
-    "summary.json": "Totals per scenario and year, starting point, benchmark and off-balance summaries.",
+    "calculator_parameters.csv": "Credit parameters returned per exposure by the calculator's /v1/parameters/credit "
+                                 "(with --calculator-parameters): status, values, and which were used.",
+    "nii.csv": "Net interest income (scenario key nii) per scenario, year, EBA CSV_NII_CALC row, currency, rate type "
+               "and performing status: volume, interest with reference-rate and margin parts, EIR (EUR).",
+    "summary.json": "Totals per scenario and year, starting point, benchmark, off-balance and NII summaries.",
     "diagnostics.json": "Engine findings (id, severity, count, message).",
 }
 

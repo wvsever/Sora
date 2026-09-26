@@ -61,13 +61,24 @@ Method (see plans/03_scenario_engine.md and plans/09_risk_parameters.md):
    (the benchmark wins); a segment whose exposures all have a sectoral model counts as modelled for the benchmark rule.
    Segments are projected as the sum of their parts with the same path (projection.csv, CR_SECTOR); off-balance items
    take the path of their counterparty's sector.
-9. Net interest income (scenario key `nii`, EBA MN 2025 section 4, plans/13_nii.md). Position by position (assets
-   from sim_exposure except held for trading, deposits, debt issued except AT1; intragroup excluded), static balance
-   sheet: EIR = reference rate (bank risk-free curve at the position's tenor) + margin; floating positions reset the
-   reference rate (+ scenario swap change) on their reset dates; maturing positions are replaced with the same original
-   term at the scenario reference rate plus the new business margin of their cell and the Box 23-24 margin path; sight
-   deposits reprice every year with the MN pass-through (household EIR >= 0); NPE earn the t0 EIR net of provisions.
-   nii.csv by CSV_NII_CALC row, currency, rate type and status; summary "nii" with the adverse Box 22 cap.
+9. Prior-year Actual rows (EBA 2027 draft MN para 71 and Table 2: end-of-year stocks of the year before the starting
+   point, "according to the portfolios applicable" at the starting point). The date is 31 December of the year before
+   the reference date's year (scenario key `prior_year_end` overrides it); the rows carry its year. Each in-scope t0
+   exposure with a stage history row at that date contributes, in its t0 segment and NACE sector, its stage at that
+   date, its exposure (gross_carrying_amount, else the principal_outstanding proxy) and its loss allowance, at that
+   date's FX rate. A facility whose undrawn part is off-balance keeps the drawn share of the allowance: pro rata to
+   the history amounts where the history has the undrawn amount, else the t0 share. Nothing is estimated for an
+   exposure without an amount (or FX rate): the exposure (provision) cells of every row it belongs to are blank.
+   Parameters, flows, overlays, maturity and LTV are not reported for the prior year (MN Table 3: parameters for the
+   starting point only; para 74: no flows at the starting point). Outputs prior_year.csv (per segment) and the
+   CR_SECTOR prior-year rows (the engine also writes them in cr_scen.csv).
+10. Net interest income (scenario key `nii`, EBA MN 2025 section 4, plans/13_nii.md). Position by position (assets
+    from sim_exposure except held for trading, deposits, debt issued except AT1; intragroup excluded), static balance
+    sheet: EIR = reference rate (bank risk-free curve at the position's tenor) + margin; floating positions reset the
+    reference rate (+ scenario swap change) on their reset dates; maturing positions are replaced with the same original
+    term at the scenario reference rate plus the new business margin of their cell and the Box 23-24 margin path; sight
+    deposits reprice every year with the MN pass-through (household EIR >= 0); NPE earn the t0 EIR net of provisions.
+    nii.csv by CSV_NII_CALC row, currency, rate type and status; summary "nii" with the adverse Box 22 cap.
 """
 
 from __future__ import annotations
@@ -1095,6 +1106,142 @@ def write_sector_parameters(path: Path, rows: list):
                                 *(f"{P[scen][t][k]:.9f}" for k in PARAMS), use["pd_tr"], use["lgd_lr"]])
 
 
+# ----------------------------------------------------------------------------------------- prior year
+
+PRIOR_STAGES = (*STAGES, "poci")
+
+
+def prior_year_end(cfg, reference_date: str) -> str:
+    """Date of the prior-year Actual rows: the scenario key prior_year_end, else 31 December of the year before the
+    reference date's year (EBA: the end of the year before the starting point). A month end in a calendar year
+    before the reference date's (the template labels the rows with its year)."""
+    ref_year = int(reference_date[:4])
+    value = cfg.get("prior_year_end")
+    date = str(value) if value is not None else f"{ref_year - 1}-12-31"
+    try:
+        y, m, d = (int(x) for x in date.split("-"))
+        ok = len(date) == 10 and d == calendar.monthrange(y, m)[1] and y < ref_year
+    except ValueError:
+        ok = False
+    if not ok:
+        raise ValueError(f"prior_year_end {date}: must be a month end (YYYY-MM-DD) in a year before the reference date")
+    return date
+
+
+def prior_year_stocks(con, exposures, cfg, manifest) -> tuple[dict, dict]:
+    """Stocks at the prior year-end per in-scope t0 exposure with a stage history row at that date:
+    {exposure_id: (stage, exposure, allowance, has_amount)} in the reporting currency (exposure None without an amount
+    or FX rate, allowance None without an FX rate), and the counts of the summary."""
+    date = prior_year_end(cfg, manifest["reference_date"])
+    ccy = manifest["reporting_currency"]
+    columns = {r[0] for r in con.execute("DESCRIBE sim_stage_history").fetchall()}
+    principal = "CAST(h.principal_outstanding AS DOUBLE)" if "principal_outstanding" in columns else "NULL"
+    rows = con.execute(f"""
+        SELECT CAST(h.exposure_id AS VARCHAR), CAST(h.stage AS VARCHAR), CAST(h.gross_carrying_amount AS DOUBLE),
+               {principal}, CAST(h.off_balance_amount AS DOUBLE), CAST(h.loss_allowance AS DOUBLE), fx.r
+        FROM sim_stage_history h
+        LEFT JOIN (SELECT CAST(currency AS VARCHAR) AS currency, CAST(rate_to_reporting AS DOUBLE) AS r FROM sim_fx_rate
+                   WHERE rate_date = DATE '{date}' AND CAST(currency AS VARCHAR) <> '{ccy}'
+                   UNION ALL SELECT '{ccy}', 1.0) fx ON fx.currency = CAST(h.currency AS VARCHAR)
+        WHERE h.period_end = DATE '{date}'
+        ORDER BY 1
+    """).fetchall()
+    known = {r[0] for r in con.execute("SELECT CAST(exposure_id AS VARCHAR) FROM sim_exposure").fetchall()}
+    by_id = {r["exposure_id"]: r for r in exposures}
+    stats = {"date": date, "year": int(date[:4]), "available": bool(rows), "history_rows": len(rows), "exposures": 0,
+             "amount_gca": 0, "amount_principal": 0, "missing_amount": 0, "missing_fx": 0,
+             "allowance_split_history": 0, "allowance_split_t0_share": 0, "out_of_scope": 0, "not_in_sim_exposure": 0,
+             "not_in_sim_exposure_allowance": 0.0}
+    out = {}
+    for eid, stage, gca, prin, undrawn, allowance, fx in rows:
+        r = by_id.get(eid)
+        if r is None:
+            if eid in known:
+                stats["out_of_scope"] += 1              # not in the t0 scope (measurement, type, intragroup)
+            else:                                       # derecognised before t0: no t0 portfolio, counted only
+                stats["not_in_sim_exposure"] += 1
+                if fx is not None:
+                    stats["not_in_sim_exposure_allowance"] += allowance * fx
+            continue
+        stats["exposures"] += 1
+        amount = gca if gca is not None else prin
+        stats["amount_gca" if gca is not None else "amount_principal" if prin is not None else "missing_amount"] += 1
+        if fx is None:
+            stats["missing_fx"] += 1
+            out[eid] = (stage, None, None, amount is not None)
+            continue
+        prov = allowance * fx
+        if undrawn_is_off_balance(r, cfg):                  # drawn share of a facility's allowance, as at t0
+            if undrawn is not None and amount is not None:
+                stats["allowance_split_history"] += 1
+                if undrawn > 0:
+                    prov = prov * (amount / (amount + undrawn))
+            elif r["undrawn"] > 0:
+                stats["allowance_split_t0_share"] += 1
+                prov = prov * (r["drawn"] / (r["drawn"] + r["undrawn"]))
+        out[eid] = (stage, None if amount is None else amount * fx, prov, amount is not None)
+    return out, stats
+
+
+def new_prior() -> dict:
+    return {**{f"exp_{k}": 0.0 for k in PRIOR_STAGES}, **{f"prov_{k}": 0.0 for k in PRIOR_STAGES},
+            "contracts": 0, "missing_amount": 0, "missing_fx": 0}
+
+
+def add_prior(agg, item):
+    """Adds one exposure's prior-year stock; a missing amount or FX rate is counted, not estimated."""
+    stage, amount, prov, has_amount = item
+    key = "poci" if stage == "poci" else STAGES[int(stage[-1]) - 1]
+    agg["contracts"] += 1
+    agg["missing_amount"] += 0 if has_amount else 1
+    agg["missing_fx"] += 1 if prov is None else 0
+    if amount is not None:
+        agg[f"exp_{key}"] += amount
+    if prov is not None:
+        agg[f"prov_{key}"] += prov
+
+
+def prior_complete(agg, available: bool) -> tuple[bool, bool]:
+    """(exposures known, provisions known) for a prior-year cell."""
+    return (available and agg["missing_amount"] == 0 and agg["missing_fx"] == 0,
+            available and agg["missing_fx"] == 0)
+
+
+def write_prior_year(path: Path, segments, exposures, prior, stats) -> dict:
+    """prior_year.csv: stocks per t0 segment at the prior year-end (EUR). Exposures (provisions) are blank when an
+    exposure of the segment has no amount or FX rate (no FX rate), all amounts when the history has no rows then."""
+    agg = {s: new_prior() for s in segments}
+    for r in exposures:
+        if r["exposure_id"] in prior:
+            add_prior(agg[r["segment"]], prior[r["exposure_id"]])
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(["segment", "date", "contracts", "missing_amount", "missing_fx",
+                    *(f"exp_{k}" for k in ("s1", "s2", "s3", "poci")), *(f"prov_{k}" for k in ("s1", "s2", "s3", "poci"))])
+        for s in segments:
+            a = agg[s]
+            exp_ok, prov_ok = prior_complete(a, stats["available"])
+            w.writerow([s, stats["date"], a["contracts"], a["missing_amount"], a["missing_fx"],
+                        *(f"{a[f'exp_{k}']:.2f}" if exp_ok else "" for k in PRIOR_STAGES),
+                        *(f"{a[f'prov_{k}']:.2f}" if prov_ok else "" for k in PRIOR_STAGES)])
+    return agg
+
+
+def prior_summary(stats, agg) -> dict:
+    """summary.json "prior_year": the date, counts, and the stock totals (null unless every exposure is known)."""
+    total = new_prior()
+    for a in agg.values():
+        for k, v in a.items():
+            total[k] += v
+    exp_ok, prov_ok = prior_complete(total, stats["available"])
+    out = dict(stats)
+    out["not_in_sim_exposure_allowance"] = round(stats["not_in_sim_exposure_allowance"], 2)
+    names = dict(zip(PRIOR_STAGES, ("s1", "s2", "s3", "poci")))
+    out["stocks"] = {**{f"exp_{names[k]}": round(total[f"exp_{k}"], 2) if exp_ok else None for k in PRIOR_STAGES},
+                     **{f"prov_{names[k]}": round(total[f"prov_{k}"], 2) if prov_ok else None for k in PRIOR_STAGES}}
+    return out
+
+
 # ----------------------------------------------------------------------------------------- CR_SECTOR
 
 # NACE Rev. 2.1 sections by division (01..99). Division numbers mean the same sections in NACE Rev. 2, except for
@@ -1304,41 +1451,101 @@ CR_SECTOR_COLUMNS = (
 )
 
 
-def write_cr_sector(path: Path, cells: dict, top: list[str], ref_year: int):
+# Stock columns of the prior-year rows (MN 2027 draft Table 2): blank where an exposure has no amount or FX rate.
+PRIOR_EXPOSURE_COLUMNS = {
+    "Total exposure (total Exp)", "Performing exposure (Exp)", "Performing exposure (Perf Exp)",
+    "of which: stage 1 (Exp S1)", "of which: stage 2 (Exp S2)", "Non-performing exposure (Exp S3)",
+    "of which: existing Non-performing exposure (Old Exp S3)",
+    "of which: cumulative new non-performing exposure (Cumul New Exp S3)", "POCI exposures (Exp POCI)"}
+PRIOR_COVERAGE_COLUMNS = {"Coverage ratio: performing exposure", "Coverage ratio: non-performing exposure"}
+
+
+def prior_agg(p: dict) -> dict:
+    """A CR_SECTOR cell of prior-year stocks (all S3 is existing S3, as at t0); parameters and flows stay empty."""
+    a = new_agg()
+    for k, stage in (("s1", "stage1"), ("s2", "stage2"), ("s3_old", "stage3"), ("poci", "poci")):
+        a[f"exp_{k}"] = p[f"exp_{stage}"]
+    for k, stage in (("s1", "stage1"), ("s2", "stage2"), ("s3", "stage3"), ("poci", "poci")):
+        a[f"prov_{k}"] = p[f"prov_{stage}"]
+    return a
+
+
+def template_values(columns, a, actual: bool, known=None) -> list[str]:
+    """Formatted template cells: amounts in EUR million (8 decimals), parameters and ratios in percent (7 decimals).
+    `known` = (exposures known, provisions known) for prior-year rows: stock cells that are not known are blank."""
+    values = []
+    for header, pct, get in columns:
+        v = get(a, actual)
+        if known is not None:
+            exp_ok, prov_ok = known
+            if header in PRIOR_EXPOSURE_COLUMNS:
+                v = v if exp_ok else None
+            elif header in PRIOR_COVERAGE_COLUMNS:
+                v = v if exp_ok and prov_ok else None
+            elif not pct:
+                v = v if prov_ok else None
+        values.append("" if v is None else f"{v * 100.0:.7f}" if pct else f"{v / 1e6:.8f}")
+    return values
+
+
+def write_cr_sector(path: Path, cells: dict, top: list[str], ref_year: int, prior: dict | None = None):
     """cr_sector.csv in the 2027 draft CSV_CR_SECTOR layout: 23 sector rows per geography (Total, top countries,
-    Other), scenario and year. Amounts in EUR million (8 decimals), parameters and ratios in percent (7 decimals)."""
+    Other), scenario and year. Amounts in EUR million (8 decimals), parameters and ratios in percent (7 decimals).
+    `prior` = {"cells": {(segment, sector): prior-year stock}, "year": label, "available": bool}: the prior-year
+    Actual rows come first (stocks only, MN 2027 draft para 71 and Table 2)."""
     geos = ["Total", *top, "Other"]
+
+    def members_of(geo, members, keys):
+        for seg, sector in keys:
+            bucket = seg.split("|")[2]
+            if geo != "Total" and bucket != (geo if geo != "Other" else "OTHER"):
+                continue
+            if members is not None and sector not in members:
+                continue
+            yield seg, sector
+
     with open(path, "w", newline="") as f:
         w = csv.writer(f, lineterminator="\n")
         w.writerow(["RowNum", "Pivot", "Geographical breakdown", "Scenario", "Year", "COREP asset class", "NACE code",
                     "Exposures by sector of economic activity (as per scope defined in section 2.3.3 EBA Methodology Note)",
                     *(c[0] for c in CR_SECTOR_COLUMNS)])
+        if prior is not None:
+            for geo in geos:
+                for num, pivot, key, members in CR_SECTOR_ROWS:
+                    p = new_prior()
+                    for k in members_of(geo, members, prior["cells"].keys()):
+                        for field, v in prior["cells"][k].items():
+                            p[field] += v
+                    values = template_values(CR_SECTOR_COLUMNS, prior_agg(p), True, prior_complete(p, prior["available"]))
+                    w.writerow([num, pivot, geo, "Actual", prior["year"], "Exposures in scope of CSV_CR_SECTOR",
+                                CR_SECTOR_LABELS[key], CR_SECTOR_LABELS[key], *values])
         for slot, (sc, t) in enumerate(SLOTS):
             for geo in geos:
                 for num, pivot, key, members in CR_SECTOR_ROWS:
                     a = new_agg()
-                    for (seg, sector), slots in cells.items():
-                        bucket = seg.split("|")[2]
-                        if geo != "Total" and bucket != (geo if geo != "Other" else "OTHER"):
-                            continue
-                        if members is not None and sector not in members:
-                            continue
-                        b = slots[slot]
-                        for k in AMOUNTS:
-                            a[k] += b[k]
+                    for k in members_of(geo, members, cells.keys()):
+                        b = cells[k][slot]
+                        for field in AMOUNTS:
+                            a[field] += b[field]
                         for i in range(3):
                             a["w"][i] += b["w"][i]
                         a["sw"] += b["sw"]
                         for i in range(2):
                             a["sused"][i] += b["sused"][i]
-                        for k in PARAMS:
-                            a["psum"][k] += b["psum"][k]
-                    values = []
-                    for _, pct, get in CR_SECTOR_COLUMNS:
-                        v = get(a, slot == 0)
-                        values.append("" if v is None else f"{v * 100.0:.7f}" if pct else f"{v / 1e6:.8f}")
+                        for field in PARAMS:
+                            a["psum"][field] += b["psum"][field]
                     w.writerow([num, pivot, geo, sc.capitalize(), ref_year + t, "Exposures in scope of CSV_CR_SECTOR",
-                                CR_SECTOR_LABELS[key], CR_SECTOR_LABELS[key], *values])
+                                CR_SECTOR_LABELS[key], CR_SECTOR_LABELS[key],
+                                *template_values(CR_SECTOR_COLUMNS, a, slot == 0)])
+
+
+def prior_sector_cells(exposures, prior) -> dict:
+    """{(segment, sector): prior-year stock} of the NFC segments (the CR_SECTOR scope), by t0 segment and sector."""
+    cells = {}
+    for r in exposures:
+        if r["portfolio"].startswith("NFC") and r["exposure_id"] in prior:
+            add_prior(cells.setdefault((r["segment"], nace_sector(r["nace_code"])), new_prior()), prior[r["exposure_id"]])
+    return dict(sorted(cells.items()))
 
 
 # ----------------------------------------------------------------------------------------- NII (EBA MN section 4)
@@ -1918,8 +2125,13 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
 
     write_collateral(out / "collateral.csv", collateral_ltv(con, exposures, macro, cfg, manifest))
     top = top_countries(exposures, cfg["segmentation"]["top_countries"])
+    # Prior-year Actual rows (EBA 2027 draft MN para 71, Table 2): stocks at the prior year-end in t0 portfolios.
+    prior, prior_stats = prior_year_stocks(con, exposures, cfg, manifest)
+    prior_agg_by_segment = write_prior_year(out / "prior_year.csv", segments, exposures, prior, prior_stats)
     write_cr_sector(out / "cr_sector.csv", sector_cells(exposures, params0, projected, cfg, sector_paths, sector_use),
-                    top, int(manifest["reference_date"][:4]))
+                    top, int(manifest["reference_date"][:4]),
+                    {"cells": prior_sector_cells(exposures, prior), "year": prior_stats["year"],
+                     "available": prior_stats["available"]})
 
     summary = {
         "reference_date": manifest["reference_date"], "sim_mapping_release": manifest.get("mapping_release"),
@@ -1931,6 +2143,7 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
         "totals": {f"{sc}/{y}": {k: round(v, 2) for k, v in d.items()} for (sc, y), d in sorted(totals.items())},
     }
 
+    summary["prior_year"] = prior_summary(prior_stats, prior_agg_by_segment)
     if bcfg:
         summary["benchmark"] = benchmark_summary(bcfg, decisions, pivots)
     if scfg:

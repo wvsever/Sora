@@ -16,7 +16,7 @@ sora-tools map mappings/cppbank --export build/testdata/20260630 -o build/sim/20
 sora-tools validate build/sim/20260630 --modules core credit calibration nii
 
 sora-tools scenario-import <macro.xlsx> <gva.xlsx> -o scenarios/eba2025_macro.csv
-sora-tools calculator-stub --mode formula --port 8080
+sora-tools calculator-stub --mode formula --port 8080   # --reject <regex>, --omit <parameters>, --latency <s>
 
 sora-tools estimate-satellites build/sim/20260630 \
     --cycle-index build/testdata/20260630/reference/macro_cycle_index.csv \

@@ -1,5 +1,6 @@
 add_executable(sora_tests test_main.cpp test_core.cpp test_projection.cpp test_collateral.cpp test_cr_sector.cpp
-  test_off_balance.cpp test_benchmark.cpp test_sector_satellites.cpp test_nii.cpp)
+  test_off_balance.cpp test_benchmark.cpp test_sector_satellites.cpp test_prior_year.cpp
+  test_nii.cpp)
 target_link_libraries(sora_tests PRIVATE sora_core)
 target_include_directories(sora_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/doctest)
 add_test(NAME sora_unit COMMAND sora_tests)

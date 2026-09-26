@@ -25,7 +25,7 @@ A small, stress-test-oriented model. The 54-table test dataset is a source layou
 | `sim_collateral` | Collateral item | Form, property country and type, value, valuation date, lien rank |
 | `sim_collateral_allocation` | Exposure × collateral | Allocated amount, rank |
 | `sim_guarantee` | Protection item | Form, guarantor, amount, protected exposure |
-| `sim_stage_history` | Exposure × period | Stage, gross carrying amount, allowance (for calibration) |
+| `sim_stage_history` | Exposure × period | Stage, gross carrying amount (optional principal outstanding as a proxy), allowance (for calibration and the prior-year Actual rows of CR_SCEN / CR_SECTOR) |
 | `sim_default_history` | Defaulted exposure | Default date, EAD at default, recoveries, costs, write-offs (for LGD) |
 | `sim_cashflow` | Exposure × date | Contractual flows (NII module; not yet in the schema) |
 | `sim_deposit` | Contract | Deposits received: type (sight / notice / term), rate and repricing, DGS and operational flags (NII and funding modules) |

@@ -30,6 +30,7 @@ sources:
     collateral_allocation:
     guarantee_received:
     impairment_allowance:
+    contract_rate_principal_history:
     contract_credit_event:
     contract_default_cure_event:
     contract_event:

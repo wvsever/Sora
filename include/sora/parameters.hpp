@@ -11,6 +11,7 @@
 //   (derived calibration for the starting point, satellite projection for later years).
 
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <functional>
@@ -46,7 +47,7 @@ class ExternalParameters {
 public:
     // Loads from a FROM-clause source (read_parquet/read_csv). Unknown scenarios or levels are errors.
     void load(Duck& duck, const std::string& source, const Dataset& d);
-    bool empty() const noexcept { return rows_ == 0; }
+    bool empty() const noexcept { return rows_ == 0 && extras_.empty(); }
     std::size_t rows() const noexcept { return rows_; }
 
     // Field-wise overlay for a segment (walks the hierarchy from general to specific, so specific wins).
@@ -64,6 +65,21 @@ public:
 
     std::vector<std::string> unknown_keys;   // keys that match no segment level or exposure (diagnostics)
 
+    // Exposure-level starting-point values (actual/0) from the regulatory calculator (/v1/parameters/credit,
+    // credit_parameters.hpp). Sets the fields of `values` that the loaded rows do not supply for the exposure, so a
+    // loaded exposure row wins field by field. Returns the fields set, as a bit mask (bit i = kParamNames[i]).
+    std::uint32_t fill_exposure(std::size_t exposure, const OptParams& values);
+
+    // Starting-point ccf, pd_reg and lgd_reg of an exposure from the calculator. The loaded source's values of these
+    // columns are read by their consumers (off-balance CCF, IRB records) from the SQL source; a calculator value
+    // is stored here only where that source has no exposure-level value, and consumers take it after their
+    // exposure rows and before their segment rows.
+    struct ExposureExtras {
+        std::optional<double> ccf, pd_reg, lgd_reg;
+    };
+    void set_exposure_extras(std::size_t exposure, const ExposureExtras& x) { extras_[exposure] = x; }
+    const std::unordered_map<std::size_t, ExposureExtras>& exposure_extras() const noexcept { return extras_; }
+
 private:
     static std::size_t slot(ParamKey k) { return static_cast<std::size_t>(k.scenario == 0 ? 0 : (k.scenario - 1) * 3 + k.year); }
     using Slots = std::array<OptParams, 7>;   // actual/0, baseline/1..3, adverse/1..3
@@ -74,6 +90,7 @@ private:
     };
     std::unordered_map<std::string, Slots, KeyHash, std::equal_to<>> by_level_;
     std::unordered_map<std::size_t, Slots> by_exposure_;
+    std::unordered_map<std::size_t, ExposureExtras> extras_;
     std::size_t rows_ = 0;
 };
 

@@ -190,6 +190,9 @@ OffBalanceResult project_off_balance(Duck& duck, const Dataset& d, const Segment
     out.types = ob.types;
     CustomerCcf customer;
     customer.load(duck, parameter_source, d);
+    if (external)   // calculator CCFs (/v1/parameters/credit), stored only where the source has no exposure-level ccf
+        for (const auto& [i, x] : external->exposure_extras())
+            if (x.ccf) customer.set_exposure(i, *x.ccf);
     const auto cancellable = cancellable_flags(duck, d);
 
     std::unordered_map<std::string, std::size_t> segment_index;

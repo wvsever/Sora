@@ -134,7 +134,7 @@ Baseline: short EUR rates fall (1M swap -0.8pp against the 2024 starting point),
 reprice down; NII -3% to -5%. Adverse: rates rise (EUR 1M +0.9pp in year 1, 5Y +1.1pp) and funding margins widen with
 the idiosyncratic 50 bps (gamma 0.5-1 on term deposits and bonds) and the sovereign spread; liabilities reprice faster
 (term deposits of 3-12 months) than the fixed-rate assets: NII -37% / -53% / -46%. The Box 22 cap does not bind.
-The results are synthetic (the curves of the export are steep and high, DS-048), not a stress-test outcome.
+The results are synthetic (the curves of the export are steep and high, DS-050), not a stress-test outcome.
 
 ## Decisions and deviations from the MN
 

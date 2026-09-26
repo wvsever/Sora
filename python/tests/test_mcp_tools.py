@@ -478,3 +478,23 @@ def test_explain_and_diff_sector_satellites(tmp_path):
     assert d["files"]["sector_parameters.csv"]["rows_changed"] == 1          # filtered to adverse year 2
     m = d["impairment"]["top_movers"][0]
     assert any(x.startswith("sector F path: pd12m_s1") for x in m["drivers"])
+
+
+def test_nii_in_explain_diff_and_output_files(tmp_path):
+    """nii.csv is a known output file: keyed rows in diff-runs (EIR compared to 1e-9), the NII line in the explain
+    overview, and a described file in sora-mcp."""
+    from sora_tools.mcp_server import OUTPUT_FILES
+    from sora_tools.results import FILE_KEYS
+    assert "nii.csv" in OUTPUT_FILES and "nii.csv" in FILE_KEYS
+    overview = explain_result(GOLDEN)
+    assert overview["nii"]["starting_point"]["nii"] > 0 and "NII (nii.csv" in overview["narrative"]
+    b = _copy_golden(tmp_path / "b")
+    with open(b / "nii.csv") as f:
+        rows = list(csv.DictReader(f))
+    rows[0]["eir"] = f"{float(rows[0]['eir']) + 1e-6:.9f}"            # a rate change far below the money tolerance
+    with open(b / "nii.csv", "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]), lineterminator="\n")
+        w.writeheader()
+        w.writerows(rows)
+    r = diff_runs(GOLDEN, b)
+    assert r["files"]["nii.csv"]["rows_changed"] == 1 and "eir" in r["files"]["nii.csv"]["columns"]

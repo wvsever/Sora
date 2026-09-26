@@ -146,6 +146,7 @@ ScenarioConfig load_scenario(const fs::path& yaml, const fs::path& base_dir) {
     c.blend_adverse = num<double>(blend[0]);
     c.blend_baseline = num<double>(blend[1]);
     if (c.year_map.size() != 3) throw Error("scenario: year_map must define projection years 1..3");
+    if (root.has_child(ryml::to_csubstr("prior_year_end"))) c.prior_year_end = str(root["prior_year_end"]);
 
     if (root.has_child(ryml::to_csubstr("off_balance"))) {
         auto ob = root["off_balance"];

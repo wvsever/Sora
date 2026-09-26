@@ -85,6 +85,20 @@ std::size_t ExternalParameters::apply_exposure(std::size_t exposure, ParamKey k,
     return n;
 }
 
+std::uint32_t ExternalParameters::fill_exposure(std::size_t exposure, const OptParams& values) {
+    if (!values.any()) return 0;
+    const auto [it, inserted] = by_exposure_.try_emplace(exposure);
+    if (inserted) ++rows_;
+    auto& op = it->second[slot({0, 0})];
+    std::uint32_t mask = 0;
+    for (std::size_t i = 0; i < kParamCount; ++i)
+        if (values.v[i] && !op.v[i]) {
+            op.v[i] = values.v[i];
+            mask |= 1U << i;
+        }
+    return mask;
+}
+
 int ExternalParameters::segment_level(const Segmentation& s, const Segment& seg, ParamKey k, std::size_t param) const {
     for (std::size_t lv = 0; lv < seg.levels.size(); ++lv) {   // specific -> general
         const auto f = by_level_.find(s.level_keys.view(seg.levels[lv]));

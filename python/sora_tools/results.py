@@ -16,6 +16,7 @@ SCENARIOS = ("actual", "baseline", "adverse")
 # Key columns per output file (the rest are values). Unknown CSV files are keyed by their text columns.
 FILE_KEYS: dict[str, tuple[str, ...]] = {
     "segments.csv": ("segment",),
+    "prior_year.csv": ("segment", "date"),
     "parameters.csv": ("level", "key", "scenario", "year"),
     "projection.csv": ("segment", "scenario", "year"),
     "collateral.csv": ("segment", "scenario", "year"),
@@ -28,9 +29,12 @@ FILE_KEYS: dict[str, tuple[str, ...]] = {
     "cr_scen_off_bs.csv": ("Pivot", "Geographical breakdown", "Scenario", "Year", "Portfolio", "Asset class 1",
                            "Asset class 2", "Asset classes"),
     "cr_sector.csv": ("Pivot", "Geographical breakdown", "Scenario", "Year", "COREP asset class", "NACE code"),
+    "nii.csv": ("scenario", "year", "template_row", "currency", "rate_type", "status"),
 }
 # Files of rates (decimal fractions): compared to 1e-9 absolute, not to the money tolerance.
 RATE_FILES = {"parameters.csv", "sector_parameters.csv"}
+# Rate columns in files of amounts (nii.csv: EIR and new business margin): also compared to 1e-9.
+RATE_COLUMNS = {"eir", "margin_new_business"}
 # Columns that are neither keys nor compared as numbers (row numbers change when rows are added).
 IGNORED_COLUMNS = {"RowNum"}
 

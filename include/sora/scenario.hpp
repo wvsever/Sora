@@ -70,6 +70,9 @@ struct ScenarioConfig {
     CalibrationConfig calibration;
     bool no_cure_from_s3 = true;
     double blend_adverse = 5.0 / 6.0, blend_baseline = 1.0 / 6.0;
+    // Prior-year Actual rows of CR_SCEN / CR_SECTOR (prior_year.hpp): YYYY-MM-DD, empty = 31 December of the
+    // year before the reference date's year (scenario key prior_year_end).
+    std::string prior_year_end;
     OffBalanceConfig off_balance;
     BenchmarkConfig benchmark;
     SectorSatelliteConfig sector_satellites;

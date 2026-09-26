@@ -139,7 +139,7 @@ def test_cr_scen_layout_and_consistency(base_run):
     rows = list(csv.DictReader(open(base_run / "cr_scen.csv")))
     summary = json.loads((base_run / "summary.json").read_text())
     geos = {r["Geographical breakdown"] for r in rows}
-    assert len(rows) == 7 * len(geos) * 22 and {"Total", "Other"} <= geos
+    assert len(rows) == 8 * len(geos) * 22 and {"Total", "Other"} <= geos     # prior-year Actual, Actual, 2 x 3 years
     assert len(rows[0]) == 9 + 54
     idx = {(r["Geographical breakdown"], r["Scenario"], r["Year"], r["RowNum"]): r for r in rows}
     num = lambda r, c: float(r[c] or 0)  # noqa: E731
@@ -150,6 +150,9 @@ def test_cr_scen_layout_and_consistency(base_run):
     assert abs(num(total0, exp) * 1e6 - (sp["exp_s1"] + sp["exp_s2"] + sp["exp_s3"] + sp["exp_poci"])) < 1
     for (geo, scen, year, n), r in idx.items():
         if n != "22":
+            continue
+        if any(idx[(geo, scen, year, k)][exp] == "" for k in ("1", "8", "9", "10", "11", "12", "13", "18", "22")):
+            assert year == "2025"          # prior-year rows: blank where an exposure has no history amount
             continue
         # Total = debt securities + loans; loans = CB + GG + CI + OFC + NFC + HH.
         parts = sum(num(idx[(geo, scen, year, k)], exp) for k in ("1", "8"))
@@ -200,10 +203,16 @@ def test_cr_sector_matches_golden_and_reconciles_with_cr_scen(base_run):
         for col in amounts:
             nfc = num(scen[(geo, sc, year, "6")], col) + num(scen[(geo, sc, year, "13")], col)
             assert abs(num(t, col) - nfc) < 1e-6, (geo, sc, year, col)
-            parts = sum(num(a[(str(n), geo, sc, year)], col) for n in (1, 2, 3, *range(6, 23)))
-            assert abs(num(t, col) - parts) < 1e-6, (geo, sc, year, col)                  # no unknown sectors here
-            c = num(a[("3", geo, sc, year)], col)
-            assert abs(c - num(a[("4", geo, sc, year)], col) - num(a[("5", geo, sc, year)], col)) < 1e-6
+            if not t[col]:   # prior-year rows: blank where an exposure has no history amount (flows: all Actual rows)
+                assert sc == "Actual", (geo, sc, year, col)
+            else:
+                parts = sum(num(a[(str(n), geo, sc, year)], col) for n in (1, 2, 3, *range(6, 23)))
+                assert abs(num(t, col) - parts) < 1e-6, (geo, sc, year, col)              # no unknown sectors here
+            c = [a[(n, geo, sc, year)][col] for n in ("3", "4", "5")]
+            if all(c):
+                assert abs(float(c[0]) - float(c[1]) - float(c[2])) < 1e-6
+            else:
+                assert sc == "Actual", (geo, sc, year, col)
     exp = "Total exposure (total Exp)"
     # The reference data's manufacturers are all in energy-intensive divisions (C10, C19-C21, C23-C25, C28).
     assert num(a[("4", "Total", "Actual", "2026")], exp) > 0 and num(a[("5", "Total", "Actual", "2026")], exp) == 0
@@ -232,7 +241,8 @@ def test_collateral_matches_golden_and_cr_scen_ltv(base_run):
             s[i] += float(r[c])
     cr = {(r["Scenario"], r["Year"]): r for r in csv.DictReader(open(base_run / "cr_scen.csv"))
           if r["Geographical breakdown"] == "Total" and r["RowNum"] == "22"}
-    assert len(cr) == 7
+    assert len(cr) == 8                                     # prior-year Actual (no LTV), Actual, 2 x 3 years
+    assert not cr[("Actual", "2025")]["LTV ratio - Stage 1 (%)"]
     for (scen, year), s in sums.items():
         r = cr[(scen.capitalize(), str(2026 + int(year)))]
         for i in range(3):
@@ -599,3 +609,93 @@ def test_sector_satellites_off(reference_sim, base_run, tmp_path):
     a, b = read(out / "projection.csv", "segment", "scenario", "year"), read(base_run / "projection.csv", "segment", "scenario", "year")
     changed = {k[0] for k in a if a[k] != b[k]}
     assert changed and all("|NFC" in s for s in changed)
+
+
+# ----------------------------------------------------------------------------------------- prior-year Actual rows
+
+STOCK_COLUMNS = {"of which: stage 1 (Exp S1)": "exp_s1", "of which: stage 2 (Exp S2)": "exp_s2",
+                 "Non-performing exposure (Exp S3)": "exp_s3", "POCI exposures (Exp POCI)": "exp_poci",
+                 "of which: stage 1 (Prov Stock S1)": "prov_s1", "of which: stage 2 (Prov Stock S2)": "prov_s2",
+                 "of which: non-performing assets (Prov Stock S3)": "prov_s3", "of which: POCI (Prov Stock POCI)": "prov_poci"}
+
+
+def test_cr_scen_prior_year_rows(base_run):
+    """CR_SCEN starts with the prior-year Actual rows (31 Dec 2025, MN 2027 draft para 71 and Table 2): stocks of the t0
+    portfolios from prior_year.csv, blank where an exposure of the row has no history amount; no parameters, flows,
+    overlays, maturity or LTV."""
+    rows = list(csv.DictReader(open(base_run / "cr_scen.csv")))
+    geos = {r["Geographical breakdown"] for r in rows}
+    prior = rows[:len(geos) * 22]
+    assert {(r["Scenario"], r["Year"]) for r in prior} == {("Actual", "2025")}
+    assert rows[len(geos) * 22]["Year"] == "2026"
+    segments = list(csv.DictReader(open(base_run / "prior_year.csv")))
+    assert segments == list(csv.DictReader(open(GOLDEN / "prior_year.csv")))
+    by_row = {"19": "LOANS|HH_HOUSE|", "20": "LOANS|HH_CONS|", "14": "LOANS|NFC_SME_CRE|", "16": "LOANS|NFC_LARGE_CRE|"}
+    total = {r["RowNum"]: r for r in prior if r["Geographical breakdown"] == "Total"}
+    for num, prefix in by_row.items():
+        members = [s for s in segments if s["segment"].startswith(prefix)]
+        for col, field in STOCK_COLUMNS.items():
+            assert abs(float(total[num][col]) * 1e6 - sum(float(s[field]) for s in members)) < 0.05, (num, col)
+    for col, field in STOCK_COLUMNS.items():
+        if field.startswith("prov"):
+            assert abs(float(total["22"][col]) * 1e6 - sum(float(s[field]) for s in segments)) < 0.05, col
+        else:
+            assert total["22"][col] == "" and total["1"][col] == ""        # debt securities: no history amounts
+    for r in prior:
+        for c in ("PD 12M S1 (TR1-3)", "LGD S3", "Stage 2 flow (S1-S2 flow)", "Provisions old stage 3 (Prov old S3-S3)",
+                  "of which: overlays stage 1 (Overlays S1)", "Average Maturity (yrs)", "LTV ratio - Stage 1 (%)"):
+            assert r[c] == "", (r["RowNum"], c)
+        if r["Total exposure (total Exp)"]:
+            assert float(r["of which: cumulative new non-performing exposure (Cumul New Exp S3)"]) == 0.0
+    diagnostics = (base_run / "diagnostics.json").read_text()
+    assert "PRY-000" in diagnostics and "PRY-003" in diagnostics
+
+
+def test_prior_year_variant_matches_reference(reference_sim, tmp_path):
+    """Loans only (no commitments on-balance) at the last complete history month end of 2025 (30 Sep 2025, prior_year_end):
+    every exposure has an amount, so the prior-year rows are filled; engine and reference agree (prior_year.csv,
+    CR_SECTOR, summary), and the engine output is identical for --workers 1, 3 and 8."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sora_reference", REPO / "tools" / "reference" / "sora_reference.py")
+    ref = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ref)
+    lines, skip = [], False
+    for line in SCENARIO.read_text().splitlines():
+        skip = line.startswith("off_balance:") or (skip and line.startswith(" "))
+        if not skip:
+            lines.append(line.replace("exposure_types: [loan, finance_lease, debt_security]", "exposure_types: [loan]"))
+    lines.append("prior_year_end: 2025-09-30")
+    variant = tmp_path / "variant.yaml"
+    variant.write_text("\n".join(lines) + "\n")
+    ref.run(reference_sim, variant, tmp_path / "ref", REPO)
+    outputs = {}
+    for w in (1, 3, 8):
+        r = subprocess.run([str(ENGINE), "run", str(reference_sim), "--scenario", str(variant), "-o", str(tmp_path / f"w{w}"),
+                            "--base", str(REPO), "--workers", str(w)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        outputs[w] = {n: (tmp_path / f"w{w}" / n).read_bytes() for n in ("cr_scen.csv", "cr_sector.csv", "prior_year.csv")}
+    assert outputs[1] == outputs[3] == outputs[8]
+    eng, gold = tmp_path / "w3", tmp_path / "ref"
+    assert (eng / "prior_year.csv").read_text() == (gold / "prior_year.csv").read_text()
+    p = json.loads((eng / "summary.json").read_text())["prior_year"]
+    assert p == json.loads((gold / "summary.json").read_text())["prior_year"]
+    assert p["date"] == "2025-09-30" and p["missing_amount"] == 0 and p["missing_fx"] == 0 and p["exposures"] > 30000
+    assert all(v is not None for v in p["stocks"].values())
+    key = ("RowNum", "Geographical breakdown", "Scenario", "Year")
+    g, a = read(gold / "cr_sector.csv", *key), read(eng / "cr_sector.csv", *key)
+    assert g.keys() == a.keys()
+    for k in g:
+        for col in g[k]:
+            if not g[k][col] or col in key or col in ("Pivot", "COREP asset class", "NACE code") or col.startswith("Exposures by"):
+                assert g[k][col] == a[k][col], (k, col)
+            else:
+                pct = "%" in col or col.startswith(("PD ", "TR", "LGD", "LRLT", "Coverage ratio"))
+                assert abs(float(g[k][col]) - float(a[k][col])) <= (2.1e-7 if pct else 2.1e-8), (k, col)
+    total = a[("23", "Total", "Actual", "2025")]
+    assert float(total["Total exposure (total Exp)"]) > 0 and float(total["Coverage ratio: non-performing exposure"]) > 0
+    # CR_SCEN prior-year Total = CR_SECTOR TOTAL for the NFC rows; loans total = prior_year.csv.
+    scen = read(eng / "cr_scen.csv", "Geographical breakdown", "Scenario", "Year", "RowNum")
+    exp = "Total exposure (total Exp)"
+    assert abs(float(scen[("Total", "Actual", "2025", "13")][exp]) - float(total[exp])) < 1e-6
+    loans = sum(float(r[f"exp_{k}"]) for r in csv.DictReader(open(eng / "prior_year.csv")) for k in ("s1", "s2", "s3", "poci"))
+    assert abs(float(scen[("Total", "Actual", "2025", "22")][exp]) * 1e6 - loans) < 1

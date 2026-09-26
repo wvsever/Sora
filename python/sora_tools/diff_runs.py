@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from .results import (
-    FILE_KEYS, IGNORED_COLUMNS, PARAMS, RATE_FILES, START_EXP, START_PROV, RunOutput, eur_m, exposure, num, read_csv,
+    FILE_KEYS, IGNORED_COLUMNS, PARAMS, RATE_COLUMNS, RATE_FILES, START_EXP, START_PROV, RunOutput, eur_m, exposure, num, read_csv,
     start_exposure, start_provisions, stock,
 )
 
@@ -86,7 +86,7 @@ def diff_file(a_path: Path | None, b_path: Path | None, name: str, abs_tol: floa
                 continue
             fa, fb = num(va), num(vb)
             if fa is not None and fb is not None:
-                if _close(fa, fb, abs_tol, rel_tol):
+                if _close(fa, fb, min(abs_tol, 1e-9) if c in RATE_COLUMNS else abs_tol, rel_tol):
                     continue
                 d = abs(fb - fa)
             else:
