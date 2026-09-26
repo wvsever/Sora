@@ -38,7 +38,7 @@ Engine tolerance: money is compared per segment, scenario and year to 1 cent, or
 its units (EUR million, percent), plus one unit in the last printed decimal. `cr_scen_off_bs.csv` (EUR million,
 8 decimals) is compared to 2e-8.
 
-Off-balance results: with the regulatory fallback CCFs (no customer CCF in the reference SIM), 14,828 staged
+Off-balance results: with the regulatory fallback CCFs (no customer CCF in the reference SIM), 13,660 staged
 commitments (EUR 2.41bn nominal, 1.32bn post-CCF). Five `other_commitment` items to general government in SG take
 the parameters of `LOANS|GG|OTHER` (no GG loans in SG). The synthetic book provisions commitments at a flat
 coverage of drawn plus undrawn (about 1% in stage 1), far above PD x LGD of the loan segments, so the year-1
