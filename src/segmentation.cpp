@@ -34,11 +34,17 @@ std::size_t portfolio_code(const Exposure& e, const Counterparty& cp) {
 
 std::string portfolio_of(const Exposure& e, const Counterparty& cp) { return kPortfolios[portfolio_code(e, cp)]; }
 
+bool undrawn_is_off_balance(const Exposure& e, const ScopeConfig& scope) {
+    if (e.type == ExposureType::Loan) return scope.loan_undrawn_off_balance;
+    return std::find(scope.drawn_types.begin(), scope.drawn_types.end(), e.type) != scope.drawn_types.end();
+}
+
 Segmentation segment(const Dataset& d, const ScopeConfig& scope) {
     Segmentation s;
     const auto n = d.exposures.size();
     s.segment_of.assign(n, -1);
     s.fx.assign(n, 0.0);
+    s.allowance.assign(n, 0.0);
 
     // Pass 1: scope, FX, exposure per country (summed in exposure order).
     std::vector<std::uint32_t> country(n, kNone);
@@ -47,11 +53,22 @@ Segmentation segment(const Dataset& d, const ScopeConfig& scope) {
     for (std::size_t i = 0; i < n; ++i) {
         const auto& e = d.exposures[i];
         if (std::find(scope.measurements.begin(), scope.measurements.end(), e.measurement) == scope.measurements.end()) continue;
-        if (std::find(scope.types.begin(), scope.types.end(), e.type) == scope.types.end()) continue;
+        // Drawn part of a commitment (drawn_types): an on-balance loans-and-advances exposure if drawn and staged.
+        const bool drawn = std::find(scope.drawn_types.begin(), scope.drawn_types.end(), e.type) != scope.drawn_types.end() &&
+                           e.has_gca && e.gca > 0 && e.stage != Stage::NotApplicable;
+        if (!drawn && std::find(scope.types.begin(), scope.types.end(), e.type) == scope.types.end()) continue;
         if (scope.exclude_intragroup && e.intragroup) continue;
         const double fx = d.fx(e.currency);
         if (fx == 0.0) throw Error("no FX rate at the reference date for " + d.currencies.at(e.currency));
         s.fx[i] = fx;
+        s.drawn_commitments += drawn ? 1 : 0;
+        // A facility's allowance covers its drawn and undrawn parts: the drawn share is on-balance when the
+        // undrawn part is projected off-balance (the undrawn share goes with the off-balance item).
+        s.allowance[i] = to_double(e.allowance) * fx;
+        if (e.off_balance > 0 && undrawn_is_off_balance(e, scope)) {
+            const double g = to_double(e.gca), u = to_double(e.off_balance);
+            s.allowance[i] = s.allowance[i] * (g / (g + u));
+        }
         country[i] = e.country_of_risk != kNone ? e.country_of_risk : d.counterparties[e.counterparty].country;
         by_country[country[i]] += to_double(e.gca) * fx;
         has_country[country[i]] = 1;

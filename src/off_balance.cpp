@@ -98,6 +98,7 @@ std::size_t sector_of(const std::string& portfolio) {
 }
 
 std::size_t type_slot(ExposureType t) {
+    if (t == ExposureType::Loan) return 0;   // undrawn part of on-balance loans: loan commitments given (F 09.01)
     for (std::size_t i = 0; i < kTemplateTypes.size(); ++i) if (kTemplateTypes[i] == t) return i;
     throw Error("off-balance: not an off-balance exposure type");
 }
@@ -231,6 +232,26 @@ OffBalanceResult project_off_balance(Duck& duck, const Dataset& d, const Segment
         by_group[{it->second, to_string(e.type)}].push_back({static_cast<std::uint32_t>(i), nominal, ccf, provision});
         ++out.items;
     }
+    // Undrawn part of in-scope loans (include_loan_undrawn): a loan commitment given, in the loan's own segment,
+    // with the undrawn share of the loan's allowance (the drawn share is on-balance, Segmentation::allowance).
+    if (ob.include_loan_undrawn) {
+        for (std::size_t i = 0; i < d.exposures.size(); ++i) {
+            const auto& e = d.exposures[i];
+            if (e.type != ExposureType::Loan || e.off_balance <= 0 || s.segment_of[i] < 0 || e.stage == Stage::NotApplicable) continue;
+            const auto seg = static_cast<std::size_t>(s.segment_of[i]);
+            const double fx = s.fx[i];
+            const double undrawn = to_double(e.off_balance), base = undrawn + to_double(e.gca);
+            const double nominal = undrawn * fx;
+            const double provision = to_double(e.allowance) * fx * (undrawn / base);
+            const auto own = customer.find(i, s, s.segments[seg]);
+            if (own) ++out.customer_ccf_items;
+            const double ccf = own ? *own : fallback_ccf(ExposureType::LoanCommitment, cancellable[i] != 0, ob);
+            by_group[{seg, to_string(e.type)}].push_back({static_cast<std::uint32_t>(i), nominal, ccf, provision});
+            ++out.items;
+            ++out.loan_undrawn_items;
+        }
+    }
+    out.commitment_drawn_exposures = s.drawn_commitments;
 
     // Groups in parallel; each group entirely by one worker, in exposure order, into its own slot.
     std::vector<const std::vector<Item>*> members;
@@ -387,6 +408,8 @@ void write_off_balance_summary(std::ostream& f, const OffBalanceResult& r) {
     for (std::size_t i = 0; i < r.types.size(); ++i) f << (i ? ", " : "") << '"' << to_string(r.types[i]) << '"';
     f << "],\n    \"items\": " << r.items << ",\n    \"fallback_items\": " << r.fallback_items
       << ",\n    \"unmatched_items\": " << r.unmatched_items << ",\n    \"customer_ccf_items\": " << r.customer_ccf_items
+      << ",\n    \"loan_undrawn_items\": " << r.loan_undrawn_items
+      << ",\n    \"commitment_drawn_exposures\": " << r.commitment_drawn_exposures
       << ",\n    \"totals\": {";
     // Keys sorted as strings: actual/0, adverse/1..3, baseline/1..3 (slots 0, 4..6, 1..3).
     const std::size_t order[7] = {0, 4, 5, 6, 1, 2, 3};

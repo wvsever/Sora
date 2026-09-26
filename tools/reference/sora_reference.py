@@ -40,7 +40,13 @@ Method (see plans/03_scenario_engine.md and plans/09_risk_parameters.md):
    scenario's regulatory fallback (CRR Art. 111(2)). Post-CCF amount = CCF x nominal is projected with Boxes 3-9
    exactly as on-balance exposures (starting provision = undrawn share of the facility's allowance, old S3 floor
    per item); the nominal amount follows the same stage flows.
-6. ECB benchmarks (scenario key `benchmark_parameters`, EBA 2027 draft MN paras 115-117 and 146). Model coverage
+6. Facilities with a drawn and an undrawn part (off_balance.include_loan_undrawn, commitment_drawn_on_balance).
+   The undrawn part of in-scope loans is an off-balance item (exposure type `loan`, reported as a loan commitment
+   given) in the loan's own segment, CCF fallback of a loan commitment. The drawn part (GCA > 0) of staged commitments
+   of the off-balance types is an on-balance exposure in step 1 (segments, top countries, calibration, projection).
+   Whenever the undrawn part is off-balance, the facility's allowance is split pro rata: drawn share
+   allowance x GCA / (GCA + undrawn) on-balance (also in the coverage calibration), the rest off-balance.
+7. ECB benchmarks (scenario key `benchmark_parameters`, EBA 2027 draft MN paras 115-117 and 146). Model coverage
    per pivot asset class (instrument|portfolio) and parameter group (PD/TR, LGD/LR) = share of t0 exposure whose
    group starting point was calibrated within the pivot class (segment or portfolio level) and whose portfolio has
    a satellite model. General governments take the benchmark of their own country (mandatory); a pivot class below
@@ -96,7 +102,10 @@ e AS (
     FROM sim_exposure e
     JOIN sim_counterparty c USING (counterparty_id)
     JOIN fx ON fx.currency = e.currency
-    WHERE e.measurement_category IN ({mc}) AND e.exposure_type IN ({et})
+    WHERE e.measurement_category IN ({mc})
+      AND (e.exposure_type IN ({et})
+           OR (e.exposure_type IN ({drawn}) AND e.gross_carrying_amount > 0
+               AND e.stage IN ('stage1', 'stage2', 'stage3', 'poci')))
       AND NOT ({excl} AND coalesce(e.is_intragroup, false))
 )
 SELECT exposure_id, instrument,
@@ -118,7 +127,10 @@ SELECT exposure_id, instrument,
     country, stage, nace_code,
     CAST(gross_carrying_amount AS DOUBLE) * fx AS gca,
     CAST(coalesce(loss_allowance, 0) AS DOUBLE) * fx AS allowance,
-    fx
+    fx, exposure_type,
+    CAST(coalesce(gross_carrying_amount, 0) AS DOUBLE) AS drawn,
+    CAST(coalesce(off_balance_amount, 0) AS DOUBLE) AS undrawn,
+    coalesce(is_unconditionally_cancellable, false) AS cancellable
 FROM e
 ORDER BY exposure_id
 """
@@ -134,18 +146,47 @@ def top_countries(rows, n) -> list[str]:
 
 def load_exposures(con, cfg, manifest) -> list[dict]:
     q = lambda xs: ", ".join(f"'{x}'" for x in xs)  # noqa: E731
+    drawn = drawn_on_balance_types(cfg)
     sql = SEGMENT_SQL.format(ref=manifest["reference_date"], ccy=manifest["reporting_currency"],
                              mc=q(cfg["scope"]["measurement_categories"]), et=q(cfg["scope"]["exposure_types"]),
+                             drawn=q(drawn) if drawn else "''",
                              excl="true" if cfg["scope"]["exclude_intragroup"] else "false")
     cur = con.execute(sql)
     cols = [d[0] for d in cur.description]
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    split_facility_allowance(rows, cfg)
     top = top_countries(rows, cfg["segmentation"]["top_countries"])
     for r in rows:
         r["bucket"] = r["country"] if r["country"] in top else "OTHER"
         r["segment"] = f"{r['instrument']}|{r['portfolio']}|{r['bucket']}"
     return rows
 
+
+
+def drawn_on_balance_types(cfg) -> list[str]:
+    """Commitment types whose drawn part (gross carrying amount) is an on-balance loans-and-advances exposure
+    (scenario key off_balance.commitment_drawn_on_balance): the configured off-balance types, else none."""
+    ob = cfg.get("off_balance") or {}
+    return list(ob.get("exposure_types", [])) if ob.get("commitment_drawn_on_balance", False) else []
+
+
+def undrawn_is_off_balance(r, cfg) -> bool:
+    """Whether the undrawn part of an in-scope exposure is projected off-balance: commitments whose drawn part is
+    on-balance, and loans with off_balance.include_loan_undrawn."""
+    ob = cfg.get("off_balance") or {}
+    return r["exposure_type"] in drawn_on_balance_types(cfg) or (
+        r["exposure_type"] == "loan" and bool(ob.get("include_loan_undrawn", False)))
+
+
+def split_facility_allowance(rows, cfg):
+    """A facility's loss allowance covers its drawn and undrawn parts. When the undrawn part is projected
+    off-balance, the on-balance provision is the drawn share, allowance x GCA / (GCA + undrawn), and the undrawn
+    share goes with the off-balance item, so the facility's provision is counted once. `allowance_total` keeps the
+    facility's allowance."""
+    for r in rows:
+        r["allowance_total"] = r["allowance"]
+        if r["undrawn"] > 0 and undrawn_is_off_balance(r, cfg):
+            r["allowance"] = r["allowance"] * (r["drawn"] / (r["drawn"] + r["undrawn"]))
 
 
 def parents(segment: str) -> list[str]:
@@ -455,6 +496,9 @@ def write_collateral(path: Path, ltv: dict):
 # ----------------------------------------------------------------------------------------- off-balance (CR_SCEN_OFF_BS)
 
 OFF_BALANCE_TYPES = ("loan_commitment", "financial_guarantee", "other_commitment")
+# CR_SCEN_OFF_BS commitment type of off_balance.csv rows whose exposure type is not a template type: the undrawn
+# part of on-balance loans is a loan commitment given (FINREP F 09.01).
+TEMPLATE_TYPE = {"loan": "loan_commitment"}
 OFF_BALANCE_LABELS = {"loan_commitment": "Loan commitments given", "financial_guarantee": "Financial guarantees given",
                       "other_commitment": "Other Commitments given"}
 OFF_BALANCE_SECTORS = (("CB", "Central banks"), ("GG", "General governments"), ("CI", "Credit institutions"),
@@ -540,7 +584,25 @@ def item_ccf(item, segment, fallback, ccf_exposure, ccf_level) -> tuple[float, b
     return float(fallback[item["exposure_type"]]), False
 
 
-def project_off_balance(con, sim, cfg, manifest, top, segments, projected) -> tuple[list[dict], dict]:
+def loan_undrawn_items(exposures, cfg) -> list[dict]:
+    """Off-balance items for the undrawn part of in-scope loans (off_balance.include_loan_undrawn): an undrawn
+    credit facility is a loan commitment given (FINREP F 09; CRR Annex I bucket 3(a), or bucket 5 when
+    unconditionally cancellable). The item keeps the loan's own on-balance segment, and its provision is the undrawn
+    share of the loan's allowance (the drawn share stays on-balance, `split_facility_allowance`)."""
+    if not (cfg.get("off_balance") or {}).get("include_loan_undrawn", False):
+        return []
+    items = []
+    for r in exposures:
+        if r["exposure_type"] != "loan" or r["undrawn"] <= 0 or r["stage"] not in (*STAGES, "poci"):
+            continue
+        base = r["undrawn"] + r["drawn"]
+        items.append({"exposure_id": r["exposure_id"], "exposure_type": "loan", "ccf_type": "loan_commitment",
+                      "segment": r["segment"], "stage": r["stage"], "nominal": r["undrawn"] * r["fx"],
+                      "allowance": r["allowance_total"] * (r["undrawn"] / base), "cancellable": r["cancellable"]})
+    return items
+
+
+def project_off_balance(con, sim, cfg, manifest, top, segments, projected, exposures=()) -> tuple[list[dict], dict]:
     """Off-balance items (EBA 2027 draft MN paras 78-82). Each item is projected with the parameters of the
     on-balance loan segment of its counterparty (same portfolio rules and country bucket), with the same stage flow
     and provision logic: the post-CCF amount (CCF x nominal) carries the flows and provisions, and the nominal
@@ -553,6 +615,9 @@ def project_off_balance(con, sim, cfg, manifest, top, segments, projected) -> tu
     fallback = {**DEFAULT_CCF, **(ob.get("ccf_fallback") or {})}
     if any(not 0.0 <= float(v) <= 1.0 for v in fallback.values()):
         raise ValueError("off_balance.ccf_fallback values must be in [0, 1]")
+    for key in ("include_loan_undrawn", "commitment_drawn_on_balance"):
+        if not isinstance(ob.get(key, False), bool):
+            raise ValueError(f"off_balance.{key} must be true or false")
     q = lambda xs: ", ".join(f"'{x}'" for x in xs)  # noqa: E731
     cur = con.execute(OFF_BALANCE_SQL.format(ref=manifest["reference_date"], ccy=manifest["reporting_currency"],
                                              mc=q(cfg["scope"]["measurement_categories"]), et=q(types),
@@ -562,6 +627,7 @@ def project_off_balance(con, sim, cfg, manifest, top, segments, projected) -> tu
     known = set(segments)
     groups: dict = {}
     stats = {"items": 0, "fallback_items": 0, "unmatched_items": 0, "customer_ccf_items": 0}
+    items = []
     for item in (dict(zip(cols, r)) for r in cur.fetchall()):
         segment = f"LOANS|{item['portfolio']}|{item['country'] if item['country'] in top else 'OTHER'}"
         if segment not in known:                 # no on-balance loans of that portfolio and country: its OTHER bucket
@@ -570,17 +636,26 @@ def project_off_balance(con, sim, cfg, manifest, top, segments, projected) -> tu
                 stats["unmatched_items"] += 1
                 continue
             stats["fallback_items"] += 1
-        ccf, customer = item_ccf(item, segment, fallback, ccf_exposure, ccf_level)
+        # The allowance of a facility covers its drawn and undrawn parts: the undrawn share is the off-balance
+        # provision (the drawn part is on-balance).
+        base = item["undrawn"] + item["drawn"]
+        item["allowance"] = item["allowance"] * (item["undrawn"] / base) if base > 0 else item["allowance"]
+        items.append({**item, "segment": segment, "ccf_type": item["exposure_type"]})
+    # Undrawn part of on-balance loans (include_loan_undrawn): loan commitments given, in the loan's own segment.
+    loan_items = loan_undrawn_items(exposures, cfg)
+    stats["loan_undrawn_items"] = len(loan_items)
+    # Commitments whose drawn part is on-balance (commitment_drawn_on_balance), in the on-balance scope.
+    stats["commitment_drawn_exposures"] = sum(1 for r in exposures if r["exposure_type"] in OFF_BALANCE_TYPES)
+    for item in items + loan_items:
+        segment = item["segment"]
+        ccf, customer = item_ccf({**item, "exposure_type": item["ccf_type"]}, segment, fallback, ccf_exposure, ccf_level)
         stats["items"] += 1
         stats["customer_ccf_items"] += customer
         g = groups.setdefault((segment, item["exposure_type"]), {
             "post": {st: [0.0, 0.0] for st in (*STAGES, "poci")}, "nom": {st: [0.0, 0.0] for st in (*STAGES, "poci")},
             "post_s3": [], "nom_s3": []})
         st = item["stage"]
-        # The allowance of a facility covers its drawn and undrawn parts: the undrawn share is the off-balance
-        # provision (the drawn part is on-balance).
-        base = item["undrawn"] + item["drawn"]
-        allowance = item["allowance"] * (item["undrawn"] / base) if base > 0 else item["allowance"]
+        allowance = item["allowance"]
         g["post"][st][0] += ccf * item["nominal"]
         g["post"][st][1] += allowance
         g["nom"][st][0] += item["nominal"]
@@ -647,7 +722,8 @@ def write_cr_scen_off_bs(path: Path, rows: list[dict], ref_year: int):
     Sum row and six counterparty-sector rows, then Total), Total geography only, amounts in EUR million."""
     cells = defaultdict(lambda: dict.fromkeys(OFF_BALANCE_FIELDS, 0.0))     # (scenario, year, type, sector) -> sums
     for r in rows:
-        c = cells[(r["scenario"], r["year"], r["exposure_type"], off_balance_sector(r["segment"].split("|")[1]))]
+        c = cells[(r["scenario"], r["year"], TEMPLATE_TYPE.get(r["exposure_type"], r["exposure_type"]),
+                   off_balance_sector(r["segment"].split("|")[1]))]
         for k in OFF_BALANCE_FIELDS:
             c[k] += r[k]
     with open(path, "w", newline="") as f:
@@ -1165,7 +1241,7 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
         summary["benchmark"] = benchmark_summary(bcfg, decisions, pivots)
 
     if cfg.get("off_balance"):                     # CR_SCEN_OFF_BS (optional; on-balance results are unaffected)
-        ob_rows, stats = project_off_balance(con, sim, cfg, manifest, top, segments, projected)
+        ob_rows, stats = project_off_balance(con, sim, cfg, manifest, top, segments, projected, exposures)
         write_off_balance(out / "off_balance.csv", ob_rows)
         write_cr_scen_off_bs(out / "cr_scen_off_bs.csv", ob_rows, int(manifest["reference_date"][:4]))
         ob_totals = defaultdict(lambda: dict.fromkeys(OFF_BALANCE_FIELDS, 0.0))

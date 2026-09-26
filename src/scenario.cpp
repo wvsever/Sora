@@ -126,6 +126,17 @@ ScenarioConfig load_scenario(const fs::path& yaml, const fs::path& base_dir) {
             set("other_commitment", c.off_balance.ccf_other_commitment);
             set("unconditionally_cancellable", c.off_balance.ccf_unconditionally_cancellable);
         }
+        // Facilities with drawn and undrawn parts (off_balance.hpp): the scope of the on-balance segmentation.
+        auto flag = [&](const char* key, bool& v) {
+            if (!ob.has_child(ryml::to_csubstr(key))) return;
+            const auto x = str(ob[ryml::to_csubstr(key)]);
+            if (x != "true" && x != "false") throw Error(std::string("scenario: off_balance.") + key + " must be true or false");
+            v = x == "true";
+        };
+        flag("include_loan_undrawn", c.off_balance.include_loan_undrawn);
+        flag("commitment_drawn_on_balance", c.off_balance.commitment_drawn_on_balance);
+        c.scope.loan_undrawn_off_balance = c.off_balance.include_loan_undrawn;
+        if (c.off_balance.commitment_drawn_on_balance) c.scope.drawn_types = c.off_balance.types;
     }
     load_benchmark_config(root, base_dir, c);
     return c;

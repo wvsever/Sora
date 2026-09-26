@@ -73,7 +73,7 @@ Calibration calibrate(Duck& duck, const Dataset& d, const Segmentation& s, const
         const auto& e = d.exposures[i];
         const auto st = static_cast<std::size_t>(e.stage);
         if (st > 3) continue;
-        const double g = to_double(e.gca) * s.fx[i], a = to_double(e.allowance) * s.fx[i];
+        const double g = to_double(e.gca) * s.fx[i], a = s.allowance[i];
         for (auto lv : s.segments[static_cast<std::size_t>(sid)].levels) {
             stocks[lv][st][0] += g;
             stocks[lv][st][1] += a;

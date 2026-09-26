@@ -190,7 +190,8 @@ def test_golden_invariants():
         assert actual.setdefault(r["segment"], secured) == secured          # t0 exposure in every year
         for st in ("s1", "s2", "s3"):
             if r[f"ltv_{st}"]:
-                assert abs(float(r[f"ltv_{st}"]) - float(r[f"secured_exp_{st}"]) / float(r[f"re_collateral_{st}"])) < 1e-6
+                ltv, sec, col = float(r[f"ltv_{st}"]), float(r[f"secured_exp_{st}"]), float(r[f"re_collateral_{st}"])
+                assert abs(ltv - sec / col) < 1e-6 + 0.005 * (1 + ltv) / col       # amounts printed to the cent
             else:
                 assert float(r[f"re_collateral_{st}"]) == 0
     for r in csv.DictReader(open(golden / "parameters.csv")):
@@ -376,3 +377,69 @@ def test_golden_benchmark_parameters_are_unadjusted():
     summary = json.loads((golden / "summary.json").read_text())["benchmark"]
     assert summary["pivots"]["LOANS|CI"]["pd_tr_model_coverage"] == 0.0
     assert summary["pivots"]["LOANS|CI"]["pd_tr_benchmark_share"] == 1.0
+
+
+def facility(eid, etype, drawn, undrawn, allowance, stage="stage1", fx=1.0, cancellable=False):
+    return {"exposure_id": eid, "exposure_type": etype, "drawn": drawn, "undrawn": undrawn, "gca": drawn * fx,
+            "allowance": allowance * fx, "fx": fx, "stage": stage, "segment": "LOANS|HH_OTHER|BE",
+            "cancellable": cancellable}
+
+
+def test_split_facility_allowance():
+    """The allowance of a facility is split pro rata between its drawn (on-balance) and undrawn (off-balance)
+    parts when the undrawn part is projected off-balance; otherwise the loan keeps its whole allowance."""
+    rows = [facility("L-1", "loan", 60.0, 40.0, 10.0), facility("L-2", "loan", 50.0, 0.0, 5.0),
+            facility("C-1", "loan_commitment", 25.0, 75.0, 20.0, fx=0.5)]
+    ref.split_facility_allowance(rows, {"off_balance": {"exposure_types": ["loan_commitment"]}})
+    assert [r["allowance"] for r in rows] == [10.0, 5.0, 10.0]                # no split
+    cfg = {"off_balance": {"exposure_types": ["loan_commitment"], "include_loan_undrawn": True,
+                           "commitment_drawn_on_balance": True}}
+    rows = [facility("L-1", "loan", 60.0, 40.0, 10.0), facility("L-2", "loan", 50.0, 0.0, 5.0),
+            facility("C-1", "loan_commitment", 25.0, 75.0, 20.0, fx=0.5)]
+    ref.split_facility_allowance(rows, cfg)
+    assert approx(rows[0]["allowance"], 6.0) and rows[1]["allowance"] == 5.0 and approx(rows[2]["allowance"], 2.5)
+    assert [r["allowance_total"] for r in rows] == [10.0, 5.0, 10.0]
+    assert ref.drawn_on_balance_types(cfg) == ["loan_commitment"]
+    assert ref.drawn_on_balance_types({"off_balance": {"exposure_types": ["loan_commitment"]}}) == []
+    # The undrawn share goes with the off-balance item: on + off = the facility's allowance.
+    items = ref.loan_undrawn_items(rows, cfg)
+    assert [i["exposure_id"] for i in items] == ["L-1"]
+    assert approx(items[0]["allowance"] + rows[0]["allowance"], 10.0)
+    assert items[0]["nominal"] == 40.0 and items[0]["ccf_type"] == "loan_commitment"
+    assert ref.loan_undrawn_items(rows, {"off_balance": {"exposure_types": []}}) == []
+
+
+def test_loan_undrawn_ccf():
+    """Undrawn credit facilities: CRR Annex I bucket 3 (loan commitment, 40%) whether revolving or not, bucket 5
+    (10%) when unconditionally cancellable; a customer CCF of the loan or its segment takes precedence."""
+    fb = ref.DEFAULT_CCF
+    item = {**facility("L-1", "loan", 60.0, 40.0, 10.0), "exposure_type": "loan_commitment"}
+    seg = "LOANS|HH_OTHER|BE"
+    assert ref.item_ccf(item, seg, fb, {}, {}) == (0.4, False)
+    assert ref.item_ccf({**item, "cancellable": True}, seg, fb, {}, {}) == (0.1, False)
+    assert ref.item_ccf(item, seg, fb, {"L-1": 0.75}, {}) == (0.75, True)
+
+
+def test_golden_facilities():
+    """Golden run with include_loan_undrawn and commitment_drawn_on_balance: every facility's allowance is counted
+    once, on-balance (drawn share) plus off-balance (undrawn share)."""
+    golden = REPO / "tests" / "golden" / "20260630"
+    summary = json.loads((golden / "summary.json").read_text())
+    ob = summary["off_balance"]
+    assert ob["loan_undrawn_items"] == 13619 and ob["commitment_drawn_exposures"] > 0
+    rows = list(csv.DictReader(open(golden / "off_balance.csv")))
+    assert {r["exposure_type"] for r in rows} == {"loan", "loan_commitment", "financial_guarantee", "other_commitment"}
+    # Loan undrawn items stay in their loan's segment: every such group is an on-balance segment with loans.
+    segments = {r["segment"] for r in csv.DictReader(open(golden / "segments.csv"))}
+    assert {r["segment"] for r in rows if r["exposure_type"] == "loan"} <= segments
+    # CR_SCEN_OFF_BS: loan commitments given include the undrawn part of loans.
+    t0 = [r for r in rows if r["scenario"] == "actual"]
+    nominal = lambda rs: sum(float(r[c]) for r in rs for c in ref.NOMINAL)  # noqa: E731
+    cr = {r["RowNum"]: r for r in csv.DictReader(open(golden / "cr_scen_off_bs.csv")) if r["Scenario"] == "Actual"}
+    lc = [r for r in t0 if r["exposure_type"] in ("loan", "loan_commitment")]
+    assert abs(float(cr["1"]["Total nominal amount before CCF (total NomAmount)"]) * 1e6 - nominal(lc)) < 1
+    # Provisions at t0, on- plus off-balance, equal the allowance of all staged amortised-cost exposures in scope.
+    sp = summary["starting_point"]
+    on = sum(sp[k] for k in ("prov_s1", "prov_s2", "prov_s3", "prov_poci"))
+    off = sum(ob["totals"]["actual/0"][k] for k in ("prov_stock_s1", "prov_stock_s2", "prov_stock_s3", "prov_stock_poci"))
+    assert abs(on + off - 231_249_324.98) < 1.0

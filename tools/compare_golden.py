@@ -109,8 +109,9 @@ def main() -> int:
             if gs[field] != es[field]:
                 errors.append(f"summary {field}: engine {es[field]} vs golden {gs[field]}")
         if "off_balance" in gs:
-            for field in ("items", "fallback_items", "unmatched_items", "customer_ccf_items"):
-                if gs["off_balance"][field] != es.get("off_balance", {}).get(field):
+            for field in ("items", "fallback_items", "unmatched_items", "customer_ccf_items", "loan_undrawn_items",
+                          "commitment_drawn_exposures"):
+                if field in gs["off_balance"] and gs["off_balance"][field] != es.get("off_balance", {}).get(field):
                     errors.append(f"summary off_balance.{field}: engine {es.get('off_balance', {}).get(field)} vs golden "
                                   f"{gs['off_balance'][field]}")
         if "benchmark" in gs:

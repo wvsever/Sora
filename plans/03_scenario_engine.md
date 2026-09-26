@@ -206,6 +206,8 @@ on-balance exposures at portfolio level. Outputs `off_balance.csv` and `cr_scen_
      exposure_types: [loan_commitment, financial_guarantee, other_commitment]
      ccf_fallback: {loan_commitment: 0.4, financial_guarantee: 1.0, other_commitment: 0.5,
                     unconditionally_cancellable: 0.1}
+     include_loan_undrawn: true          # item 7 (default false)
+     commitment_drawn_on_balance: true   # item 7 (default false)
    ```
 
 2. **Parameters.** An item takes the parameter path (starting point, satellite projection, customer segment and
@@ -226,15 +228,49 @@ on-balance exposures at portfolio level. Outputs `off_balance.csv` and `cr_scen_
    year uses the 5/6–1/6 blend. The nominal amount follows the same stage flows (it carries no provision).
 5. **Starting provision.** `loss_allowance` of a facility covers its drawn and undrawn parts (SIM grain: one row per
    facility). The off-balance provision is the undrawn share, `allowance × off_balance / (off_balance + GCA)`
-   (the whole allowance if both are 0). The drawn part of a commitment is on-balance and outside this module.
+   (the whole allowance if both are 0). The drawn part of a commitment is on-balance (item 7).
 6. **CR_SCEN_OFF_BS.** Groups (parameter segment × exposure type) aggregate to commitment type × counterparty sector
    (CB, GG, CI, OFC, NFC, HH): per type a Sum row and six Pivot rows, then Total (22 rows), geography Total only (MN
    para 79), for Actual and baseline/adverse years 1–3. Nominal before CCF is reported for projected years too
-   (MN para 81). EUR million.
-
-Open: the undrawn part of on-balance loans (`off_balance_amount` of `loan` rows, 13,619 amortised-cost loans in the
-reference SIM) and the drawn part of commitments (their GCA) are not yet projected; both need a decision on how FINREP F 09
-and CR_SCEN split a facility.
+   (MN para 81). EUR million. Groups of exposure type `loan` (item 7) count as loan commitments given.
+7. **Facilities with a drawn and an undrawn part.** A facility is split the way FINREP reports it: the drawn part
+   (gross carrying amount) is a loan and advance (FINREP F 04/F 18; MN para 60: CR_SCEN is the on-balance positions),
+   the undrawn part a loan commitment given (F 09.01; MN paras 78, 80–81; template guidance para 41: FINREP Annex V
+   Part 2.102–105, 113, 116; and, for CR_NPL, para 51: "the nominal value of loan commitments shall be the undrawn
+   amount that the institution has committed to lend"). Two switches,
+   off by default, so that existing scenarios are unchanged; `tests/scenarios/test_eba2025.yaml` enables both and the
+   golden results cover them.
+   * `include_loan_undrawn`: the undrawn part (`off_balance_amount` > 0) of each in-scope `loan` (13,619 in the
+     reference SIM: revolving credit facilities, credit cards, working-capital and on-demand facilities, commodity
+     finance) is an off-balance item of exposure type `loan` in `off_balance.csv`, reported as *Loan commitments
+     given*. It keeps the loan's own on-balance segment (its CRE flag and household purpose included), its
+     exposure-level customer parameters, and its customer CCF (exposure row, then the segment hierarchy); else the
+     loan-commitment fallback: CRR Annex I bucket 3(a) ("the undrawn amount of commitments, regardless of the maturity
+     of the underlying facility", 40%), or bucket 5(a)/(b) (unconditionally cancellable commitments and cancellable
+     retail credit lines, 10%) when `is_unconditionally_cancellable`. Being revolving does not change the bucket
+     (Annex I classifies undrawn facilities by cancellability, not by revolving character), so `is_revolving` is not
+     used.
+   * `commitment_drawn_on_balance`: the drawn part of each staged commitment of `exposure_types` with a gross carrying
+     amount > 0 (DS-008: drawn amount plus accrued interest; 6,455 in the reference SIM) is an on-balance
+     loans-and-advances exposure in every respect: segmentation (segment `LOANS|portfolio|bucket` by the on-balance
+     portfolio rules), top-country ranking, calibration (stage history and coverage), projection, collateral/LTV,
+     CR_SCEN, CR_SECTOR and the calculator records. Its undrawn part stays an off-balance item as before.
+   * **Provisions.** The SIM has one allowance per facility; the ECL of the drawn and the undrawn component are not
+     separately identifiable. Under IFRS 7.B8E (which FINREP follows for the accumulated impairment of the asset)
+     the combined ECL would then be presented with the drawn asset, and nothing as a provision for the commitment.
+     The stress test however asks for the off-balance provisions separately (MN para 78) and projects them from
+     their own starting stock, and CR_SUM adds on- and off-balance impairments (template guidance para 24): keeping
+     the whole allowance on-balance while projecting the undrawn part would either count the provision twice (if
+     the off-balance item also got a share) or project the undrawn part from a zero stock (a year-1 build-up that
+     is not a scenario effect). The allowance is therefore allocated pro rata to the amounts, as for commitments
+     (item 5): on-balance `allowance × GCA / (GCA + undrawn)` (`Segmentation::allowance`, also used for the
+     starting-point stocks and the coverage-based LGD S3 / LRLT S2 calibration, so that the calibrated coverage
+     equals the reported CR_SCEN coverage), off-balance `allowance × undrawn / (GCA + undrawn)`. The two add up to
+     the facility's allowance: no provision is counted twice or lost. (Before, the drawn share of the commitments'
+     allowance, EUR 9.8m in the reference SIM, was in neither output.) A split by expected exposure
+     (GCA vs CCF × undrawn) would put less of the allowance on the undrawn part; it is not used because it would
+     make the starting provisions depend on the CCF. Loans without an undrawn part, and all loans without
+     `include_loan_undrawn`, keep their whole allowance.
 
 ## ECB benchmark parameters
 

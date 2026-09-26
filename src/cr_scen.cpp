@@ -181,7 +181,7 @@ void write_cr_scen(const Dataset& d, const Segmentation& s, const Projection& p,
         if (sid < 0) continue;
         const auto& e = d.exposures[i];
         auto& a = seg[static_cast<std::size_t>(sid)][0];
-        const double g = to_double(e.gca) * s.fx[i], al = to_double(e.allowance) * s.fx[i];
+        const double g = to_double(e.gca) * s.fx[i], al = s.allowance[i];
         switch (e.stage) {
             case Stage::S1: a.exp_s1 += g; a.prov_s1 += al; break;
             case Stage::S2: a.exp_s2 += g; a.prov_s2 += al; break;
