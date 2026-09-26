@@ -27,7 +27,7 @@ SELECT
     END                                               AS eba_sector,
     -- NACE is only meaningful for non-financial corporations.
     CASE WHEN esa2010_sector = 'S.11' THEN nace_code END AS nace_code,
-    coalesce(is_natural_person, legal_form = 'natural_person') AS is_natural_person,
+    is_natural_person,
     -- EU SME definition (2003/361/EC) on the counterparty's own figures.
     CASE WHEN esa2010_sector = 'S.11' THEN
         number_of_employees < 250 AND (turnover_eur <= 50000000 OR assets_eur <= 43000000)

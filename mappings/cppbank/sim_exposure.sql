@@ -4,14 +4,19 @@
 --   contract_lease (lessor)    -> finance_lease (operating leases and lessee leases are not credit exposures)
 --   contract_security_position -> debt_security (equities and fund units are out of scope)
 WITH ref AS (SELECT reference_date AS d FROM manifest),
--- Days past due: oldest unpaid instalment at the reference date.
+-- Days past due: oldest unpaid due date at the reference date (one row per contract in arrears).
 dpd AS (
     SELECT contract_id,
-           max((SELECT d FROM ref) - CAST(due_date AS DATE)) AS days_past_due
-    FROM src.contract_arrears
-    WHERE CAST(due_amount AS DECIMAL(18,2)) > coalesce(CAST(paid_amount AS DECIMAL(18,2)), 0)
-      AND CAST(due_date AS DATE) <= (SELECT d FROM ref)
+           (SELECT d FROM ref) - CAST(oldest_unpaid_due_date AS DATE) AS days_past_due
+    FROM src.contract_arrears_position
+),
+-- In probation after default (probation started, not yet ended): still in default until the cure.
+probation AS (
+    SELECT contract_id
+    FROM src.contract_default_cure_event
+    WHERE CAST(event_date AS DATE) <= (SELECT d FROM ref)
     GROUP BY contract_id
+    HAVING max(event_type = 'probationStart') AND NOT max(event_type = 'probationEnd')
 ),
 loans AS (
     SELECT
@@ -139,7 +144,7 @@ SELECT
     portfolio_id,
     currency,
     measurement_category,
-    CASE WHEN measurement_category IN ('amortised_cost', 'fvoci') THEN coalesce(src_stage, 'stage1')
+    CASE WHEN measurement_category IN ('amortised_cost', 'fvoci') THEN src_stage
          ELSE 'not_applicable' END                                   AS stage,
     origination_date,
     maturity_date,
@@ -156,8 +161,8 @@ SELECT
     next_repricing_date,
     amortisation_type,
     coalesce(d.days_past_due, 0)                                     AS days_past_due,
-    -- Default proxy: stage 3 or more than 90 days past due (the export has no default flag).
-    (src_stage = 'stage3' OR coalesce(d.days_past_due, 0) > 90)      AS is_defaulted,
+    -- The export has no default flag: stage 3, more than 90 days past due, or in probation after default.
+    (src_stage = 'stage3' OR coalesce(d.days_past_due, 0) > 90 OR p.contract_id IS NOT NULL) AS is_defaulted,
     is_credit_impaired,
     is_forborne,
     is_watchlist,
@@ -180,3 +185,6 @@ SELECT
     NULL                                                             AS country_of_risk
 FROM x
 LEFT JOIN dpd d ON d.contract_id = x.exposure_id
+LEFT JOIN probation p ON p.contract_id = x.exposure_id
+-- Matured finance leases and expired commitments carry no stage in the export: derecognised, not mapped.
+WHERE src_stage IS NOT NULL OR measurement_category NOT IN ('amortised_cost', 'fvoci')
