@@ -6,7 +6,8 @@
 //
 // Scope: the NFC segments (loans and advances NFC_*, debt securities NFC), i.e. CR_SCEN rows 6 and 13. The
 // sectors come from the per-exposure projection (Projection::sectors), so the TOTAL row reconciles with
-// those CR_SCEN rows for every geography, scenario and year. See plans/03_scenario_engine.md, CR_SECTOR.
+// those CR_SCEN rows for every geography, scenario and year. Columns 1-2: share of t0 exposure projected with
+// sectoral (GVA) satellites per group (Projection::sector_path). See plans/03_scenario_engine.md, CR_SECTOR.
 
 #include <filesystem>
 

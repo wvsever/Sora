@@ -212,13 +212,11 @@ ReaResult project_rea(Duck& duck, const ReaInputs& in, const calc::ClientOptions
         // parameters (exposure_param_paths, the same paths project() used for the provisions).
         const std::size_t sc = k <= 3 ? 0 : 1;
         Params p;
+        const NaceSector nace = has_sector_breakdown(segment) ? cp.nace : NaceSector::Unknown;
         if (in.external && in.external->has_exposure(i)) {
-            const auto sat = in.satellites.find(segment.portfolio);
-            if (sat == in.satellites.end()) throw Error("no satellite coefficients for portfolio " + segment.portfolio);
-            p = exposure_param_paths(s, segment, proj.params[seg][0][0], sat->second, in.macro, in.config, *in.external,
-                                     i, proj.benchmark_of(seg))[sc][static_cast<std::size_t>(year)];
+            p = own_param_paths(proj, s, seg, nace, in.macro, in.config, *in.external, i)[sc][static_cast<std::size_t>(year)];
         } else {
-            p = proj.params[seg][sc][static_cast<std::size_t>(year)];
+            p = proj.paths(seg, nace)[sc][static_cast<std::size_t>(year)];
         }
         const auto rp = reg.get(s, segment, i, k);
         if (e.stage == Stage::S3) {

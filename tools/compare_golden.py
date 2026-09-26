@@ -6,7 +6,9 @@ ratios (LTV) 1e-9. EBA template layouts print amounts in EUR million and paramet
 cr_sector.csv uses the same tolerances in those units, plus one unit in the last printed decimal for rounding;
 cr_scen_off_bs.csv (EUR million, 8 decimals) is compared to 2e-8 (2 cents). benchmarks.csv (ECB benchmark rule):
 exposure to 1 cent, the model flags, rules and benchmark keys exactly; summary.json "benchmark": counts exactly,
-pivot exposures to 1 cent and coverage shares to 1e-9.
+pivot exposures to 1 cent and coverage shares to 1e-9. sector_parameters.csv (sectoral satellites): parameters to
+1e-9, keys, GVA keys and group sources exactly; summary.json "sector_satellites": counts exactly, exposures to 1 cent
+and shares to 1e-9.
 The reference SIM is produced on demand (extract test data + reference mapping) if --sim is not given.
 """
 
@@ -104,6 +106,9 @@ def main() -> int:
                               abs_tol=2e-8)
         if (args.golden / "benchmarks.csv").exists():         # ECB benchmark rule (scenario key benchmark_parameters)
             errors += compare("benchmarks.csv", args.golden, out, ["segment"], money=True)
+        if (args.golden / "sector_parameters.csv").exists():  # sectoral satellites (scenario key sector_satellites)
+            errors += compare("sector_parameters.csv", args.golden, out, ["segment", "sector", "scenario", "year"],
+                              money=False)
         gs, es = json.loads((args.golden / "summary.json").read_text()), json.loads((out / "summary.json").read_text())
         for field in ("segments", "exposures"):
             if gs[field] != es[field]:
@@ -126,6 +131,15 @@ def main() -> int:
                     ev = eb.get("pivots", {}).get(pivot, {}).get(field)
                     if ev is None or abs(ev - v) > (0.01 if field == "exposure" else 1e-9):
                         errors.append(f"summary benchmark.pivots.{pivot}.{field}: engine {ev} vs golden {v}")
+        if "sector_satellites" in gs:
+            gv, ev = gs["sector_satellites"], es.get("sector_satellites", {})
+            for field, v in gv.items():
+                if isinstance(v, float):
+                    tol = 0.01 if field.endswith("exposure") else 1e-9
+                    if not isinstance(ev.get(field), (int, float)) or abs(ev[field] - v) > tol:
+                        errors.append(f"summary sector_satellites.{field}: engine {ev.get(field)} vs golden {v}")
+                elif ev.get(field) != v:
+                    errors.append(f"summary sector_satellites.{field}: engine {ev.get(field)} vs golden {v}")
     for e in errors[:30]:
         print("  MISMATCH", e)
     print(f"{'FAILED' if errors else 'PASSED'}: {len(errors)} mismatches")

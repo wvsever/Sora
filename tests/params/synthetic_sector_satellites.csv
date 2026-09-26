@@ -1,0 +1,25 @@
+# SYNTHETIC sectoral (GVA) satellite coefficients for tests. NOT a calibration, NOT supervisory or customer values.
+# One row per CR_SECTOR sector (NACE Rev. 2.1 section; C_EI / C_OT = energy-intensive / other manufacturing).
+# beta_gva: PD/TR sensitivity to the sector's real GVA growth (replaces beta_gdp x GDP growth of the portfolio model).
+# lgd_gva_sensitivity: LGD/LR uplift per unit of cumulative real GVA decline (added to the portfolio's property term).
+# An empty coefficient means no sectoral model for that parameter group; sectors without a row (L, P) have none.
+sector,beta_gva,lgd_gva_sensitivity,description
+A,-0.08,0.40,Agriculture forestry and fishing
+B,-0.10,,Mining and quarrying
+C_EI,-0.16,0.60,Manufacturing - energy-intensive activities
+C_OT,-0.12,0.50,Manufacturing - other
+D,,0.30,Electricity gas steam and air conditioning supply (LGD/LR only)
+E,-0.06,,Water supply sewerage and waste management
+F,-0.15,0.80,Construction
+G,-0.13,0.40,Wholesale and retail trade
+H,-0.14,0.50,Transportation and storage
+I,-0.18,0.70,Accommodation and food service activities
+J,-0.10,,Publishing broadcasting and content production
+K,-0.09,,Telecommunication and computer programming
+M,-0.15,0.90,Real estate activities
+N,-0.10,,Professional scientific and technical activities
+O,-0.12,,Administrative and support service activities
+Q,-0.05,,Education
+R,-0.06,,Human health and social work activities
+S,-0.16,0.60,Arts sports and recreation
+T,-0.12,,Other service activities

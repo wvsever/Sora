@@ -140,12 +140,12 @@ void project_exposure(Stage stage, double gca, double allowance, const std::arra
 std::array<ParamPath, 2> exposure_param_paths(const Segmentation& s, const Segment& seg, const Params& start,
                                               const Satellite& sat, const MacroTable& macro, const ScenarioConfig& cfg,
                                               const ExternalParameters& external, std::size_t exposure,
-                                              const SegmentBenchmark* benchmark) {
+                                              const SegmentBenchmark* benchmark, const SectorModel* sector) {
     Params p0 = start;
     external.apply_exposure(exposure, {0, 0}, p0);
     std::array<ParamPath, 2> own;
     for (std::size_t sc = 0; sc < 2; ++sc) {
-        own[sc] = project_parameters(seg, p0, sat, macro, kScenarios[sc], cfg);   // own[sc][0] = p0
+        own[sc] = project_parameters(seg, p0, sat, macro, kScenarios[sc], cfg, sector);   // own[sc][0] = p0
         for (int t = 1; t <= 3; ++t) {
             const ParamKey k{static_cast<int>(sc) + 1, t};
             external.apply_segment(s, seg, k, own[sc][static_cast<std::size_t>(t)]);
@@ -158,16 +158,56 @@ std::array<ParamPath, 2> exposure_param_paths(const Segmentation& s, const Segme
     return own;
 }
 
+std::array<ParamPath, 2> own_param_paths(const Projection& p, const Segmentation& s, std::size_t segment,
+                                         NaceSector sector, const MacroTable& macro, const ScenarioConfig& cfg,
+                                         const ExternalParameters& external, std::size_t exposure) {
+    const auto* sp = p.sector_path(segment, sector);
+    return exposure_param_paths(s, s.segments[segment], p.params[segment][0][0], *p.satellite[segment], macro, cfg, external,
+                                exposure, p.benchmark_of(segment), sp ? &sp->model : nullptr);
+}
+
+void Projection::check_modelled(const Segment& seg, std::size_t segment, NaceSector sector) const {
+    if (portfolio_model[segment]) return;
+    const auto* bm = benchmark_of(segment);
+    const auto* sp = sector_path(segment, sector);
+    for (std::size_t g = 0; g < 2; ++g)
+        if (!(bm && bm->applied[g]) && !(sp && sp->model.coef.covers(g)))
+            throw Error("no satellite coefficients for portfolio " + seg.portfolio + " (segment " + seg.key + ", sector " +
+                        std::string(sector_code(sector)) + "): the " + kBenchmarkGroupNames[g] +
+                        " group is neither benchmarked nor projected by a sectoral satellite");
+}
+
 Projection project(const Dataset& d, const Segmentation& s, const Calibration& cal,
                    const std::map<std::string, Satellite>& satellites, const MacroTable& macro,
                    const ScenarioConfig& cfg, const ExternalParameters* external, unsigned workers,
-                   const BenchmarkTable* benchmarks) {
+                   const BenchmarkTable* benchmarks, const SectorSatellites* sector_satellites) {
     Projection out;
+    const auto nseg = s.segments.size();
+    // Sectoral satellites: which segments have a sectoral model for every exposure, per group (a model for the
+    // ECB benchmark rule even without portfolio coefficients).
+    if (sector_satellites) {
+        out.sectoral = true;
+        out.sector_coefficients = *sector_satellites;
+        out.sector_coverage.assign(nseg, {true, true});
+        std::vector<char> any(nseg, 0);
+        for (std::size_t i = 0; i < d.exposures.size(); ++i) {
+            const auto sid = s.segment_of[i];
+            if (sid < 0 || d.exposures[i].stage == Stage::NotApplicable) continue;
+            const auto seg = static_cast<std::size_t>(sid);
+            any[seg] = 1;
+            const auto& coef = (*sector_satellites)[static_cast<std::size_t>(d.counterparties[d.exposures[i].counterparty].nace)];
+            for (std::size_t g = 0; g < 2; ++g)
+                if (!has_sector_breakdown(s.segments[seg]) || !coef || !coef->covers(g)) out.sector_coverage[seg][g] = false;
+        }
+        for (std::size_t i = 0; i < nseg; ++i)
+            if (!any[i]) out.sector_coverage[i] = {false, false};
+    }
     // ECB benchmark rule: decided once, serially, before any parameter path (benchmark.hpp).
     if (cfg.benchmark.enabled && benchmarks)
-        out.benchmark = decide_benchmarks(d, s, cal, satellites, *benchmarks, cfg.benchmark, external);
-    static const Satellite kNoSatellite{};   // flat path for fully benchmarked portfolios without a satellite model
-    const auto nseg = s.segments.size();
+        out.benchmark = decide_benchmarks(d, s, cal, satellites, *benchmarks, cfg.benchmark, external,
+                                          out.sectoral ? &out.sector_coverage : nullptr);
+    // Flat path for portfolios without a satellite model whose groups are all benchmarked or sector-modelled.
+    static const Satellite kNoSatellite{};
     out.results.resize(nseg);
     out.params.resize(nseg);
     out.start_source.resize(nseg);
@@ -177,14 +217,23 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
     auto check = [&](const Params& p, const std::string& what) {
         for (const auto& m : check_parameters(p)) out.parameter_errors.push_back(what + ": " + m);
     };
-    std::vector<const Satellite*> sat(nseg);
+    auto& sat = out.satellite;
+    sat.resize(nseg);
+    out.portfolio_model.assign(nseg, 0);
+    if (out.sectoral) {
+        out.sector_paths.resize(nseg);
+        out.sector_index.resize(nseg);
+        for (auto& x : out.sector_index) x.fill(-1);
+    }
     std::vector<Params> start(nseg);
     for (std::size_t i = 0; i < nseg; ++i) {
         const auto& seg = s.segments[i];
         const auto it = satellites.find(seg.portfolio);
         const SegmentBenchmark* bm = out.benchmark_of(i);
-        if (it == satellites.end() && !(bm && bm->applied[0] && bm->applied[1]))
-            throw Error("no satellite coefficients for portfolio " + seg.portfolio);
+        out.portfolio_model[i] = it != satellites.end();
+        for (std::size_t g = 0; g < 2 && it == satellites.end(); ++g)
+            if (!(bm && bm->applied[g]) && !(out.sectoral && out.sector_coverage[i][g]))
+                throw Error("no satellite coefficients for portfolio " + seg.portfolio);
         sat[i] = it == satellites.end() ? &kNoSatellite : &it->second;
         // Starting point: derived calibration, overlaid field-wise by customer parameters.
         start[i] = cal.params[i];
@@ -209,6 +258,30 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
             const auto& path = out.params[i][sc];
             for (int t = 1; t <= 3; ++t) check(path[static_cast<std::size_t>(t)], seg.key + " " + kScenarios[sc] + "/" + std::to_string(t));
         }
+        // Sectoral paths of an NFC segment, one per sector with coefficients: the same starting point, projected with
+        // the sector model, then the customer's segment overlays and the ECB benchmark (which still wins).
+        if (!out.sectoral || !has_sector_breakdown(seg)) continue;
+        for (std::size_t k = 0; k + 1 < kNaceSectors; ++k) {
+            const auto& coef = out.sector_coefficients[k];
+            if (!coef) continue;
+            SectorPath sp;
+            sp.model = sector_model(macro, seg, static_cast<NaceSector>(k), *coef, cfg);
+            for (std::size_t sc = 0; sc < 2; ++sc) {
+                auto& path = sp.params[sc];
+                path = project_parameters(seg, start[i], *sat[i], macro, kScenarios[sc], cfg, &sp.model);
+                for (int t = 1; t <= 3; ++t)
+                    if (external) external->apply_segment(s, seg, {static_cast<int>(sc) + 1, t}, path[static_cast<std::size_t>(t)]);
+                path[4] = path[3];
+            }
+            if (bm) apply_benchmark(*bm, sp.params);
+            for (std::size_t g = 0; g < 2; ++g) sp.sectoral[g] = coef->covers(g) && !(bm && bm->applied[g]);
+            for (std::size_t sc = 0; sc < 2; ++sc)
+                for (int t = 1; t <= 3; ++t)
+                    check(sp.params[sc][static_cast<std::size_t>(t)], seg.key + " sector " + std::string(sector_code(sp.model.sector)) +
+                                                                         " " + kScenarios[sc] + "/" + std::to_string(t));
+            out.sector_index[i][k] = static_cast<std::int8_t>(out.sector_paths[i].size());
+            out.sector_paths[i].push_back(std::move(sp));
+        }
     }
     // Exposures, in parallel by segment. Each segment is processed entirely by one worker, in exposure order,
     // into its own result slot, so every floating-point sum is formed in the same order whatever the number
@@ -226,6 +299,7 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
     }
     struct SegmentLog {
         std::size_t own = 0;                                     // exposures with own parameters
+        std::size_t sectoral = 0;                                // exposures with a sectoral satellite
         std::vector<std::pair<std::size_t, std::string>> errors;   // (exposure, message)
         std::exception_ptr failure;
     };
@@ -253,13 +327,14 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
                 one = {};
                 pone = {};
             }
+            const NaceSector nace = by_sector ? d.counterparties[e.counterparty].nace : NaceSector::Unknown;
+            if (out.sector_path(seg, nace)) ++log.sectoral;
             if (external && external->has_exposure(i)) {
                 // Exposure-level parameters: own starting point and path (same macro drivers as the segment).
                 auto check_own = [&](const Params& p, const std::string& what) {
                     for (const auto& msg : check_parameters(p)) log.errors.emplace_back(i, what + ": " + msg);
                 };
-                const auto own = exposure_param_paths(s, s.segments[seg], start[seg], *sat[seg], macro, cfg, *external, i,
-                                                      out.benchmark_of(seg));
+                const auto own = own_param_paths(out, s, seg, nace, macro, cfg, *external, i);
                 for (std::size_t sc = 0; sc < 2; ++sc)
                     for (int t = 1; t <= 3; ++t)
                         check_own(own[sc][static_cast<std::size_t>(t)], d.exposure_ids.at(e.id) + " " + kScenarios[sc] + "/" + std::to_string(t));
@@ -267,10 +342,10 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
                 ++log.own;
                 project_exposure(e.stage, gca, allowance, own, cfg, res, &pres);
             } else {
-                project_exposure(e.stage, gca, allowance, out.params[seg], cfg, res, &pres);
+                project_exposure(e.stage, gca, allowance, out.paths(seg, nace), cfg, res, &pres);
             }
             if (by_sector) {
-                const auto sec = d.counterparties[e.counterparty].nace;
+                const auto sec = nace;
                 auto& k = slot[static_cast<std::size_t>(sec)];
                 if (k < 0) {
                     k = static_cast<std::int32_t>(slices.size());
@@ -322,6 +397,7 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
     for (auto& log : logs) {
         if (log.failure) std::rethrow_exception(log.failure);
         out.exposures_with_own_parameters += log.own;
+        out.exposures_with_sector_model += log.sectoral;
         for (auto& e : log.errors) errors.push_back(std::move(e));
     }
     std::stable_sort(errors.begin(), errors.end(), [](const auto& a, const auto& b) { return a.first < b.first; });

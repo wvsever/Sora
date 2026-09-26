@@ -41,6 +41,16 @@ struct OffBalanceConfig {
     bool commitment_drawn_on_balance = false;
 };
 
+// Sectoral (GVA) satellites for NFC exposures by NACE sector (scenario key `sector_satellites`; EBA MN 2027 draft
+// para 114, 2025 MN para 123; plans/03_scenario_engine.md, Sectoral satellites).
+struct SectorSatelliteConfig {
+    bool enabled = false;
+    std::filesystem::path file;                              // sector, beta_gva, lgd_gva_sensitivity (CSV)
+    // GVA key for a country without sectoral GVA paths (the scenario has the EU 27, EA and EU only): the sector's
+    // GVA deviation from GDP in the first of these keys, added to the country's GDP growth.
+    std::vector<std::string> gva_fallback{"EU"};
+};
+
 struct ScenarioConfig {
     std::string name;
     std::filesystem::path macro_path;
@@ -55,6 +65,7 @@ struct ScenarioConfig {
     double blend_adverse = 5.0 / 6.0, blend_baseline = 1.0 / 6.0;
     OffBalanceConfig off_balance;
     BenchmarkConfig benchmark;
+    SectorSatelliteConfig sector_satellites;
 };
 
 // Relative paths in the YAML resolve against `base_dir` (the repository or working directory).
@@ -78,12 +89,44 @@ struct Satellite {
 };
 std::map<std::string, Satellite> load_satellites(Duck& duck, const std::filesystem::path& csv);
 
+// Sectoral satellite of one CR_SECTOR sector. A coefficient that is not set means no sectoral model for its group.
+//   PD/TR (beta_gva): the sector's real GVA growth replaces GDP growth in the portfolio satellite's index:
+//     z = beta_gva * (gva_t - normal_gdp_growth) + beta_unemployment * (u_t - u_0) + beta_property * hp_t
+//   LGD/LR (lgd_gva_sensitivity): LGD_t = LGD_0 * (1 + lgd_property_sensitivity * max(0, 1 - I_prop,t)
+//                                                   + lgd_gva_sensitivity * max(0, 1 - I_gva,t)), capped at 1,
+//     I_gva,t = cumulative real GVA index of the sector.
+// The other terms are the portfolio's (zero when the portfolio has no satellite coefficients).
+struct SectorSatellite {
+    std::optional<double> beta_gva, lgd_gva_sensitivity;
+    bool covers(std::size_t group) const noexcept { return group == 0 ? beta_gva.has_value() : lgd_gva_sensitivity.has_value(); }
+};
+using SectorSatellites = std::array<std::optional<SectorSatellite>, kNaceSectors>;   // by NaceSector
+// CSV with `#` comment lines: sector (sector_code), beta_gva, lgd_gva_sensitivity (empty = none), description.
+// Unknown or duplicate sectors and rows without coefficients are errors.
+SectorSatellites load_sector_satellites(Duck& duck, const std::filesystem::path& csv);
+
+// The sectoral satellite of a sector for the exposures of one segment, with its GVA path: the scenario's real GVA of
+// the sector (gva_sector) for the segment's macro key; for a key without sectoral GVA, GDP growth of the macro key plus
+// the sector's GVA deviation from GDP in the first gva_fallback key that has it (`relative`).
+struct SectorModel {
+    NaceSector sector = NaceSector::Unknown;
+    SectorSatellite coef;
+    std::string gva_variable;   // real_gva:<scenario sector>
+    std::string macro_key, gva_key;
+    bool relative = false;
+};
+SectorModel sector_model(const MacroTable& macro, const Segment& seg, NaceSector sector, const SectorSatellite& coef,
+                         const ScenarioConfig& cfg);
+// Real GVA growth (%) of the model's path in a scenario year.
+double sector_growth(const SectorModel& m, const MacroTable& macro, const std::string& scenario, int year);
+
 // Macro key used for a country bucket (falls back to aggregates when the country has no scenario data).
 std::string macro_key(const MacroTable& macro, const std::string& bucket, const ScenarioConfig& cfg);
 
 // Parameters for years 1..3 plus year 4 (flat continuation) under one scenario. Index 0 is the starting point.
+// `sector`: the exposure's sectoral satellite (groups it covers replace the portfolio model's), or null.
 using ParamPath = std::array<Params, 5>;
 ParamPath project_parameters(const Segment& seg, const Params& p0, const Satellite& sat, const MacroTable& macro,
-                             const std::string& scenario, const ScenarioConfig& cfg);
+                             const std::string& scenario, const ScenarioConfig& cfg, const SectorModel* sector = nullptr);
 
 }  // namespace sora

@@ -9,7 +9,8 @@ Translate scenario definitions into fast immutable runtime rules. The primary ta
 | Input | Source in `docs/` | Content |
 |---|---|---|
 | Macro-financial scenario | ESRB macro scenario xlsx (2025; 2027 when published) | Annual paths per country, baseline and adverse: GDP, unemployment, HICP, residential and commercial property prices, long-term rates, FX, equity prices |
-| Sector GVA | "Real GVA by sector" xlsx | Annual GVA per country × NACE sector |
+| Sector GVA | "Real GVA by sector" xlsx | Annual real GVA growth per country (EU 27, EA, EU) × NACE Rev. 2 sector (A, B, C_high, C_low, D–L, MN, OPQ, RSTU); normalised as `real_gva` rows with `sector` set, used by the sectoral satellites |
+| Sectoral satellites | Customer (not in repo; synthetic for tests) | GVA → PD/TR, LGD/LR per NACE sector for NFC exposures (scenario key `sector_satellites`) |
 | Market risk scenario | ECB market risk scenario xlsx | Instantaneous shocks to rates, spreads, FX, equity, commodities |
 | Corrections | ESRB corrigendum xlsx / letter | Patches to the published scenario |
 | Satellite models | Customer (not in repo; synthetic for tests) | Macro → PD/TR, LGD/LR per segment |
@@ -172,9 +173,10 @@ follows), MN 2027 draft section 2.3.8.
    the MN para 114 loss-distribution option (ii), allocation by sectoral exposure, done per stage and per year: Boxes
    3–8 are linear in the stage stocks, so a sector gets the segment's flows and provisions pro rata to its t0 exposure
    per stage; Box 9 (old S3 floor) stays per exposure. It is exact for exposure-level customer parameters too, and
-   sectors sum to the segment. There are no sector-specific (GVA-driven) risk parameters yet: columns 1–2
-   ("percentage of exposures with projections based on sectoral models") are 0. Sectoral satellites would plug into
-   the same slices by giving each (segment, sector) its own parameter path.
+   sectors sum to the segment. With sectoral satellites (scenario key `sector_satellites`, next section) the exposures
+   of a sector with coefficients are projected with that sector's own parameter path instead of the segment's, into
+   the same slices: the MN para 114 first option (sector-specific risk parameters from sectoral models); the other
+   sectors keep the allocation by exposure.
 4. **Rows.** Per slot (Actual t0; Baseline, Adverse years 1–3), geography (Total, the CR_SCEN top countries, Other) and
    23 sector rows: A, B, C (Pivot = energy-intensive + other), the two C o/w rows, D–T, TOTAL exposures to NFC (Sum).
    All country–sector combinations are written; the MN para 98 materiality threshold (0.5% of NFC exposure) is a
@@ -182,12 +184,94 @@ follows), MN 2027 draft section 2.3.8.
 5. **Columns.** The template's 46 value columns, with the CR_SCEN definitions: exposure-weighted parameters (S1
    exposure at the start of the year for PD12M S1, TR1-2, LGD S1; S2 for PD12M S2, TR2-1, LGD S2, LRLT S2; old S3 for
    TR3-1/TR3-2 (actual only) and LGD S3), flows, provisions (within-year and cumulative new S3), end-of-year exposures
-   and provision stocks per stage and POCI, coverage ratios. PD PiT and LGD PiT new are blank, as in `cr_scen.csv`. No
+   and provision stocks per stage and POCI, coverage ratios. Columns 1–2 ("PD/TR" and "LGD/LR - Percentage of exposures
+   with projections based on sectoral models", template guidance para 44): share of the row's t0 exposure (gross carrying
+   amount, S1 + S2 + S3 + POCI) projected with a sectoral satellite for that group and not replaced by an ECB benchmark;
+   0 for Actual (as the CR_SCEN benchmark columns) and without the scenario key. PD PiT and LGD PiT new are blank, as in `cr_scen.csv`. No
    overlays, maturity or LTV columns (not in the template). Amounts in EUR million (8 decimals), parameters and ratios
    in percent (7 decimals).
 6. **Checks.** TOTAL equals CR_SCEN rows 6 + 13 for every geography, scenario and year; C equals its two o/w rows;
    the sectors add up to TOTAL (`python/tests/test_engine.py`). The golden test compares every cell with the reference
    to 1 cent (EUR million) and 1e-9 (ratios).
+
+## Sectoral (GVA) satellites
+
+Implemented in `src/scenario.cpp`, `src/projection.cpp` (engine) and `tools/reference/sora_reference.py` (reference),
+enabled by the scenario key `sector_satellites`. Outputs `sector_parameters.csv`, CR_SECTOR columns 1–2, the summary's
+`sector_satellites` object and diagnostics SEC-000..002.
+
+**Methodology** (EBA 2027 draft MN; 2025 final MN paragraph in brackets):
+
+| Source | Rule | Sora |
+|---|---|---|
+| MN 114 (123) | Banks should rely on their sectoral models to project sector-specific risk parameters; alternatively sectoral sensitivities on portfolio-level projections; else a loss distribution approach (i: GVA sensitivities, ii: allocation by sectoral exposure). Parameters consistent with direction and magnitude of the GVA shocks. CR_SECTOR reports per country-sector pair the % of exposures with sectoral models or sensitivities | NFC exposures whose NACE sector has coefficients are projected with a sectoral satellite driven by the sector's real GVA path; the others keep the portfolio satellite, allocated by exposure (option ii, CR_SECTOR item 3). Columns 1–2 report the share |
+| TG 2027 para 44 | Columns 1–2: exposures whose sectoral parameters come from dedicated models based on the sectoral dynamics of the scenario (satellites estimated on the GVA scenario, or on its link to the country's macro conditions) | Counted per group: PD/TR if the sector has `beta_gva`, LGD/LR if it has `lgd_gva_sensitivity`, unless the ECB benchmark replaces the group |
+| TG 2027 para 45 | GVA is projected for the EU 27, the euro area and the EU only; non-EU countries: document the approach, consistent with the scenario narrative | A country without sectoral GVA uses its own GDP growth plus the sector's GVA deviation from GDP in the first `gva_fallback` key (default EU): `g = gdp(country) + (gva_sector(EU) − gdp(EU))`. OTHER uses its macro key (EU) directly. SEC-002 counts these segments |
+| MN 95 | CR_SECTOR: NACE Rev. 2.1 level 1, manufacturing split into high and low energy intensity | CR_SECTOR sectors (Rev. 2.1 sections, `C_EI`/`C_OT`) map to the scenario's Rev. 2 sectors by division: A, B, C_EI→C_high, C_OT→C_low, D–I, J and K (divisions 58–63)→J, L (64–66)→K, M (68)→L, N and O (69–82)→MN, P–R (84–88)→OPQ, S and T (90–96)→RSTU (`gva_sector()`) |
+| MN 113, 115, 117 (122, 124, 126) | Models first; benchmarks where no appropriate satellite model exists, unadjusted, at portfolio level | A sectoral satellite is a satellite model: a segment whose exposures all have a sectoral model for a group counts as modelled for that group (coverage of the 10% rule), also when its portfolio has no satellite coefficients. Where the rule applies a benchmark, it replaces the group on the sector paths too (the benchmark wins) |
+| MN 78–82, 96 | CR_SECTOR is on-balance only; off-balance "with the same logic" | Off-balance items (and the undrawn part of loans) of NFC counterparties take the sector path of their counterparty's sector in their parameter segment, so the drawn and undrawn parts of a facility have the same parameters. The calculator records (`rea.csv`) use the same paths |
+
+**Model.** Per CR_SECTOR sector, two optional coefficients (an empty cell = no sectoral model for that group):
+
+```text
+PD/TR   z_t = beta_gva(sector) * (g_t − normal_gdp_growth) + beta_unemployment * (u_t − u_0) + beta_property * hp_t
+        logit(PD_t) = logit(PD_0) + z_t for PD12M S1, PD12M S2, TR1-2; TR2-1 with −z_t (as the portfolio satellite)
+LGD/LR  LGD_t = LGD_0 * (1 + lgd_property_sensitivity * max(0, 1 − I_prop,t) + lgd_gva_sensitivity(sector) * max(0, 1 − I_gva,t)),
+        capped at 1, I_gva,t = Π_{k≤t} (1 + g_k / 100)
+```
+
+`g_t` is the sector's real GVA growth (scenario `real_gva`, sector per `gva_sector()`, key as above) at the macro year
+of `year_map`. The sectoral index replaces the portfolio's GDP term; unemployment and property terms and the LGD property
+term stay the portfolio's (zero when the portfolio has no satellite coefficients). With `beta_gva = beta_gdp` and
+GVA = GDP the sectoral model equals the portfolio model. TR3-x are not projected.
+
+**Pipeline** per NFC segment and sector with coefficients (computed once, serially, before the parallel projection):
+
+```text
+segment starting point (derived | customer)  ->  sectoral satellite (covered groups) / portfolio satellite (others)
+    ->  customer segment overlays per year  ->  ECB benchmark groups of the segment  ->  Boxes 3-9 per exposure
+```
+
+An exposure with exposure-level customer parameters projects its own starting point with its sector's model
+(`own_param_paths`). The segment path in `parameters.csv` stays the portfolio model's (used by the exposures of sectors
+without coefficients, unknown sectors and non-NFC segments); the sector paths are in `sector_parameters.csv`; CR_SCEN
+and CR_SECTOR report the exposure-weighted parameters actually used. CR_SCEN has no sectoral-model column (2027 draft
+templates).
+
+**Satellite rule (on- and off-balance, calculator).** A portfolio without satellite coefficients is projected only if,
+for each group, its segments are benchmarked or every exposure has a sectoral model (`Projection::check_modelled`, per
+item for off-balance). Before, the off-balance projection (and the calculator records of exposures with own
+parameters) required the portfolio's coefficients even where the benchmark covered both groups, while the on-balance
+projection allowed it; both now use the segment's satellite of the projection (flat when there is none).
+
+**Scenario key and file:**
+
+```yaml
+sector_satellites:
+  file: tests/params/synthetic_sector_satellites.csv   # sector, beta_gva, lgd_gva_sensitivity, description
+  gva_fallback: [EU]          # GVA key for countries without sectoral GVA paths (default EU)
+```
+
+```text
+# SYNTHETIC ... (lines starting with # are comments)
+sector,beta_gva,lgd_gva_sensitivity,description
+F,-0.15,0.80,Construction
+D,,0.30,Electricity (LGD/LR only)
+```
+
+`sector` is a CR_SECTOR code (`A`, `B`, `C_EI`, `C_OT`, `D` … `T`); unknown or duplicate sectors and rows without
+coefficients stop the run. `tests/params/synthetic_sector_satellites.csv` is the synthetic stand-in (18 sectors with a
+PD/TR model, 10 with an LGD/LR model, none for L and P). Without the key the results are byte-identical to a run
+without sectoral satellites; results are bit-identical for any `--workers N`.
+
+**Outputs.** `sector_parameters.csv`: per NFC segment and sector with coefficients, the GVA sector and key
+(`gva_relative` = 1 for the GDP-plus-deviation path), the ten parameters per scenario and year 1..3, and the source of
+each group (`sectoral`, `portfolio`, `benchmark`, `none`). `summary.json` `sector_satellites`: settings, sectors per
+group, segments with a relative GVA path, NFC t0 exposure and the share projected with sectoral models per group.
+
+Not implemented: sector coefficients per portfolio or country (one row per sector applies to every NFC portfolio),
+the MN 114 loss-distribution option (i) (GVA-correlation allocation) for sectors without coefficients, and sectoral
+parameters for non-NFC portfolios.
 
 ## Off-balance-sheet exposures (CR_SCEN_OFF_BS)
 
@@ -279,15 +363,16 @@ scenario key `benchmark_parameters`; the format, rule and outputs are specified 
 benchmark parameters"). In the projection pipeline the rule sits between the parameter paths and the flow model:
 
 ```text
-starting point (derived | customer)  ->  satellite projection  ->  customer projected overlays
-    ->  ECB benchmark (groups PD/TR, LGD/LR, years 1..3, unadjusted)  ->  Boxes 3-9
+starting point (derived | customer)  ->  satellite projection (sectoral for NFC sectors with coefficients)
+    ->  customer projected overlays  ->  ECB benchmark (groups PD/TR, LGD/LR, years 1..3, unadjusted)  ->  Boxes 3-9
 ```
 
 The decision per segment and group (MN 2027 paras 115-117 and 146: sovereign mandatory, pivot class coverage below
 10% -> whole class, otherwise segments without a model) is taken once, before the parallel projection. A benchmark
 replaces the group for the segment's path and for every exposure-level path in it (portfolio level, not rating class
 level), so off-balance items (which use the on-balance loan segment's path) and the REA records of the calculator take
-it too. Year 4 (beyond the horizon, flat) repeats year 3, and the final adverse year's 5/6-1/6 blend uses the
+it too, as do the sectoral satellite paths of the segment (the benchmark wins over a sectoral model; a sectoral model
+counts as a model for the coverage, see Sectoral (GVA) satellites). Year 4 (beyond the horizon, flat) repeats year 3, and the final adverse year's 5/6-1/6 blend uses the
 benchmarked baseline year 3 where the baseline is benchmarked.
 
 ## Determinism

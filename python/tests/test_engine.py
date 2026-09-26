@@ -441,3 +441,118 @@ def test_facility_switches(reference_sim, base_run, tmp_path):
     base = json.loads((base_run / "summary.json").read_text())
     assert base["exposures"] - sn["exposures"] == base["off_balance"]["commitment_drawn_exposures"] > 0
     assert prov(base) > prov(su)
+
+
+SECTOR_COLUMNS = ("PD/TR - Percentage of exposures with projections based on sectoral models, e.g. via sensitivities by sector (%)",
+                  "LGD/LR - Percentage of exposures with projections based on sectoral models, e.g. via sensitivities by sector (%)")
+
+
+def test_sector_satellites_match_golden(base_run):
+    """Sectoral (GVA) satellites (scenario key sector_satellites): sector_parameters.csv and the summary match the
+    golden results; CR_SECTOR columns 1-2 report the exposure share projected with sectoral models."""
+    key = ("segment", "sector", "scenario", "year")
+    g, a = read(GOLDEN / "sector_parameters.csv", *key), read(base_run / "sector_parameters.csv", *key)
+    assert g.keys() == a.keys() and len(g) > 0
+    for k in g:
+        for col in g[k]:
+            if col in PARAMS:
+                assert abs(float(g[k][col]) - float(a[k][col])) <= 1e-9, (k, col)
+            else:
+                assert g[k][col] == a[k][col], (k, col)
+    summary = json.loads((base_run / "summary.json").read_text())["sector_satellites"]
+    golden = json.loads((GOLDEN / "summary.json").read_text())["sector_satellites"]
+    assert summary.keys() == golden.keys()
+    for k, v in golden.items():
+        assert (abs(summary[k] - v) <= 0.01) if isinstance(v, float) else summary[k] == v, k
+    diagnostics = (base_run / "diagnostics.json").read_text()
+    assert "SEC-000" in diagnostics and "SEC-001" in diagnostics
+    rows = read(base_run / "cr_sector.csv", "RowNum", "Geographical breakdown", "Scenario", "Year")
+    for (n, geo, scen, year), r in rows.items():
+        for i, c in enumerate(SECTOR_COLUMNS):
+            assert 0.0 <= float(r[c]) <= 100.0 + 1e-9
+            if scen == "Actual":
+                assert float(r[c]) == 0.0
+            elif n == "23" and geo == "Total":
+                assert abs(float(r[c]) - 100 * summary[("pd_tr_share", "lgd_lr_share")[i]]) < 1e-6
+
+
+def sector_variant(tmp_path, satellites: str, sectors: str) -> Path:
+    """The test scenario with other portfolio and sector satellite files (absolute paths)."""
+    (tmp_path / "sat.csv").write_text(satellites)
+    (tmp_path / "sec.csv").write_text(sectors)
+    text = SCENARIO.read_text().replace("satellites: tests/params/synthetic_satellites.csv", f"satellites: {tmp_path / 'sat.csv'}")
+    text = text.replace("file: tests/params/synthetic_sector_satellites.csv", f"file: {tmp_path / 'sec.csv'}")
+    variant = tmp_path / "variant.yaml"
+    variant.write_text(text)
+    return variant
+
+
+def test_sector_satellites_without_portfolio_model_match_reference(reference_sim, tmp_path):
+    """NFC portfolios without satellite coefficients, every NACE sector with both sectoral coefficients: the sectoral
+    satellites are the model (ECB benchmark rule: coverage from the sectors), on- and off-balance, engine and
+    reference agree. Without the sector file the NFC portfolios have no model: both stop."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sora_reference", REPO / "tools" / "reference" / "sora_reference.py")
+    ref = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ref)
+    sats = "".join(line for line in (REPO / "tests" / "params" / "synthetic_satellites.csv").read_text().splitlines(keepends=True)
+                   if not line.startswith("NFC"))
+    sectors = "sector,beta_gva,lgd_gva_sensitivity,description\n" + "".join(
+        f"{c},-0.{10 + i % 7},0.{3 + i % 5},x\n" for i, c in enumerate(ref.GVA_SECTOR))
+    variant = sector_variant(tmp_path, sats, sectors)
+    ref.run(reference_sim, variant, tmp_path / "ref", REPO)
+    r = subprocess.run([str(ENGINE), "run", str(reference_sim), "--scenario", str(variant), "-o", str(tmp_path / "eng"),
+                        "--base", str(REPO), "--workers", "3"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    for name, key in (("projection.csv", ("segment", "scenario", "year")), ("benchmarks.csv", ("segment",)),
+                      ("sector_parameters.csv", ("segment", "sector", "scenario", "year")),
+                      ("off_balance.csv", ("segment", "exposure_type", "scenario", "year"))):
+        g, a = read(tmp_path / "ref" / name, *key), read(tmp_path / "eng" / name, *key)
+        assert g.keys() == a.keys(), name
+        for k in g:
+            for col in g[k]:
+                try:
+                    assert abs(float(g[k][col]) - float(a[k][col])) <= 0.01, (name, k, col)
+                except ValueError:
+                    assert g[k][col] == a[k][col], (name, k, col)
+    bm = {row["segment"]: row for row in csv.DictReader(open(tmp_path / "eng" / "benchmarks.csv"))}
+    assert bm["LOANS|NFC_SME_OTHER|BE"]["pd_tr_model"] == "1" and bm["LOANS|NFC_SME_OTHER|BE"]["pd_tr_rule"] == "none"
+    uses = {(row["pd_tr"], row["lgd_lr"]) for row in csv.DictReader(open(tmp_path / "eng" / "sector_parameters.csv"))}
+    assert uses == {("sectoral", "sectoral")}
+    summary = json.loads((tmp_path / "eng" / "summary.json").read_text())["sector_satellites"]
+    assert summary["pd_tr_share"] == 1.0 and summary["lgd_lr_share"] == 1.0
+
+    plain = tmp_path / "plain.yaml"
+    plain.write_text("".join(line for line in variant.read_text().splitlines(keepends=True)
+                             if not line.startswith(("sector_satellites:", "  file: /", "  gva_fallback:"))))
+    assert "sector_satellites:" not in plain.read_text() and "benchmark_parameters:" in plain.read_text()
+    r = subprocess.run([str(ENGINE), "run", str(reference_sim), "--scenario", str(plain), "-o", str(tmp_path / "plain"),
+                        "--base", str(REPO)], capture_output=True, text=True)
+    assert r.returncode != 0 and "no satellite coefficients for portfolio NFC" in r.stderr
+    with pytest.raises(KeyError):
+        ref.run(reference_sim, plain, tmp_path / "plain_ref", REPO)
+
+
+def test_sector_satellites_off(reference_sim, base_run, tmp_path):
+    """Without the scenario key: no sector_parameters.csv, CR_SECTOR columns 1-2 are 0, only NFC results change
+    (the segment parameter paths are the portfolio model's with or without it)."""
+    text = SCENARIO.read_text()
+    lines, skip = [], False
+    for line in text.splitlines():
+        skip = line.startswith("sector_satellites:") or (skip and line.startswith(" "))
+        if not skip:
+            lines.append(line)
+    plain = tmp_path / "plain.yaml"
+    plain.write_text("\n".join(lines) + "\n")
+    r = subprocess.run([str(ENGINE), "run", str(reference_sim), "--scenario", str(plain), "-o", str(tmp_path / "out"),
+                        "--base", str(REPO)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    out = tmp_path / "out"
+    assert not (out / "sector_parameters.csv").exists()
+    assert "sector_satellites" not in json.loads((out / "summary.json").read_text())
+    assert (out / "parameters.csv").read_text() == (base_run / "parameters.csv").read_text()
+    for r in csv.DictReader(open(out / "cr_sector.csv")):
+        assert float(r[SECTOR_COLUMNS[0]]) == 0.0 and float(r[SECTOR_COLUMNS[1]]) == 0.0
+    a, b = read(out / "projection.csv", "segment", "scenario", "year"), read(base_run / "projection.csv", "segment", "scenario", "year")
+    changed = {k[0] for k in a if a[k] != b[k]}
+    assert changed and all("|NFC" in s for s in changed)

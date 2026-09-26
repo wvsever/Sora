@@ -41,6 +41,62 @@ void write_params_row(std::ofstream& f, const std::string& key, const char* scen
       << ',' << source << ',' << levels << '\n';
 }
 
+// sector_parameters.csv: the sectoral satellite paths per NFC segment and sector with coefficients, and where each
+// group comes from (sectoral, portfolio, benchmark; none = flat, portfolio without satellite coefficients).
+void write_sector_parameters(const Segmentation& s, const Projection& p, const fs::path& file) {
+    auto f = open(file);
+    f << "segment,sector,gva_sector,gva_key,gva_relative,scenario,year,pd12m_s1,pd12m_s2,tr1_2,tr2_1,tr3_1,tr3_2,lgd_s1,"
+         "lgd_s2,lgd_s3,lrlt_s2,pd_tr,lgd_lr\n";
+    for (std::size_t i = 0; i < s.segments.size(); ++i) {
+        const auto* bm = p.benchmark_of(i);
+        for (const auto& sp : p.sector_paths[i]) {
+            const char* use[2];
+            for (std::size_t g = 0; g < 2; ++g)
+                use[g] = bm && bm->applied[g] ? "benchmark" : sp.model.coef.covers(g) ? "sectoral" : p.portfolio_model[i] ? "portfolio" : "none";
+            for (std::size_t sc = 0; sc < 2; ++sc)
+                for (std::size_t t = 1; t <= 3; ++t) {
+                    f << s.segments[i].key << ',' << sector_code(sp.model.sector) << ',' << gva_sector(sp.model.sector) << ','
+                      << sp.model.gva_key << ',' << (sp.model.relative ? 1 : 0) << ',' << kScenarios[sc] << ',' << t;
+                    for (std::size_t k = 0; k < kParamCount; ++k) f << ',' << rate(param_field(sp.params[sc][t], k));
+                    f << ',' << use[0] << ',' << use[1] << '\n';
+                }
+        }
+    }
+}
+
+// The summary.json "sector_satellites" object: settings, sectors with a model per group, and the t0 exposure of the
+// NFC portfolio projected with sectoral models per group (after the ECB benchmark rule).
+void write_sector_summary(std::ostream& f, const Dataset& d, const Segmentation& s, const Projection& p,
+                          const ScenarioConfig& cfg) {
+    std::size_t sectors[2] = {};
+    for (const auto& c : p.sector_coefficients)
+        for (std::size_t g = 0; g < 2; ++g) sectors[g] += c && c->covers(g) ? 1 : 0;
+    std::size_t relative = 0;
+    for (const auto& paths : p.sector_paths) {
+        bool any = false;
+        for (const auto& sp : paths) any = any || sp.model.relative;
+        relative += any ? 1 : 0;
+    }
+    double total = 0, used[2] = {};
+    for (std::size_t i = 0; i < d.exposures.size(); ++i) {
+        const auto sid = s.segment_of[i];
+        const auto& e = d.exposures[i];
+        if (sid < 0 || e.stage == Stage::NotApplicable || !has_sector_breakdown(s.segments[static_cast<std::size_t>(sid)])) continue;
+        const double g = to_double(e.gca) * s.fx[i];
+        total += g;
+        const auto* sp = p.sector_path(static_cast<std::size_t>(sid), d.counterparties[e.counterparty].nace);
+        for (std::size_t k = 0; k < 2; ++k) used[k] += sp && sp->sectoral[k] ? g : 0.0;
+    }
+    f << "{\n    \"file\": \"" << json_escape(cfg.sector_satellites.file.filename().string()) << "\",\n    \"gva_fallback\": [";
+    for (std::size_t k = 0; k < cfg.sector_satellites.gva_fallback.size(); ++k)
+        f << (k ? ", " : "") << '"' << json_escape(cfg.sector_satellites.gva_fallback[k]) << '"';
+    f << "],\n    \"sectors_pd_tr\": " << sectors[0] << ",\n    \"sectors_lgd_lr\": " << sectors[1]
+      << ",\n    \"segments_gva_relative\": " << relative << ",\n    \"nfc_exposure\": " << money(total)
+      << ",\n    \"pd_tr_exposure\": " << money(used[0]) << ",\n    \"lgd_lr_exposure\": " << money(used[1])
+      << ",\n    \"pd_tr_share\": " << rate(total > 0 ? used[0] / total : 0.0)
+      << ",\n    \"lgd_lr_share\": " << rate(total > 0 ? used[1] / total : 0.0) << "\n  }";
+}
+
 }  // namespace
 
 void write_outputs(const RunOutput& run, const fs::path& dir) {
@@ -128,6 +184,7 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
         write_cr_sector(d, s, *run.projection, dir / "cr_sector.csv");
     }
     if (run.projection && run.projection->benchmark.enabled) write_benchmarks(s, run.projection->benchmark, dir / "benchmarks.csv");
+    if (run.projection && run.projection->sectoral) write_sector_parameters(s, *run.projection, dir / "sector_parameters.csv");
     if (run.rea) write_rea_csv(s, *run.rea, dir / "rea.csv");
     if (run.off_balance) write_off_balance(d, s, *run.off_balance, dir);
 
@@ -158,6 +215,10 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
         if (run.projection && run.projection->benchmark.enabled) {
             f << ",\n  \"benchmark\": ";
             write_benchmark_summary(f, run.config.benchmark, run.projection->benchmark);
+        }
+        if (run.projection && run.projection->sectoral) {
+            f << ",\n  \"sector_satellites\": ";
+            write_sector_summary(f, d, s, *run.projection, run.config);
         }
         if (run.rea) {
             f << ",\n  \"rea\": ";

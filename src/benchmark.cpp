@@ -110,7 +110,8 @@ const BenchmarkTable::Entry* BenchmarkTable::find(std::string_view key) const {
 
 BenchmarkResult decide_benchmarks(const Dataset& d, const Segmentation& s, const Calibration& cal,
                                   const std::map<std::string, Satellite>& satellites, const BenchmarkTable& table,
-                                  const BenchmarkConfig& cfg, const ExternalParameters* external) {
+                                  const BenchmarkConfig& cfg, const ExternalParameters* external,
+                                  const std::vector<std::array<bool, kBenchmarkGroups>>* sector_models) {
     const auto nseg = s.segments.size();
     BenchmarkResult out;
     out.enabled = true;
@@ -131,7 +132,7 @@ BenchmarkResult decide_benchmarks(const Dataset& d, const Segmentation& s, const
 
     auto covered = [&](std::size_t i, std::size_t g) {
         const auto& seg = s.segments[i];
-        if (!satellites.count(seg.portfolio)) return false;
+        if (!satellites.count(seg.portfolio) && !(sector_models && (*sector_models)[i][g])) return false;
         if (external) {   // the customer's own projections of the whole group, within the pivot asset class
             bool all = true;
             for (int sc = 1; sc <= 2 && all; ++sc)

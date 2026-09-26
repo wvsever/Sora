@@ -13,7 +13,8 @@
 //   footnote 13     no benchmarks for debt securities to CB, CI, OFC and NFC, nor for loans to central banks.
 //
 // Sora's rule, per pivot asset class (instrument|portfolio) and parameter group (PD/TR, LGD/LR):
-//   * model coverage = share of t0 exposure (gross carrying amount) whose segment has a satellite model and
+//   * model coverage = share of t0 exposure (gross carrying amount) whose segment has a satellite model (portfolio
+//     coefficients, or sectoral satellites for the group for every exposure of the segment) and
 //     whose group starting point was estimated within the pivot class: calibrated at the segment or portfolio
 //     level (BenchmarkConfig::model_level), or projected by the customer for all years at such a level;
 //   * general governments take the benchmark of their own country where the file has one (`sovereign`);
@@ -99,10 +100,13 @@ struct BenchmarkResult {
     std::vector<BenchmarkPivot> pivots;                                       // sorted by key
 };
 
-// The rule for every segment. `external` may be null. Deterministic (serial, exposure order).
+// The rule for every segment. `external` may be null. `sector_models` (may be null): per segment and group, every
+// exposure of the segment is projected with a sectoral satellite for the group, which counts as a model like the
+// portfolio's satellite coefficients. Deterministic (serial, exposure order).
 BenchmarkResult decide_benchmarks(const Dataset& d, const Segmentation& s, const Calibration& cal,
                                   const std::map<std::string, Satellite>& satellites, const BenchmarkTable& table,
-                                  const BenchmarkConfig& cfg, const ExternalParameters* external);
+                                  const BenchmarkConfig& cfg, const ExternalParameters* external,
+                                  const std::vector<std::array<bool, kBenchmarkGroups>>* sector_models = nullptr);
 
 // Replaces the applied groups in years 1..3 of both scenario paths and sets year 4 = year 3.
 void apply_benchmark(const SegmentBenchmark& b, std::array<ParamPath, 2>& paths);

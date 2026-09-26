@@ -71,12 +71,14 @@ struct OffBalanceResult {
 };
 
 // `parameter_source` is the FROM-clause source of the customer parameters (empty: none); `external` their
-// PD/LGD overlay (null: none). Deterministic: groups are projected in parallel by `workers` threads, each group
-// entirely by one worker in exposure order, so results are bit-identical for any number of workers.
+// PD/LGD overlay (null: none). Items take the parameter paths of `p` exactly as on-balance exposures of the same
+// segment and NACE sector (Projection::paths, own_param_paths): a portfolio without satellite coefficients is
+// allowed where its groups are benchmarked or covered by sectoral satellites (Projection::check_modelled).
+// Deterministic: groups are projected in parallel by `workers` threads, each group entirely by one worker in
+// exposure order, so results are bit-identical for any number of workers.
 // Invalid exposure-level parameters of an item throw sora::Error.
 OffBalanceResult project_off_balance(Duck& duck, const Dataset& d, const Segmentation& s, const Projection& p,
-                                     const std::map<std::string, Satellite>& satellites, const MacroTable& macro,
-                                     const ScenarioConfig& cfg, const ExternalParameters* external,
+                                     const MacroTable& macro, const ScenarioConfig& cfg, const ExternalParameters* external,
                                      const std::string& parameter_source, unsigned workers);
 
 // off_balance.csv (per segment, exposure type, scenario and year) and cr_scen_off_bs.csv (EBA layout).

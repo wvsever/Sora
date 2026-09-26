@@ -57,6 +57,24 @@ NaceSector nace_sector(std::string_view code) noexcept {
     return NaceSector::Unknown;
 }
 
+namespace {
+constexpr std::array<std::string_view, kNaceSectors> kSectorCodes = {
+    "A", "B", "C_EI", "C_OT", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "UNKNOWN"};
+constexpr std::array<std::string_view, kNaceSectors> kGvaSectors = {
+    "A", "B", "C_high", "C_low", "D", "E", "F", "G", "H", "I", "J", "J", "K", "L", "MN", "MN", "OPQ", "OPQ", "OPQ",
+    "RSTU", "RSTU", ""};
+}  // namespace
+
+std::string_view sector_code(NaceSector s) noexcept { return kSectorCodes[static_cast<std::size_t>(s)]; }
+
+std::optional<NaceSector> parse_sector_code(std::string_view code) noexcept {
+    for (std::size_t i = 0; i + 1 < kNaceSectors; ++i)
+        if (kSectorCodes[i] == code) return static_cast<NaceSector>(i);
+    return std::nullopt;
+}
+
+std::string_view gva_sector(NaceSector s) noexcept { return kGvaSectors[static_cast<std::size_t>(s)]; }
+
 // ----------------------------------------------------------------------------------------- template
 
 namespace {
@@ -68,6 +86,8 @@ struct Agg {
     double flow_s2_s1 = 0, flow_s1_s2 = 0, flow_s1_s3 = 0, flow_s2_s3 = 0;
     double prov_s1_s2 = 0, prov_s2_s2 = 0, prov_s1_s3 = 0, prov_s2_s3 = 0;   // within year
     double cum_s1_s3 = 0, cum_s2_s3 = 0, prov_s1_s1 = 0, prov_s2_s1 = 0, prov_old_s3 = 0;
+    double sect_w = 0;                         // t0 exposure (columns 1-2, projected slots)
+    std::array<double, 2> sect_used{};         // of which projected with a sectoral model: PD/TR, LGD/LR
     ParamAccum pa;
 
     void add(const Agg& o) {
@@ -77,6 +97,7 @@ struct Agg {
         prov_s1_s2 += o.prov_s1_s2; prov_s2_s2 += o.prov_s2_s2; prov_s1_s3 += o.prov_s1_s3; prov_s2_s3 += o.prov_s2_s3;
         cum_s1_s3 += o.cum_s1_s3; cum_s2_s3 += o.cum_s2_s3; prov_s1_s1 += o.prov_s1_s1; prov_s2_s1 += o.prov_s2_s1;
         prov_old_s3 += o.prov_old_s3;
+        sect_w += o.sect_w; sect_used[0] += o.sect_used[0]; sect_used[1] += o.sect_used[1];
         add_params(o.pa);
     }
     void add_params(const ParamAccum& o) {
@@ -134,12 +155,14 @@ Value param(const Agg& a, std::size_t i) {
 }
 Value ratio(double num, double den) { return den > 0 ? Value{num / den} : Value{}; }
 Value flow(bool actual, double v) { return actual ? Value{} : Value{v}; }
+// Columns 1-2: share of t0 exposure projected with sectoral (GVA) satellites; 0 for Actual (as the CR_SCEN
+// benchmark columns) and without the scenario key sector_satellites.
+Value sectoral(const Agg& a, bool actual, std::size_t g) { return Value{actual || a.sect_w <= 0 ? 0.0 : a.sect_used[g] / a.sect_w}; }
 
-// The 2027 draft CSV_CR_SECTOR columns. Sora has no sectoral models (columns 1-2 are 0: sector results come
-// from the segment parameters), and PD / LGD PiT are not produced (blank), as in cr_scen.csv.
+// The 2027 draft CSV_CR_SECTOR columns. PD / LGD PiT are not produced (blank), as in cr_scen.csv.
 constexpr Column kColumns[] = {
-    {"PD/TR - Percentage of exposures with projections based on sectoral models, e.g. via sensitivities by sector (%)", true, [](const Agg&, bool) { return Value{0.0}; }},
-    {"LGD/LR - Percentage of exposures with projections based on sectoral models, e.g. via sensitivities by sector (%)", true, [](const Agg&, bool) { return Value{0.0}; }},
+    {"PD/TR - Percentage of exposures with projections based on sectoral models, e.g. via sensitivities by sector (%)", true, [](const Agg& a, bool actual) { return sectoral(a, actual, 0); }},
+    {"LGD/LR - Percentage of exposures with projections based on sectoral models, e.g. via sensitivities by sector (%)", true, [](const Agg& a, bool actual) { return sectoral(a, actual, 1); }},
     {"PD PiT (%)", true, [](const Agg&, bool) { return Value{}; }},
     {"PD 12M S1 (TR1-3)", true, [](const Agg& a, bool) { return param(a, 0); }},
     {"TR1-2", true, [](const Agg& a, bool) { return param(a, 2); }},
@@ -215,8 +238,17 @@ void write_cr_sector(const Dataset& d, const Segmentation& s, const Projection& 
         const auto sid = s.segment_of[i];
         if (sid < 0 || !has_sector_breakdown(s.segments[static_cast<std::size_t>(sid)])) continue;
         const auto& e = d.exposures[i];
-        auto& a = cell(0, bucket[static_cast<std::size_t>(sid)], d.counterparties[e.counterparty].nace);
+        const auto nace = d.counterparties[e.counterparty].nace;
+        auto& a = cell(0, bucket[static_cast<std::size_t>(sid)], nace);
         const double g = to_double(e.gca) * s.fx[i], al = s.allowance[i];
+        if (e.stage != Stage::NotApplicable) {   // columns 1-2: t0 exposure with sectoral models, projected slots
+            const auto* sp = p.sector_path(static_cast<std::size_t>(sid), nace);
+            for (std::size_t slot = 1; slot < kSlots; ++slot) {
+                auto& c = cell(slot, bucket[static_cast<std::size_t>(sid)], nace);
+                c.sect_w += g;
+                for (std::size_t k = 0; k < 2; ++k) c.sect_used[k] += sp && sp->sectoral[k] ? g : 0.0;
+            }
+        }
         switch (e.stage) {
             case Stage::S1: a.exp_s1 += g; a.prov_s1 += al; break;
             case Stage::S2: a.exp_s2 += g; a.prov_s2 += al; break;

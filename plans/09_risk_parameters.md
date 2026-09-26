@@ -123,15 +123,19 @@ columns "Percentage of exposures for which ECB benchmark parameters were used".
 | fn. 13 (fn. 22) | No benchmarks for debt securities to CB, CI, OFC, NFC, nor for loans to central banks | Where the rule asks for a benchmark and the file has none, the model parameters stay and the segment is reported (`unavailable`, warning BMK-002) |
 | TG 2027 para 32 | Main asset class parameters consistent with the pivot ones | CR_SCEN Sum rows aggregate the pivot rows (exposure-weighted) |
 
-**Model coverage** of a segment for a group: the segment's portfolio has satellite coefficients, and either the
+**Model coverage** of a segment for a group: the segment's portfolio has satellite coefficients (or every exposure of
+the NFC segment has a sectoral satellite for the group: sectoral models are models, MN para 114; see
+`03_scenario_engine.md`, Sectoral (GVA) satellites), and either the
 group's starting point was calibrated within the pivot asset class (`calibration_levels` of `stage1`+`stage2` for
 PD/TR, `lgd`+`lrlt` for LGD/LR at the segment or, with `model_level: portfolio`, the `instrument|portfolio|ALL`
 level; a fallback to `instrument|ALL|ALL`, `ALL|ALL|ALL` or `none` means the institution has no data-based model of
 that pivot class), or the customer supplies the group's projected values for every scenario and year at such a
 level (`--parameters`, the institution's own satellite output). Coverage is weighted by t0 gross carrying amount
-(S1 + S2 + S3 + POCI, reporting currency). A portfolio without satellite coefficients is allowed only if both
-groups of all its segments are benchmarked (a flat, macro-independent satellite is then used for nothing but
-TR3-x, which stay at the starting point).
+(S1 + S2 + S3 + POCI, reporting currency). A portfolio without satellite coefficients is allowed only if, for each
+group, each of its segments is benchmarked or has a sectoral satellite for every exposure (a flat, macro-independent
+satellite is then used for nothing but TR3-x, which stay at the starting point, and the non-GVA terms of the sectoral
+model). The same rule applies to off-balance items (per item, by its counterparty's sector) and to the calculator
+records; before, the off-balance projection stopped on such a portfolio even when benchmarks covered it fully.
 
 **Benchmark key**: the segment's country bucket, then `country_fallback` (default: the scenario's), e.g. `WR`, `EU`
 aggregates for the OTHER bucket and for countries without their own benchmark. Sovereigns (para 146) only use their own
@@ -198,6 +202,9 @@ PL) and the aggregates EU and WR, for the scenario years 2025–2027 of the test
 - Diagnostics: BMK-000 (values loaded), BMK-001 (segments with benchmark parameters), BMK-002 (benchmark needed but
   missing).
 
+Where the rule applies a benchmark to a segment, it replaces the group on the segment's sectoral satellite paths too:
+the benchmark wins over a sectoral model, and CR_SECTOR columns 1-2 do not count that group.
+
 Not implemented: a customer-chosen weighted average inside a segment (para 117 mix at a finer grain than the
 segment), and the para 118 challenger comparison of model against benchmark parameters.
 
@@ -245,7 +252,9 @@ The mapping table is data (`segments.csv`), not code. Unmapped records are repor
 
 The projected parameters come from the scenario engine (`03_scenario_engine.md`), in one of two ways:
 
-- Satellite models (linear / logit-linear in macro variables per segment)
+- Satellite models (linear / logit-linear in macro variables per segment; for NFC exposures optionally per NACE
+  sector, driven by the sector's real GVA path: scenario key `sector_satellites`, synthetic coefficients
+  `tests/params/synthetic_sector_satellites.csv`)
 - User-supplied projected parameter tables
 
 The risk-parameter module only supplies the starting point and the per-segment sensitivities.

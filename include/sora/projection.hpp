@@ -54,6 +54,15 @@ struct SectorSlice {
 // Segments broken down by NACE sector: those of the non-financial corporations portfolios (NFC*).
 bool has_sector_breakdown(const Segment& seg);
 
+// The parameter paths of the exposures of one NACE sector in an NFC segment with a sectoral satellite (scenario key
+// sector_satellites): the segment's starting point projected with the sectoral model for the groups it covers (the
+// portfolio model for the others), then the customer's segment overlays, then the segment's ECB benchmark groups.
+struct SectorPath {
+    SectorModel model;
+    std::array<bool, 2> sectoral{};   // groups (PD/TR, LGD/LR) projected with the sectoral model, not benchmarked
+    std::array<ParamPath, 2> params;   // [scenario], index 0 = starting point, 4 = year 3
+};
+
 struct Projection {
     // [segment][scenario 0=baseline,1=adverse][year 0..2 = years 1..3]
     std::vector<std::array<std::array<YearResult, 3>, 2>> results;
@@ -74,6 +83,32 @@ struct Projection {
     const SegmentBenchmark* benchmark_of(std::size_t segment) const {
         return benchmark.enabled && benchmark.apply[segment].any() ? &benchmark.apply[segment] : nullptr;
     }
+    // [segment]: the portfolio's satellite coefficients; a flat model (all coefficients 0) when the portfolio has
+    // none, which is allowed only where every group is benchmarked or projected by sectoral satellites. Points into
+    // the `satellites` map passed to project(), which must outlive the projection.
+    std::vector<const Satellite*> satellite;
+    std::vector<char> portfolio_model;   // [segment]: the portfolio has satellite coefficients
+    // Sectoral (GVA) satellites (scenario key sector_satellites; empty vectors when disabled).
+    bool sectoral = false;
+    SectorSatellites sector_coefficients{};
+    std::vector<std::vector<SectorPath>> sector_paths;                     // [segment], in sector order
+    std::vector<std::array<std::int8_t, kNaceSectors>> sector_index;       // [segment][sector] -> sector_paths, -1 none
+    std::vector<std::array<bool, 2>> sector_coverage;   // [segment][group]: every exposure has a sectoral model
+    std::size_t exposures_with_sector_model = 0;        // on-balance exposures projected with a sectoral satellite
+    const SectorPath* sector_path(std::size_t segment, NaceSector sector) const {
+        if (!sectoral) return nullptr;
+        const auto k = sector_index[segment][static_cast<std::size_t>(sector)];
+        return k < 0 ? nullptr : &sector_paths[segment][static_cast<std::size_t>(k)];
+    }
+    // Parameter paths of an exposure of `segment` whose counterparty is in `sector` (without exposure-level
+    // parameters): the sector's path, else the segment's.
+    const std::array<ParamPath, 2>& paths(std::size_t segment, NaceSector sector) const {
+        const auto* sp = sector_path(segment, sector);
+        return sp ? sp->params : params[segment];
+    }
+    // Throws if an exposure of `segment` in `sector` has no model for a group: the portfolio has no satellite
+    // coefficients, and the group is neither benchmarked nor covered by the sector's satellite.
+    void check_modelled(const Segment& seg, std::size_t segment, NaceSector sector) const;
 };
 
 // Projects one exposure (reporting-currency amounts) and adds its contribution to `acc`.
@@ -85,19 +120,27 @@ void project_exposure(Stage stage, double gca, double allowance, const std::arra
 // Parameter paths of an exposure with exposure-level parameters: its own starting point (the segment's effective
 // starting point `start`, overlaid with the exposure's actual/0 values) projected with the segment's satellite,
 // then per year the segment overlay and the exposure overlay, and last the segment's ECB benchmark groups
-// (`benchmark`, if any); index 4 repeats year 3. The single definition
-// used by project() for provisions and by project_rea() for the calculator records.
+// (`benchmark`, if any); index 4 repeats year 3. `sector`: the exposure's sectoral satellite, if any. The single
+// definition used by project() for provisions, by project_off_balance() and by project_rea() for the calculator records.
 std::array<ParamPath, 2> exposure_param_paths(const Segmentation& s, const Segment& seg, const Params& start,
                                               const Satellite& sat, const MacroTable& macro, const ScenarioConfig& cfg,
                                               const ExternalParameters& external, std::size_t exposure,
-                                              const SegmentBenchmark* benchmark = nullptr);
+                                              const SegmentBenchmark* benchmark = nullptr,
+                                              const SectorModel* sector = nullptr);
+
+// exposure_param_paths() for exposure `exposure` of segment `segment` whose counterparty is in `sector`, with the
+// projection's satellite, sector model and benchmark of that segment.
+std::array<ParamPath, 2> own_param_paths(const Projection& p, const Segmentation& s, std::size_t segment,
+                                         NaceSector sector, const MacroTable& macro, const ScenarioConfig& cfg,
+                                         const ExternalParameters& external, std::size_t exposure);
 
 // `external` may be null (derived parameters only). `workers` threads project the segments in parallel
 // (0 = hardware concurrency); the results are bit-identical for any number of workers. With cfg.benchmark
-// enabled and `benchmarks` given, the ECB benchmark rule (benchmark.hpp) replaces projected parameters.
+// enabled and `benchmarks` given, the ECB benchmark rule (benchmark.hpp) replaces projected parameters. With
+// `sector_satellites` given, NFC exposures of sectors with coefficients take their sector's path (SectorPath).
 Projection project(const Dataset& d, const Segmentation& s, const Calibration& cal,
                    const std::map<std::string, Satellite>& satellites, const MacroTable& macro,
                    const ScenarioConfig& cfg, const ExternalParameters* external = nullptr, unsigned workers = 1,
-                   const BenchmarkTable* benchmarks = nullptr);
+                   const BenchmarkTable* benchmarks = nullptr, const SectorSatellites* sector_satellites = nullptr);
 
 }  // namespace sora

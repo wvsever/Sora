@@ -19,6 +19,7 @@
 #include <sys/resource.h>
 #endif
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -184,6 +185,14 @@ int main(int argc, char** argv) {
         Projection proj;
         const bool run = a.command == "run";
         BenchmarkTable benchmarks;   // ECB benchmark parameters (scenario key benchmark_parameters)
+        SectorSatellites sector_sats{};   // sectoral (GVA) satellites (scenario key sector_satellites)
+        if (run && cfg.sector_satellites.enabled) {
+            Timer t("load sector satellites");
+            sector_sats = load_sector_satellites(duck, cfg.sector_satellites.file);
+            std::size_t n = 0;
+            for (const auto& x : sector_sats) n += x ? 1 : 0;
+            diag.findings.push_back({"SEC-000", "info", "NACE sectors with sectoral satellite coefficients", n});
+        }
         if (run && cfg.benchmark.enabled) {
             Timer t("load benchmarks");
             benchmarks.load(duck, cfg.benchmark.file, cfg);
@@ -193,7 +202,15 @@ int main(int argc, char** argv) {
         if (run) {
             Timer t("project");
             proj = project(d, seg, cal, sats, macro, cfg, ext.empty() ? nullptr : &ext, a.workers,
-                           cfg.benchmark.enabled ? &benchmarks : nullptr);
+                           cfg.benchmark.enabled ? &benchmarks : nullptr, cfg.sector_satellites.enabled ? &sector_sats : nullptr);
+            if (proj.sectoral) {
+                std::size_t relative = 0;
+                for (const auto& paths : proj.sector_paths)
+                    relative += !paths.empty() && std::any_of(paths.begin(), paths.end(), [](const SectorPath& x) { return x.model.relative; }) ? 1 : 0;
+                diag.findings.push_back({"SEC-001", "info", "NFC exposures projected with sectoral satellites", proj.exposures_with_sector_model});
+                if (relative)
+                    diag.findings.push_back({"SEC-002", "info", "NFC segments without sectoral GVA paths (non-EU): GDP growth plus the sector's GVA deviation from GDP in the gva_fallback key", relative});
+            }
             if (proj.benchmark.enabled) {
                 std::size_t applied = 0, unavailable = 0;
                 for (const auto& dec : proj.benchmark.decisions) {
@@ -216,7 +233,7 @@ int main(int argc, char** argv) {
         std::optional<OffBalanceResult> off_balance;   // CR_SCEN_OFF_BS (scenario key off_balance)
         if (run && cfg.off_balance.enabled) {
             Timer t("off-balance");
-            off_balance = project_off_balance(duck, d, seg, proj, sats, macro, cfg, ext.empty() ? nullptr : &ext, ext_source, a.workers);
+            off_balance = project_off_balance(duck, d, seg, proj, macro, cfg, ext.empty() ? nullptr : &ext, ext_source, a.workers);
             if (off_balance->fallback_items)
                 diag.findings.push_back({"OBS-001", "info", "off-balance items without an on-balance loan segment of their country: parameters of the portfolio's OTHER bucket", off_balance->fallback_items});
             if (off_balance->unmatched_items)

@@ -1,6 +1,6 @@
 # Fixed test scenario for golden results. SYNTHETIC: the macro paths are the EBA 2025 published
 # scenario, applied to the 30 June 2026 test dataset as projection years 1-3. The satellite
-# coefficients are synthetic (tests/params/synthetic_satellites.csv). This is not a real calibration.
+# coefficients are synthetic (tests/params/synthetic_satellites.csv, synthetic_sector_satellites.csv). Not a real calibration.
 name: test_eba2025
 macro_path: scenarios/eba2025_macro.csv
 year_map: {1: 2025, 2: 2026, 3: 2027}      # projection year -> scenario year
@@ -27,6 +27,9 @@ benchmark_parameters:                       # ECB credit-risk benchmarks (EBA MN
   model_level: portfolio                    # coarsest calibration level that counts as a model: segment | portfolio
   sovereign: true                           # general governments: the country's benchmark is mandatory (para 146)
   country_fallback: [WR, EU]                # benchmark key for OTHER and countries without benchmarks
+sector_satellites:                          # sectoral (GVA) satellites for NFC exposures by NACE sector (MN 2027 para 114)
+  file: tests/params/synthetic_sector_satellites.csv   # SYNTHETIC coefficients
+  gva_fallback: [EU]                        # sector GVA deviation from GDP for countries without GVA paths (non-EU)
 segmentation:
   top_countries: 10
 calibration:

@@ -53,6 +53,14 @@ Method (see plans/03_scenario_engine.md and plans/09_risk_parameters.md):
    the coverage threshold (10%) takes the benchmark for all its segments; above it, only its segments without a
    model do. The benchmark (segment country, then the country fallback) replaces the projected parameters of the
    group for years 1..3 without adjustment; the starting point stays the institution's own.
+8. Sectoral (GVA) satellites (scenario key `sector_satellites`, EBA 2027 draft MN para 114, template guidance paras
+   44-45). NFC exposures whose NACE sector has coefficients take a sector path: the sector's real GVA growth replaces
+   GDP growth in the PD/TR index (beta_gva), and the cumulative GVA decline raises LGD/LR (lgd_gva_sensitivity), for
+   the groups the sector has coefficients for. Countries without sectoral GVA (non-EU) use their GDP growth plus the
+   sector's GVA deviation from GDP in the `gva_fallback` key (EU). Customer overlays and the ECB benchmark apply on top
+   (the benchmark wins); a segment whose exposures all have a sectoral model counts as modelled for the benchmark rule.
+   Segments are projected as the sum of their parts with the same path (projection.csv, CR_SECTOR); off-balance items
+   take the path of their counterparty's sector.
 """
 
 from __future__ import annotations
@@ -287,12 +295,15 @@ def calibrate(segments, counts, stocks, cfg) -> tuple[dict, dict]:
 # ----------------------------------------------------------------------------------------- scenario
 
 def load_macro(path: Path) -> dict:
+    """{(variable, key, scenario, year): value}. Sector rows are kept for real GVA only, as variable
+    `real_gva:<scenario sector>` (e.g. real_gva:C_high); other sector and tenor rows are not used."""
     macro = {}
     with open(path) as f:
         for r in csv.DictReader(f):
-            if r["tenor"] or r["sector"]:
+            if r["tenor"] or (r["sector"] and r["variable"] != "real_gva"):
                 continue
-            macro[(r["variable"], r["key"], r["scenario"], int(r["year"]))] = float(r["value"])
+            var = f"real_gva:{r['sector']}" if r["sector"] else r["variable"]
+            macro[(var, r["key"], r["scenario"], int(r["year"]))] = float(r["value"])
     return macro
 
 
@@ -314,21 +325,30 @@ def expit(x):
     return 1 / (1 + math.exp(-x))
 
 
-def project_parameters(segment, p0, sat, macro, scenario, cfg) -> dict[int, dict]:
-    """Parameters for years 1..3 (and 4 = flat continuation) under one scenario."""
+def project_parameters(segment, p0, sat, macro, scenario, cfg, sector=None) -> dict[int, dict]:
+    """Parameters for years 1..3 (and 4 = flat continuation) under one scenario. `sector` (sector_model) is the
+    sectoral (GVA) satellite of the exposure's NACE sector: its GVA growth replaces GDP growth in the PD/TR index
+    (beta_gva), and the cumulative GVA decline raises LGD/LR (lgd_gva_sensitivity), for the groups it covers."""
     _, portfolio, bucket = segment.split("|")
     key = macro_key(macro, bucket, cfg)
     b = sat[portfolio]
     u0 = macro.get(("unemployment_rate", key, "historical", cfg["history_year"]))
     prop_var = "residential_property_prices" if portfolio == "HH_HOUSE" else "commercial_property_prices"
-    out, cum_prop = {}, 1.0
+    out, cum_prop, cum_gva = {}, 1.0, 1.0
     for t in (1, 2, 3):
         y = cfg["year_map"][t]
         gdp = macro[("real_gdp", key, scenario, y)]
         u = macro.get(("unemployment_rate", key, scenario, y), u0)
         hp = macro.get((prop_var, key, scenario, y), 0.0)
         cum_prop *= 1 + hp / 100
-        z = (b["beta_gdp"] * (gdp - cfg["normal_gdp_growth"])
+        if sector is not None:
+            gva = sector_growth(sector, macro, scenario, y)
+            cum_gva *= 1 + gva / 100
+        if sector is not None and sector["beta_gva"] is not None:
+            activity = sector["beta_gva"] * (gva - cfg["normal_gdp_growth"])
+        else:
+            activity = b["beta_gdp"] * (gdp - cfg["normal_gdp_growth"])
+        z = (activity
              + b["beta_unemployment"] * ((u - u0) if (u is not None and u0 is not None) else 0.0)
              + b["beta_property"] * hp)
         p = dict(p0)
@@ -339,6 +359,8 @@ def project_parameters(segment, p0, sat, macro, scenario, cfg) -> dict[int, dict
         p["tr1_2"] = min(p["tr1_2"], 1 - p["pd12m_s1"])
         p["tr2_1"] = min(p["tr2_1"], 1 - p["pd12m_s2"])
         mult = 1 + b["lgd_property_sensitivity"] * max(0.0, 1 - cum_prop)
+        if sector is not None and sector["lgd_gva_sensitivity"] is not None:
+            mult += sector["lgd_gva_sensitivity"] * max(0.0, 1 - cum_gva)
         for k in LOSS_LIKE:
             p[k] = min(p0[k] * mult, 1.0)
         out[t] = p
@@ -533,7 +555,7 @@ SELECT e.exposure_id, e.exposure_type,
                  WHEN e.household_purpose = 'consumption' THEN 'HH_CONS'
                  ELSE 'HH_OTHER' END
     END AS portfolio,
-    coalesce(e.country_of_risk, c.country_of_residence) AS country, e.stage,
+    coalesce(e.country_of_risk, c.country_of_residence) AS country, e.stage, c.nace_code,
     CAST(coalesce(e.off_balance_amount, 0) AS DOUBLE) * fx.r AS nominal,
     CAST(coalesce(e.gross_carrying_amount, 0) AS DOUBLE) AS drawn,
     CAST(coalesce(e.off_balance_amount, 0) AS DOUBLE) AS undrawn,
@@ -597,17 +619,22 @@ def loan_undrawn_items(exposures, cfg) -> list[dict]:
             continue
         base = r["undrawn"] + r["drawn"]
         items.append({"exposure_id": r["exposure_id"], "exposure_type": "loan", "ccf_type": "loan_commitment",
-                      "segment": r["segment"], "stage": r["stage"], "nominal": r["undrawn"] * r["fx"],
+                      "segment": r["segment"], "portfolio": r.get("portfolio", ""), "nace_code": r.get("nace_code"),
+                      "stage": r["stage"], "nominal": r["undrawn"] * r["fx"],
                       "allowance": r["allowance_total"] * (r["undrawn"] / base), "cancellable": r["cancellable"]})
     return items
 
 
-def project_off_balance(con, sim, cfg, manifest, top, segments, projected, exposures=()) -> tuple[list[dict], dict]:
+def project_off_balance(con, sim, cfg, manifest, top, segments, projected, exposures=(), sector_paths=None,
+                        coefficients=None, check_modelled=None) -> tuple[list[dict], dict]:
     """Off-balance items (EBA 2027 draft MN paras 78-82). Each item is projected with the parameters of the
     on-balance loan segment of its counterparty (same portfolio rules and country bucket), with the same stage flow
     and provision logic: the post-CCF amount (CCF x nominal) carries the flows and provisions, and the nominal
-    amount follows the same stage flows. Returns rows per segment, exposure type, scenario and year (including
-    the starting point as actual/0), and run statistics."""
+    amount follows the same stage flows. An NFC item whose counterparty's sector has a sectoral satellite takes the
+    segment's path of that sector (`sector_paths`), as an on-balance exposure of the same counterparty does. Returns
+    rows per segment, exposure type, scenario and year (including the starting point as actual/0), and run
+    statistics. `check_modelled(segment, sector)` applies the on-balance satellite rule to each item (raises)."""
+    sector_paths = sector_paths or {}
     ob = cfg["off_balance"]
     types = ob["exposure_types"]
     if any(t not in OFF_BALANCE_TYPES for t in types):
@@ -648,10 +675,14 @@ def project_off_balance(con, sim, cfg, manifest, top, segments, projected, expos
     stats["commitment_drawn_exposures"] = sum(1 for r in exposures if r["exposure_type"] in OFF_BALANCE_TYPES)
     for item in items + loan_items:
         segment = item["segment"]
+        if check_modelled:
+            check_modelled(segment, sector_key(item, coefficients))
         ccf, customer = item_ccf({**item, "exposure_type": item["ccf_type"]}, segment, fallback, ccf_exposure, ccf_level)
         stats["items"] += 1
         stats["customer_ccf_items"] += customer
-        g = groups.setdefault((segment, item["exposure_type"]), {
+        # Parts of a group with different parameter paths: the segment's (key "") or a sector's (sectoral satellite).
+        code = sector_key(item, coefficients) or ""
+        g = groups.setdefault((segment, item["exposure_type"]), {}).setdefault(code, {
             "post": {st: [0.0, 0.0] for st in (*STAGES, "poci")}, "nom": {st: [0.0, 0.0] for st in (*STAGES, "poci")},
             "post_s3": [], "nom_s3": []})
         st = item["stage"]
@@ -664,16 +695,18 @@ def project_off_balance(con, sim, cfg, manifest, top, segments, projected, expos
             g["nom_s3"].append((item["nominal"], 0.0))
     rows = []
     for segment, etype in sorted(groups):
-        g = groups[(segment, etype)]
-        post, nom = g["post"], g["nom"]
+        parts = [groups[(segment, etype)][c] for c in sorted(groups[(segment, etype)])]
+        post = {st: [sum(g["post"][st][i] for g in parts) for i in (0, 1)] for st in (*STAGES, "poci")}
+        nom = {st: [sum(g["nom"][st][i] for g in parts) for i in (0, 1)] for st in (*STAGES, "poci")}
+        paths = [sector_paths.get((segment, c), projected[segment]) for c in sorted(groups[(segment, etype)])]
         start = dict.fromkeys(OFF_BALANCE_FIELDS, 0.0)
         start.update(nom_s1=nom["stage1"][0], nom_s2=nom["stage2"][0], nom_s3_old=nom["stage3"][0], nom_poci=nom["poci"][0],
                      exp_s1=post["stage1"][0], exp_s2=post["stage2"][0], exp_s3_old=post["stage3"][0],
                      exp_poci=post["poci"][0], prov_old_s3=post["stage3"][1], prov_stock_s1=post["stage1"][1],
                      prov_stock_s2=post["stage2"][1], prov_stock_s3=post["stage3"][1], prov_stock_poci=post["poci"][1])
         rows.append({"segment": segment, "exposure_type": etype, "scenario": "actual", "year": 0, **start})
-        post_rows = project_segment(post, projected[segment], cfg, g["post_s3"])
-        nom_rows = project_segment(nom, projected[segment], cfg, g["nom_s3"])
+        post_rows = project_parts([(g["post"], P, g["post_s3"]) for g, P in zip(parts, paths)], cfg)
+        nom_rows = project_parts([(g["nom"], P, g["nom_s3"]) for g, P in zip(parts, paths)], cfg)
         for pr, nr in zip(post_rows, nom_rows):
             rows.append({"segment": segment, "exposure_type": etype, "scenario": pr["scenario"], "year": pr["year"],
                          **{n: nr[e] for n, e in zip(NOMINAL, POST_CCF)},
@@ -810,11 +843,11 @@ def load_benchmarks(path: Path, cfg) -> dict:
     return raw
 
 
-def benchmark_decisions(segments, sources, seg_stock, sat, bench, bcfg) -> tuple[dict, dict]:
+def benchmark_decisions(segments, sources, seg_stock, sat, bench, bcfg, sector_cov=None) -> tuple[dict, dict]:
     """The benchmark application rule (EBA MN 2027 draft paras 115-117 and 146; 2025 MN paras 124-126 and 155).
 
     Model coverage: a segment's group is covered by a satellite model if its portfolio has satellite coefficients
-    and the group's starting point was calibrated within the pivot asset class (calibration level no coarser than
+    (or every exposure of the segment has a sectoral satellite for the group, `sector_cov`) and the group's starting point was calibrated within the pivot asset class (calibration level no coarser than
     `model_level`: segment, or portfolio = instrument|portfolio|ALL). Per pivot asset class (instrument|portfolio)
     and group, coverage = covered t0 exposure / t0 exposure (gross carrying amount).
       * general governments (`sovereign`): the benchmark of the segment's own country is mandatory (para 146);
@@ -829,7 +862,7 @@ def benchmark_decisions(segments, sources, seg_stock, sat, bench, bcfg) -> tuple
         return sum(seg_stock[s][st][0] for st in (*STAGES, "poci"))
 
     def covered(s, g):
-        return s.split("|")[1] in sat and all(
+        return (s.split("|")[1] in sat or (sector_cov or {}).get(s, {}).get(g, False)) and all(
             sources[s][part] in parents(s)[:max_level + 1] for part in BENCHMARK_PARTS[g])
 
     pivots: dict = {}
@@ -907,6 +940,152 @@ def benchmark_summary(bcfg, decisions, pivots) -> dict:
     }
 
 
+# ----------------------------------------------------------------------------------------- sectoral (GVA) satellites
+
+# CR_SECTOR sector (NACE Rev. 2.1 section; manufacturing split into energy-intensive C_EI and other C_OT) -> sector of
+# the ESRB "Real GVA by sector" scenario (NACE Rev. 2 sections and aggregates; C_high / C_low = high / low energy
+# intensity manufacturing, MN 2027 para 95). Mapped by division: Rev. 2.1 J (58-60) and K (61-63) are Rev. 2 J,
+# Rev. 2.1 L (64-66) is Rev. 2 K, M (68) is L, N (69-75) and O (77-82) are MN, P-R (84-88) OPQ, S-T (90-96) RSTU.
+GVA_SECTOR = {"A": "A", "B": "B", "C_EI": "C_high", "C_OT": "C_low", "D": "D", "E": "E", "F": "F", "G": "G",
+              "H": "H", "I": "I", "J": "J", "K": "J", "L": "K", "M": "L", "N": "MN", "O": "MN", "P": "OPQ",
+              "Q": "OPQ", "R": "OPQ", "S": "RSTU", "T": "RSTU"}
+# Coefficient of each parameter group (benchmark groups): an empty coefficient = no sectoral model for that group.
+SECTOR_COEFFICIENTS = {"pd_tr": "beta_gva", "lgd_lr": "lgd_gva_sensitivity"}
+
+
+def sector_satellite_config(cfg) -> dict | None:
+    """The scenario's `sector_satellites` block with defaults, or None if absent."""
+    s = cfg.get("sector_satellites")
+    if not s:
+        return None
+    if "file" not in s:
+        raise ValueError("sector_satellites.file is required")
+    return {"file": s["file"], "gva_fallback": list(s.get("gva_fallback", ["EU"]))}
+
+
+def load_sector_satellites(path: Path) -> dict:
+    """{CR_SECTOR sector: {beta_gva, lgd_gva_sensitivity}} (None = no model for that group) from a CSV with columns
+    sector, beta_gva, lgd_gva_sensitivity[, description]; lines starting with `#` are comments."""
+    out = {}
+    with open(path) as f:
+        for r in csv.DictReader(line for line in f if not line.startswith("#")):
+            code = (r["sector"] or "").strip()
+            if code not in GVA_SECTOR:
+                raise ValueError(f"sector satellites: unknown sector {code!r}")
+            if code in out:
+                raise ValueError(f"sector satellites: duplicate sector {code}")
+            c = {k: float(r[k]) if (r.get(k) or "").strip() else None for k in SECTOR_COEFFICIENTS.values()}
+            if all(v is None for v in c.values()):
+                raise ValueError(f"sector satellites: no coefficients for sector {code}")
+            if any(v is not None and not math.isfinite(v) for v in c.values()):
+                raise ValueError(f"sector satellites: invalid coefficient for sector {code}")
+            out[code] = c
+    return out
+
+
+def sector_model(segment, code, coefficients, macro, cfg, scfg) -> dict:
+    """The sectoral satellite of CR_SECTOR sector `code` for the exposures of `segment`. GVA path: the scenario's real
+    GVA of the sector for the segment's macro key; for a key without sectoral GVA (non-EU countries: the scenario has
+    GVA for the EU 27, EA and EU only, template guidance para 45) the GDP growth of the macro key plus the sector's
+    GVA deviation from GDP in the first `gva_fallback` key that has it (EU): gdp(key) + gva(EU) - gdp(EU)."""
+    bucket = segment.split("|")[2]
+    key = macro_key(macro, bucket, cfg)
+    var = f"real_gva:{GVA_SECTOR[code]}"
+    y1 = cfg["year_map"][1]
+    if (var, key, "baseline", y1) in macro:
+        gva_key, relative = key, False
+    else:
+        gva_key = next((k for k in scfg["gva_fallback"] if (var, k, "baseline", y1) in macro), None)
+        if gva_key is None:
+            raise KeyError(f"no real GVA path for sector {code} ({GVA_SECTOR[code]}) in {key} or {scfg['gva_fallback']}")
+        relative = True
+    return {"code": code, **coefficients[code], "var": var, "macro_key": key, "gva_key": gva_key, "relative": relative}
+
+
+def sector_growth(sector, macro, scenario, year) -> float:
+    """Real GVA growth (%) of the sector's path in a scenario year."""
+    def get(var, key):
+        v = macro.get((var, key, scenario, year))
+        if v is None:
+            raise KeyError(f"macro: no {var} for {key} {scenario} {year}")
+        return v
+    if not sector["relative"]:
+        return get(sector["var"], sector["gva_key"])
+    return get("real_gdp", sector["macro_key"]) + (get(sector["var"], sector["gva_key"]) - get("real_gdp", sector["gva_key"]))
+
+
+def sector_key(r, coefficients) -> str | None:
+    """The CR_SECTOR sector of an NFC exposure (or off-balance item) that has a sectoral satellite, else None
+    (projected with the segment's portfolio path)."""
+    if not coefficients or not r["portfolio"].startswith("NFC"):
+        return None
+    code = nace_sector(r["nace_code"])
+    return code if code in coefficients else None
+
+
+def sector_coverage(exposures, coefficients) -> dict:
+    """{segment: {group: bool}}: every exposure of the (NFC) segment has a sectoral satellite for the group. Such a
+    segment counts as modelled for the ECB benchmark rule even if its portfolio has no satellite coefficients."""
+    out: dict = {}
+    for r in exposures:
+        code = sector_key(r, coefficients)
+        cov = out.setdefault(r["segment"], dict.fromkeys(SECTOR_COEFFICIENTS, True))
+        for g, coef in SECTOR_COEFFICIENTS.items():
+            cov[g] = cov[g] and code is not None and coefficients[code][coef] is not None
+    return out
+
+
+def project_parts(parts, cfg) -> list[dict]:
+    """Boxes 3-9 for a segment made of parts (stock, parameter paths, S3 exposures) with different parameter paths
+    (sectoral satellites): the parts' rows added up. A single part is projected as a whole."""
+    if len(parts) == 1:
+        return project_segment(*parts[0][:2], cfg, parts[0][2])
+    total = None
+    for stock_, paths, s3 in parts:
+        rows = project_segment(stock_, paths, cfg, s3)
+        if total is None:
+            total = [dict(r) for r in rows]
+            continue
+        for t, r in zip(total, rows):
+            for k, v in r.items():
+                if k not in ("scenario", "year"):
+                    t[k] += v
+    return total
+
+
+def sector_summary(scfg, coefficients, exposures, sector_use, sector_rows) -> dict:
+    """summary.json "sector_satellites": settings, sectors with a model per group, and the t0 exposure of the NFC
+    portfolio (on-balance) projected with sectoral models per group (after the ECB benchmark rule)."""
+    total, used = 0.0, dict.fromkeys(SECTOR_COEFFICIENTS, 0.0)
+    for r in exposures:
+        if not r["portfolio"].startswith("NFC"):
+            continue
+        total += r["gca"]
+        use = sector_use.get((r["segment"], sector_key(r, coefficients)), {})
+        for g in used:
+            used[g] += r["gca"] if use.get(g) else 0.0
+    return {
+        "file": Path(scfg["file"]).name, "gva_fallback": scfg["gva_fallback"],
+        **{f"sectors_{g}": sum(1 for c in coefficients.values() if c[k] is not None) for g, k in SECTOR_COEFFICIENTS.items()},
+        "segments_gva_relative": len({seg for seg, _, model, _, _ in sector_rows if model["relative"]}),
+        "nfc_exposure": round(total, 2),
+        **{f"{g}_exposure": round(v, 2) for g, v in used.items()},
+        **{f"{g}_share": round(v / total, 9) if total > 0 else 0.0 for g, v in used.items()},
+    }
+
+
+def write_sector_parameters(path: Path, rows: list):
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(["segment", "sector", "gva_sector", "gva_key", "gva_relative", "scenario", "year", *PARAMS,
+                    "pd_tr", "lgd_lr"])
+        for segment, code, model, P, use in rows:
+            for scen in ("baseline", "adverse"):
+                for t in (1, 2, 3):
+                    w.writerow([segment, code, GVA_SECTOR[code], model["gva_key"], int(model["relative"]), scen, t,
+                                *(f"{P[scen][t][k]:.9f}" for k in PARAMS), use["pd_tr"], use["lgd_lr"]])
+
+
 # ----------------------------------------------------------------------------------------- CR_SECTOR
 
 # NACE Rev. 2.1 sections by division (01..99). Division numbers mean the same sections in NACE Rev. 2, except for
@@ -971,7 +1150,9 @@ WEIGHT_STAGE = {"pd12m_s1": 0, "tr1_2": 0, "lgd_s1": 0, "pd12m_s2": 1, "tr2_1": 
 
 
 def new_agg() -> dict:
-    return {**{k: 0.0 for k in AMOUNTS}, "w": [0.0, 0.0, 0.0], "psum": {k: 0.0 for k in PARAMS}}
+    # sw: t0 exposure, sused: of which projected with a sectoral model per group (projected slots only)
+    return {**{k: 0.0 for k in AMOUNTS}, "w": [0.0, 0.0, 0.0], "psum": {k: 0.0 for k in PARAMS}, "sw": 0.0,
+            "sused": [0.0, 0.0]}
 
 
 def add_params(agg, p, w):
@@ -984,11 +1165,14 @@ def add_params(agg, p, w):
             agg["psum"][k] += p[k] * w[WEIGHT_STAGE[k]]
 
 
-def sector_cells(exposures, params0, projected, cfg) -> dict:
+def sector_cells(exposures, params0, projected, cfg, sector_paths=None, sector_use=None) -> dict:
     """{(segment, sector): [agg per slot]} for the NFC segments. The sector is carried through the projection:
-    each (segment, sector) stock is projected with the segment's parameters, exactly as the engine projects each
-    exposure. Because Boxes 3-8 are linear in the stage stocks and Box 9 applies per exposure, the sectors of a
-    segment add up to the segment."""
+    each (segment, sector) stock is projected with the parameters its exposures have, exactly as the engine projects
+    each exposure: the sectoral satellite path `sector_paths[(segment, sector)]` if there is one, else the segment's.
+    Because Boxes 3-8 are linear in the stage stocks and Box 9 applies per exposure, the sectors of a segment add up
+    to the segment. `sector_use[(segment, sector)]` = {group: projected with the sectoral model} (CR_SECTOR columns
+    1-2, share of t0 exposure in the projected slots)."""
+    sector_paths, sector_use = sector_paths or {}, sector_use or {}
     stocks, s3 = {}, defaultdict(list)
     for r in exposures:
         if not r["portfolio"].startswith("NFC") or r["stage"] not in (*STAGES, "poci"):
@@ -1007,12 +1191,18 @@ def sector_cells(exposures, params0, projected, cfg) -> dict:
         (a["exp_s1"], a["prov_s1"]), (a["exp_s2"], a["prov_s2"]) = st["stage1"], st["stage2"]
         (a["exp_s3_old"], a["prov_s3"]), (a["exp_poci"], a["prov_poci"]) = st["stage3"], st["poci"]
         add_params(a, params0[seg], (st["stage1"][0], st["stage2"][0], st["stage3"][0]))
+        paths = sector_paths.get(key, projected[seg])
+        use = sector_use.get(key, {})
+        t0 = sum(st[k][0] for k in (*STAGES, "poci"))
+        for b in slots[1:]:
+            b["sw"] = t0
+            b["sused"] = [t0 if use.get(g) else 0.0 for g in SECTOR_COEFFICIENTS]
         prev = {}
-        for row in project_segment(st, projected[seg], cfg, s3[key]):
+        for row in project_segment(st, paths, cfg, s3[key]):
             sc, t = row["scenario"], row["year"]
             b = slots[SLOTS.index((sc, t))]
             e1, e2 = prev.get(sc, (st["stage1"][0], st["stage2"][0]))             # exposure at the start of the year
-            add_params(b, projected[seg][sc][t], (e1, e2, st["stage3"][0]))
+            add_params(b, paths[sc][t], (e1, e2, st["stage3"][0]))
             prev[sc] = (row["exp_s1"], row["exp_s2"])
             for k in ("exp_s1", "exp_s2", "exp_s3_old", "exp_s3_new", "exp_poci", "flow_s2_s1", "flow_s1_s2",
                       "flow_s1_s3", "flow_s2_s3", "prov_s1_s2", "prov_s2_s2", "prov_s1_s1", "prov_s2_s1", "prov_old_s3"):
@@ -1040,13 +1230,19 @@ def _flow(k):
     return lambda a, actual: None if actual else a[k]
 
 
-# (header, percent?, value(agg, actual)): the 2027 draft CSV_CR_SECTOR columns. Sora uses no sectoral models
-# (columns 1-2 are 0), and PD / LGD PiT are not produced (blank), as in cr_scen.csv.
+def _sectoral(i):
+    """Columns 1-2: share of t0 exposure projected with sectoral (GVA) satellites (0 for Actual, as the CR_SCEN
+    benchmark columns)."""
+    return lambda a, actual: 0.0 if actual or a["sw"] <= 0 else a["sused"][i] / a["sw"]
+
+
+# (header, percent?, value(agg, actual)): the 2027 draft CSV_CR_SECTOR columns. Columns 1-2: exposures projected with
+# sectoral satellites (scenario key sector_satellites); PD / LGD PiT are not produced (blank), as in cr_scen.csv.
 CR_SECTOR_COLUMNS = (
     ("PD/TR - Percentage of exposures with projections based on sectoral models, e.g. via sensitivities by sector (%)",
-     True, lambda a, actual: 0.0),
+     True, _sectoral(0)),
     ("LGD/LR - Percentage of exposures with projections based on sectoral models, e.g. via sensitivities by sector (%)",
-     True, lambda a, actual: 0.0),
+     True, _sectoral(1)),
     ("PD PiT (%)", True, lambda a, actual: None),
     ("PD 12M S1 (TR1-3)", True, lambda a, actual: _param(a, "pd12m_s1")),
     ("TR1-2", True, lambda a, actual: _param(a, "tr1_2")),
@@ -1123,6 +1319,9 @@ def write_cr_sector(path: Path, cells: dict, top: list[str], ref_year: int):
                             a[k] += b[k]
                         for i in range(3):
                             a["w"][i] += b["w"][i]
+                        a["sw"] += b["sw"]
+                        for i in range(2):
+                            a["sused"][i] += b["sused"][i]
                         for k in PARAMS:
                             a["psum"][k] += b["psum"][k]
                     values = []
@@ -1175,15 +1374,20 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
             w.writerow([s, i, p, c, macro_key(macro, c, cfg), counts_by_seg[s],
                         *(fmt(st[k][0]) for k in (*STAGES, "poci")), *(fmt(st[k][1]) for k in (*STAGES, "poci"))])
 
+    # Sectoral (GVA) satellites (optional scenario key sector_satellites): NFC exposures by NACE sector.
+    scfg = sector_satellite_config(cfg)
+    coefficients = load_sector_satellites(repo / scfg["file"]) if scfg else {}
+    sector_cov = sector_coverage(exposures, coefficients) if scfg else {}
+
     # ECB benchmarks (optional scenario key benchmark_parameters): which segments take benchmark parameters.
     bcfg = benchmark_config(cfg)
     decisions = pivots = None
     if bcfg:
         bench = load_benchmarks(repo / bcfg["file"], cfg)
-        decisions, pivots = benchmark_decisions(segments, sources, seg_stock, sat, bench, bcfg)
+        decisions, pivots = benchmark_decisions(segments, sources, seg_stock, sat, bench, bcfg, sector_cov)
 
     # parameters.csv: starting point and projections (the sim_risk_parameter layout)
-    projected = {}
+    projected, sector_paths, sector_use, sector_rows = {}, {}, {}, []
     with open(out / "parameters.csv", "w", newline="") as f:
         w = csv.writer(f, lineterminator="\n")
         w.writerow(["level", "key", "scenario", "year", *PARAMS, "source", "calibration_levels"])
@@ -1194,7 +1398,8 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
             applied = [g for g, d in (decisions or {}).get(s, {}).items() if d["benchmark"] not in ("", "unavailable")]
             source = "derived" if not applied else "benchmark" if len(applied) == len(BENCHMARK_GROUPS) else "mixed"
             portfolio = s.split("|")[1]
-            if portfolio not in sat and source != "benchmark":
+            # A portfolio without satellite coefficients: every group benchmarked or covered by sectoral satellites.
+            if portfolio not in sat and not all(g in applied or sector_cov.get(s, {}).get(g, False) for g in BENCHMARK_GROUPS):
                 raise KeyError(f"no satellite coefficients for portfolio {portfolio}")
             seg_sat = sat if portfolio in sat else {portfolio: dict.fromkeys(
                 ("beta_gdp", "beta_unemployment", "beta_property", "lgd_property_sensitivity"), 0.0)}
@@ -1205,8 +1410,33 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
                 projected[s][scen] = P
                 for t in (1, 2, 3):
                     w.writerow(["segment", s, scen, t, *(fmtp(P[t][k]) for k in PARAMS), source, ""])
+            # Sectoral paths of the NFC segment: one per sector with coefficients; the benchmark still wins.
+            if coefficients and portfolio.startswith("NFC"):
+                for code in (c for c in GVA_SECTOR if c in coefficients):
+                    model = sector_model(s, code, coefficients, macro, cfg, scfg)
+                    P = {}
+                    for scen in ("baseline", "adverse"):
+                        P[scen] = project_parameters(s, params0[s], seg_sat, macro, scen, cfg, sector=model)
+                        if applied:
+                            apply_benchmark(P[scen], decisions[s], bench, s, scen)
+                    sector_paths[(s, code)] = P
+                    use = {g: "benchmark" if g in applied else "sectoral" if coefficients[code][c] is not None
+                           else "portfolio" if portfolio in sat else "none" for g, c in SECTOR_COEFFICIENTS.items()}
+                    sector_use[(s, code)] = {g: u == "sectoral" for g, u in use.items()}
+                    sector_rows.append((s, code, model, P, use))
     if bcfg:
         write_benchmarks(out / "benchmarks.csv", segments, seg_stock, decisions)
+    if scfg:
+        write_sector_parameters(out / "sector_parameters.csv", sector_rows)
+
+    # Parts of each segment with their own parameter paths (sectoral satellites): stocks and S3 exposures per sector.
+    parts = defaultdict(lambda: {"stock": {st: [0.0, 0.0] for st in (*STAGES, "poci")}, "s3": []})
+    for r in exposures:
+        part = parts[(r["segment"], sector_key(r, coefficients) or "")]
+        part["stock"][r["stage"]][0] += r["gca"]
+        part["stock"][r["stage"]][1] += r["allowance"]
+        if r["stage"] == "stage3":
+            part["s3"].append((r["gca"], r["allowance"]))
 
     # projection.csv
     totals = defaultdict(lambda: defaultdict(float))
@@ -1214,7 +1444,13 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
     with open(out / "projection.csv", "w", newline="") as f:
         w = csv.writer(f, lineterminator="\n")
         for s in segments:
-            for row in project_segment(seg_stock[s], projected[s], cfg, s3_by_seg[s]):
+            codes = sorted(c for seg, c in parts if seg == s)
+            if codes == [""]:                         # one parameter path: the segment projected as a whole
+                seg_rows = project_segment(seg_stock[s], projected[s], cfg, s3_by_seg[s])
+            else:
+                seg_rows = project_parts([(parts[(s, c)]["stock"], sector_paths.get((s, c), projected[s]),
+                                           parts[(s, c)]["s3"]) for c in codes], cfg)
+            for row in seg_rows:
                 if fields is None:
                     fields = list(row)
                     w.writerow(["segment", *fields])
@@ -1224,8 +1460,8 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
 
     write_collateral(out / "collateral.csv", collateral_ltv(con, exposures, macro, cfg, manifest))
     top = top_countries(exposures, cfg["segmentation"]["top_countries"])
-    write_cr_sector(out / "cr_sector.csv", sector_cells(exposures, params0, projected, cfg), top,
-                    int(manifest["reference_date"][:4]))
+    write_cr_sector(out / "cr_sector.csv", sector_cells(exposures, params0, projected, cfg, sector_paths, sector_use),
+                    top, int(manifest["reference_date"][:4]))
 
     summary = {
         "reference_date": manifest["reference_date"], "sim_mapping_release": manifest.get("mapping_release"),
@@ -1239,9 +1475,22 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
 
     if bcfg:
         summary["benchmark"] = benchmark_summary(bcfg, decisions, pivots)
+    if scfg:
+        summary["sector_satellites"] = sector_summary(scfg, coefficients, exposures, sector_use, sector_rows)
 
     if cfg.get("off_balance"):                     # CR_SCEN_OFF_BS (optional; on-balance results are unaffected)
-        ob_rows, stats = project_off_balance(con, sim, cfg, manifest, top, segments, projected, exposures)
+        def check_modelled(segment, code):
+            """The on-balance rule for an item: a portfolio without satellite coefficients needs, per group, the
+            segment's benchmark or the sectoral satellite of the item's sector."""
+            if segment.split("|")[1] in sat:
+                return
+            applied = {g for g, d in (decisions or {}).get(segment, {}).items() if d["benchmark"] not in ("", "unavailable")}
+            for g, coef in SECTOR_COEFFICIENTS.items():
+                if g not in applied and not (code and coefficients[code][coef] is not None):
+                    raise KeyError(f"no satellite coefficients for portfolio {segment.split('|')[1]} ({segment}, {code})")
+
+        ob_rows, stats = project_off_balance(con, sim, cfg, manifest, top, segments, projected, exposures, sector_paths,
+                                             coefficients, check_modelled)
         write_off_balance(out / "off_balance.csv", ob_rows)
         write_cr_scen_off_bs(out / "cr_scen_off_bs.csv", ob_rows, int(manifest["reference_date"][:4]))
         ob_totals = defaultdict(lambda: dict.fromkeys(OFF_BALANCE_FIELDS, 0.0))

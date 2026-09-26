@@ -62,6 +62,21 @@ void load_benchmark_config(ryml::ConstNodeRef root, const fs::path& base_dir, Sc
     }
 }
 
+// `sector_satellites` (sectoral GVA satellites); defaults as in SectorSatelliteConfig.
+void load_sector_config(ryml::ConstNodeRef root, const fs::path& base_dir, ScenarioConfig& c) {
+    if (!root.has_child(ryml::to_csubstr("sector_satellites"))) return;
+    auto b = root["sector_satellites"];
+    auto& sc = c.sector_satellites;
+    sc.enabled = true;
+    if (!b.has_child(ryml::to_csubstr("file"))) throw Error("scenario: sector_satellites.file is required");
+    sc.file = str(b["file"]);
+    if (!sc.file.is_absolute()) sc.file = base_dir / sc.file;
+    if (b.has_child(ryml::to_csubstr("gva_fallback"))) {
+        sc.gva_fallback.clear();
+        for (auto ch : b["gva_fallback"].children()) sc.gva_fallback.push_back(str(ch));
+    }
+}
+
 }  // namespace
 
 ScenarioConfig load_scenario(const fs::path& yaml, const fs::path& base_dir) {
@@ -139,6 +154,7 @@ ScenarioConfig load_scenario(const fs::path& yaml, const fs::path& base_dir) {
         if (c.off_balance.commitment_drawn_on_balance) c.scope.drawn_types = c.off_balance.types;
     }
     load_benchmark_config(root, base_dir, c);
+    load_sector_config(root, base_dir, c);
     return c;
 }
 
@@ -158,10 +174,12 @@ void MacroTable::set(const std::string& variable, const std::string& key, const 
 
 MacroTable load_macro(Duck& duck, const fs::path& csv) {
     MacroTable m;
-    duck.query("SELECT variable, key, scenario, year, value FROM read_csv(" + sql_quote(csv.string()) +
+    // Sector rows are kept for real GVA only, as variable real_gva:<scenario sector> (e.g. real_gva:C_high).
+    duck.query("SELECT CASE WHEN coalesce(sector, '') = '' THEN variable ELSE variable || ':' || sector END, "
+                   "key, scenario, year, value FROM read_csv(" + sql_quote(csv.string()) +
                    ", header = true, types = {'variable': 'VARCHAR', 'key': 'VARCHAR', 'scenario': 'VARCHAR', "
                    "'tenor': 'VARCHAR', 'sector': 'VARCHAR', 'year': 'BIGINT', 'value': 'DOUBLE'}) "
-                   "WHERE coalesce(tenor, '') = '' AND coalesce(sector, '') = ''",
+                   "WHERE coalesce(tenor, '') = '' AND (coalesce(sector, '') = '' OR variable = 'real_gva')",
                [&](const Chunk& c) {
                    for (std::size_t r = 0; r < c.size(); ++r) {
                        m.set(std::string(c.str(0, r)), std::string(c.str(1, r)), std::string(c.str(2, r)),
@@ -184,6 +202,61 @@ std::map<std::string, Satellite> load_satellites(Duck& duck, const fs::path& csv
     return out;
 }
 
+SectorSatellites load_sector_satellites(Duck& duck, const fs::path& csv) {
+    SectorSatellites out;
+    duck.query("SELECT sector, CAST(beta_gva AS DOUBLE), CAST(lgd_gva_sensitivity AS DOUBLE) FROM read_csv(" +
+                   sql_quote(csv.string()) + ", header = true, comment = '#', all_varchar = true)",
+               [&](const Chunk& c) {
+                   for (std::size_t r = 0; r < c.size(); ++r) {
+                       const std::string code = c.valid(0, r) ? std::string(c.str(0, r)) : std::string();
+                       const auto sec = parse_sector_code(code);
+                       if (!sec) throw Error("sector satellites: unknown sector '" + code + "' in " + csv.string());
+                       auto& slot = out[static_cast<std::size_t>(*sec)];
+                       if (slot) throw Error("sector satellites: duplicate sector " + code);
+                       SectorSatellite s;
+                       if (c.valid(1, r)) s.beta_gva = c.f64(1, r);
+                       if (c.valid(2, r)) s.lgd_gva_sensitivity = c.f64(2, r);
+                       if (!s.beta_gva && !s.lgd_gva_sensitivity) throw Error("sector satellites: no coefficients for sector " + code);
+                       if ((s.beta_gva && !std::isfinite(*s.beta_gva)) || (s.lgd_gva_sensitivity && !std::isfinite(*s.lgd_gva_sensitivity)))
+                           throw Error("sector satellites: invalid coefficient for sector " + code);
+                       slot = s;
+                   }
+               });
+    return out;
+}
+
+SectorModel sector_model(const MacroTable& macro, const Segment& seg, NaceSector sector, const SectorSatellite& coef,
+                         const ScenarioConfig& cfg) {
+    SectorModel m;
+    m.sector = sector;
+    m.coef = coef;
+    m.gva_variable = "real_gva:" + std::string(gva_sector(sector));
+    m.macro_key = macro_key(macro, seg.bucket, cfg);
+    const int y1 = cfg.year_map.at(1);
+    if (macro.get(m.gva_variable, m.macro_key, "baseline", y1)) {
+        m.gva_key = m.macro_key;
+        return m;
+    }
+    for (const auto& k : cfg.sector_satellites.gva_fallback)
+        if (macro.get(m.gva_variable, k, "baseline", y1)) {
+            m.gva_key = k;
+            m.relative = true;
+            return m;
+        }
+    throw Error("no real GVA path for sector " + std::string(sector_code(sector)) + " (" + std::string(gva_sector(sector)) +
+                ") in " + m.macro_key + " or the sector_satellites.gva_fallback keys");
+}
+
+double sector_growth(const SectorModel& m, const MacroTable& macro, const std::string& scenario, int year) {
+    auto get = [&](const std::string& var, const std::string& key) {
+        const auto v = macro.get(var, key, scenario, year);
+        if (!v) throw Error("macro: no " + var + " for " + key + " " + scenario + " " + std::to_string(year));
+        return *v;
+    };
+    if (!m.relative) return get(m.gva_variable, m.gva_key);
+    return get("real_gdp", m.macro_key) + (get(m.gva_variable, m.gva_key) - get("real_gdp", m.gva_key));
+}
+
 std::string macro_key(const MacroTable& macro, const std::string& bucket, const ScenarioConfig& cfg) {
     const int y1 = cfg.year_map.at(1);
     if (bucket != "OTHER" && macro.get("real_gdp", bucket, "baseline", y1)) return bucket;
@@ -203,13 +276,13 @@ double expit(double x) { return 1 / (1 + std::exp(-x)); }
 }  // namespace
 
 ParamPath project_parameters(const Segment& seg, const Params& p0, const Satellite& b, const MacroTable& macro,
-                             const std::string& scenario, const ScenarioConfig& cfg) {
+                             const std::string& scenario, const ScenarioConfig& cfg, const SectorModel* sector) {
     const std::string key = macro_key(macro, seg.bucket, cfg);
     const auto u0 = macro.get("unemployment_rate", key, "historical", cfg.history_year);
     const std::string prop_var = seg.portfolio == "HH_HOUSE" ? "residential_property_prices" : "commercial_property_prices";
     ParamPath out;
     out[0] = p0;
-    double cum_prop = 1.0;
+    double cum_prop = 1.0, cum_gva = 1.0;
     for (int t = 1; t <= 3; ++t) {
         const int y = cfg.year_map.at(t);
         const auto gdp = macro.get("real_gdp", key, scenario, y);
@@ -217,8 +290,15 @@ ParamPath project_parameters(const Segment& seg, const Params& p0, const Satelli
         const auto u = macro.get("unemployment_rate", key, scenario, y).value_or(u0.value_or(0.0));
         const double hp = macro.get(prop_var, key, scenario, y).value_or(0.0);
         cum_prop *= 1 + hp / 100;
-        const double z = b.beta_gdp * (*gdp - cfg.normal_gdp_growth) +
-                         b.beta_unemployment * (u0 ? (u - *u0) : 0.0) + b.beta_property * hp;
+        double gva = 0.0;
+        if (sector) {
+            gva = sector_growth(*sector, macro, scenario, y);
+            cum_gva *= 1 + gva / 100;
+        }
+        // Activity driver: the sector's real GVA growth under a sectoral PD/TR model, else GDP growth.
+        const double activity = sector && sector->coef.beta_gva ? *sector->coef.beta_gva * (gva - cfg.normal_gdp_growth)
+                                                                : b.beta_gdp * (*gdp - cfg.normal_gdp_growth);
+        const double z = activity + b.beta_unemployment * (u0 ? (u - *u0) : 0.0) + b.beta_property * hp;
         Params p = p0;
         auto pd_like = [&](double v0) { return v0 > 0 ? std::max(expit(logit(v0) + z), cfg.calibration.pd_floor) : 0.0; };
         p.pd12m_s1 = pd_like(p0.pd12m_s1);
@@ -227,7 +307,8 @@ ParamPath project_parameters(const Segment& seg, const Params& p0, const Satelli
         p.tr2_1 = p0.tr2_1 > 0 ? expit(logit(p0.tr2_1) - z) : 0.0;
         p.tr1_2 = std::min(p.tr1_2, 1 - p.pd12m_s1);
         p.tr2_1 = std::min(p.tr2_1, 1 - p.pd12m_s2);
-        const double mult = 1 + b.lgd_property_sensitivity * std::max(0.0, 1 - cum_prop);
+        double mult = 1 + b.lgd_property_sensitivity * std::max(0.0, 1 - cum_prop);
+        if (sector && sector->coef.lgd_gva_sensitivity) mult += *sector->coef.lgd_gva_sensitivity * std::max(0.0, 1 - cum_gva);
         p.lgd_s1 = std::min(p0.lgd_s1 * mult, 1.0);
         p.lgd_s2 = std::min(p0.lgd_s2 * mult, 1.0);
         p.lgd_s3 = std::min(p0.lgd_s3 * mult, 1.0);

@@ -168,7 +168,7 @@ def test_golden_results_are_reproducible(reference_sim, tmp_path):
     ref.run(reference_sim, REPO / "tests" / "scenarios" / "test_eba2025.yaml", tmp_path, REPO)
     golden = REPO / "tests" / "golden" / "20260630"
     for name in ("segments.csv", "parameters.csv", "projection.csv", "collateral.csv", "cr_sector.csv",
-                 "off_balance.csv", "cr_scen_off_bs.csv", "benchmarks.csv"):
+                 "off_balance.csv", "cr_scen_off_bs.csv", "benchmarks.csv", "sector_parameters.csv"):
         assert (tmp_path / name).read_text() == (golden / name).read_text(), name
     a, b = json.loads((tmp_path / "summary.json").read_text()), json.loads((golden / "summary.json").read_text())
     a.pop("sim_mapping_release"), b.pop("sim_mapping_release")
@@ -443,3 +443,128 @@ def test_golden_facilities():
     on = sum(sp[k] for k in ("prov_s1", "prov_s2", "prov_s3", "prov_poci"))
     off = sum(ob["totals"]["actual/0"][k] for k in ("prov_stock_s1", "prov_stock_s2", "prov_stock_s3", "prov_stock_poci"))
     assert abs(on + off - 231_249_324.98) < 1.0
+
+
+# ----------------------------------------------------------------------------------------- sectoral (GVA) satellites
+
+SECTOR_CFG = {"year_map": {1: 2025, 2: 2026, 3: 2027}, "country_fallback": ["EU"], "history_year": 2024,
+              "normal_gdp_growth": 1.5, "calibration": {"pd_floor": 0.00001}}
+SECTOR_SCFG = {"file": "x.csv", "gva_fallback": ["EU"]}
+
+
+def sector_macro():
+    macro = {}
+    for y in (2025, 2026, 2027):
+        for k in ("BE", "US", "EU"):
+            macro[("real_gdp", k, "baseline", y)] = 1.0
+            macro[("real_gdp", k, "adverse", y)] = -1.0 if k == "US" else -2.0
+        for k in ("BE", "EU"):
+            macro[("real_gva:F", k, "baseline", y)] = 1.5
+            macro[("real_gva:F", k, "adverse", y)] = -5.0 if k == "BE" else -4.0
+    return macro
+
+
+def test_gva_sectors_by_division():
+    """CR_SECTOR sectors (NACE Rev. 2.1) map to the Rev. 2 sections and aggregates of the ESRB GVA scenario by
+    division; the same table as the engine's gva_sector()."""
+    assert list(ref.GVA_SECTOR) == ["A", "B", "C_EI", "C_OT", *"DEFGHIJKLMNOPQRST"]
+    assert ref.GVA_SECTOR["C_EI"] == "C_high" and ref.GVA_SECTOR["C_OT"] == "C_low"
+    for code, sec in (("J62.01", "J"), ("J58.11", "J"), ("K64.20", "K"), ("L68.20", "L"), ("M69.10", "MN"),
+                      ("N77.11", "MN"), ("Q86.10", "OPQ"), ("P85.10", "OPQ"), ("R93.11", "RSTU"), ("S96.02", "RSTU")):
+        assert ref.GVA_SECTOR[ref.nace_sector(code)] == sec, code
+
+
+def test_load_macro_keeps_real_gva_by_sector():
+    macro = ref.load_macro(REPO / "scenarios" / "eba2025_macro.csv")
+    assert ("real_gva:C_high", "DE", "adverse", 2025) in macro and ("real_gva:RSTU", "EU", "baseline", 2027) in macro
+    assert not any(k[0] == "real_gva" for k in macro)                    # only by sector
+    assert not any(k[0].startswith("real_gva:") and k[1] in ("US", "GB", "WR") for k in macro)   # EU 27, EA, EU only
+
+
+def test_load_sector_satellites(tmp_path):
+    p = tmp_path / "s.csv"
+    p.write_text("# SYNTHETIC\nsector,beta_gva,lgd_gva_sensitivity,description\nF,-0.15,0.8,x\nD,,0.3,LGD only\n")
+    s = ref.load_sector_satellites(p)
+    assert s == {"F": {"beta_gva": -0.15, "lgd_gva_sensitivity": 0.8}, "D": {"beta_gva": None, "lgd_gva_sensitivity": 0.3}}
+    for body in ("C,-0.1,0.2,x\n", "F,-0.1,,x\nF,-0.2,,y\n", "F,,,x\n"):
+        p.write_text("sector,beta_gva,lgd_gva_sensitivity,description\n" + body)
+        with pytest.raises(ValueError):
+            ref.load_sector_satellites(p)
+    synthetic = REPO / "tests" / "params" / "synthetic_sector_satellites.csv"
+    s = ref.load_sector_satellites(synthetic)
+    assert "SYNTHETIC" in synthetic.read_text().splitlines()[0]
+    assert "L" not in s and "P" not in s and s["D"]["beta_gva"] is None
+
+
+def test_sector_satellite_parameters():
+    """GVA growth replaces GDP growth in the PD/TR index; cumulative GVA decline raises LGD/LR. Same numbers as the
+    engine's unit test (tests/cpp/test_sector_satellites.cpp)."""
+    import math
+    macro = sector_macro()
+    coef = {"F": {"beta_gva": -0.2, "lgd_gva_sensitivity": 0.5}, "C_EI": {"beta_gva": -0.1, "lgd_gva_sensitivity": None}}
+    sat = {"NFC_SME_OTHER": {"beta_gdp": -0.12, "beta_unemployment": 0.0, "beta_property": 0.0, "lgd_property_sensitivity": 0.0}}
+    p0 = {"pd12m_s1": 0.02, "pd12m_s2": 0.10, "tr1_2": 0.05, "tr2_1": 0.20, "tr3_1": 0.01, "tr3_2": 0.02,
+          "lgd_s1": 0.4, "lgd_s2": 0.4, "lgd_s3": 0.4, "lrlt_s2": 0.08}
+    lg = lambda p: math.log(p / (1 - p))  # noqa: E731
+    ex = lambda x: 1 / (1 + math.exp(-x))  # noqa: E731
+    f = ref.sector_model("LOANS|NFC_SME_OTHER|BE", "F", coef, macro, SECTOR_CFG, SECTOR_SCFG)
+    assert (f["gva_key"], f["relative"]) == ("BE", False)
+    P = ref.project_parameters("LOANS|NFC_SME_OTHER|BE", p0, sat, macro, "adverse", SECTOR_CFG, sector=f)
+    assert approx(P[1]["pd12m_s1"], ex(lg(0.02) + 1.3)) and approx(P[1]["tr2_1"], ex(lg(0.20) - 1.3))
+    assert approx(P[1]["lgd_s1"], 0.4 * 1.025) and approx(P[3]["lrlt_s2"], 0.08 * (1 + 0.5 * (1 - 0.95 ** 3)))
+    assert P[1]["tr3_1"] == 0.01
+    base = ref.project_parameters("LOANS|NFC_SME_OTHER|BE", p0, sat, macro, "adverse", SECTOR_CFG)
+    assert approx(base[1]["pd12m_s1"], ex(lg(0.02) - 0.12 * (-2 - 1.5))) and base[3]["lgd_s1"] == 0.4
+    us = ref.sector_model("LOANS|NFC_SME_OTHER|US", "F", coef, macro, SECTOR_CFG, SECTOR_SCFG)
+    assert (us["gva_key"], us["relative"]) == ("EU", True)
+    assert ref.sector_growth(us, macro, "adverse", 2026) == -3.0         # US GDP + (EU GVA - EU GDP)
+    with pytest.raises(KeyError):
+        ref.sector_model("LOANS|NFC_SME_OTHER|US", "F", coef, macro, SECTOR_CFG, {"gva_fallback": ["EA"]})
+
+
+def test_project_parts_add_up_and_sector_coverage():
+    """A segment with parts on different parameter paths is the sum of the parts; one part is the segment."""
+    P = flat(pd12m_s1=0.02, pd12m_s2=0.10, tr1_2=0.05, tr2_1=0.20, lgd_s1=0.40, lgd_s2=0.50, lgd_s3=0.60, lrlt_s2=0.08)
+    Q = flat(pd12m_s1=0.04, pd12m_s2=0.20, tr1_2=0.05, tr2_1=0.10, lgd_s1=0.50, lgd_s2=0.50, lgd_s3=0.60, lrlt_s2=0.10)
+    a, b = stock(1000, 200, 100, prov=(3, 10, 50, 0)), stock(500, 0, 100, prov=(1, 0, 20, 0))
+    both = ref.project_parts([(a, {"baseline": P}, [(100, 50)]), (b, {"baseline": Q}, [(100, 20)])], CFG)
+    ra = ref.project_segment(a, {"baseline": P}, CFG, [(100, 50)])
+    rb = ref.project_segment(b, {"baseline": Q}, CFG, [(100, 20)])
+    for r, x, y in zip(both, ra, rb):
+        assert all(approx(r[k], x[k] + y[k]) for k in r if k not in ("scenario", "year"))
+    assert ref.project_parts([(a, {"baseline": P}, [(100, 50)])], CFG) == ra
+    coef = {"F": {"beta_gva": -0.2, "lgd_gva_sensitivity": None}}
+    ex = [{"segment": "LOANS|NFC_SME_OTHER|BE", "portfolio": "NFC_SME_OTHER", "nace_code": "F41.20"},
+          {"segment": "LOANS|NFC_SME_OTHER|DE", "portfolio": "NFC_SME_OTHER", "nace_code": "F41.20"},
+          {"segment": "LOANS|NFC_SME_OTHER|DE", "portfolio": "NFC_SME_OTHER", "nace_code": "G47.11"},
+          {"segment": "LOANS|HH_CONS|BE", "portfolio": "HH_CONS", "nace_code": "F41.20"}]
+    cov = ref.sector_coverage(ex, coef)
+    assert cov["LOANS|NFC_SME_OTHER|BE"] == {"pd_tr": True, "lgd_lr": False}
+    assert cov["LOANS|NFC_SME_OTHER|DE"] == {"pd_tr": False, "lgd_lr": False}
+    assert cov["LOANS|HH_CONS|BE"] == {"pd_tr": False, "lgd_lr": False}     # sectoral satellites are for NFCs only
+    assert ref.sector_key(ex[0], coef) == "F" and ref.sector_key(ex[2], coef) is None and ref.sector_key(ex[3], coef) is None
+
+
+def test_golden_sector_satellites():
+    """Golden results of the sectoral satellites: CR_SECTOR columns 1-2 are 0 for Actual and 0 or 100 per sector (the
+    benchmark rule does not touch the NFC portfolios of the reference data); the TOTAL row is the summary's share."""
+    golden = REPO / "tests" / "golden" / "20260630"
+    summary = json.loads((golden / "summary.json").read_text())["sector_satellites"]
+    assert summary["sectors_pd_tr"] == 18 and summary["sectors_lgd_lr"] == 10
+    cols = [ref.CR_SECTOR_COLUMNS[i][0] for i in (0, 1)]
+    for r in csv.DictReader(open(golden / "cr_sector.csv")):
+        v = [float(r[c]) for c in cols]
+        exposure = float(r["Total exposure (total Exp)"])
+        if r["Scenario"] == "Actual":
+            assert v == [0.0, 0.0]
+            continue
+        if r["RowNum"] != "23" and exposure > 0:
+            assert v[0] in (0.0, 100.0) and v[1] in (0.0, 100.0)
+        if r["RowNum"] == "23" and r["Geographical breakdown"] == "Total":
+            assert abs(v[0] - 100 * summary["pd_tr_share"]) < 1e-6 and abs(v[1] - 100 * summary["lgd_lr_share"]) < 1e-6
+        if r["RowNum"] == "6" and exposure > 0:
+            assert v == [0.0, 100.0]                      # D: LGD/LR only
+        if r["RowNum"] == "7" and exposure > 0:
+            assert v == [100.0, 0.0]                      # E: PD/TR only
+    uses = {(r["sector"], r["pd_tr"], r["lgd_lr"]) for r in csv.DictReader(open(golden / "sector_parameters.csv"))}
+    assert ("D", "portfolio", "sectoral") in uses and ("E", "sectoral", "portfolio") in uses

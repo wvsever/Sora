@@ -183,8 +183,7 @@ void project_off_balance_item(Stage stage, double nominal, double ccf, double pr
 }
 
 OffBalanceResult project_off_balance(Duck& duck, const Dataset& d, const Segmentation& s, const Projection& p,
-                                     const std::map<std::string, Satellite>& satellites, const MacroTable& macro,
-                                     const ScenarioConfig& cfg, const ExternalParameters* external,
+                                     const MacroTable& macro, const ScenarioConfig& cfg, const ExternalParameters* external,
                                      const std::string& parameter_source, unsigned workers) {
     OffBalanceResult out;
     const auto& ob = cfg.off_balance;
@@ -273,13 +272,15 @@ OffBalanceResult project_off_balance(Duck& duck, const Dataset& d, const Segment
         auto& g = out.groups[gi];
         auto& log = logs[gi];
         const auto& seg = s.segments[g.segment];
-        const auto sat = satellites.find(seg.portfolio);
-        if (sat == satellites.end()) throw Error("no satellite coefficients for portfolio " + seg.portfolio);
+        const bool by_sector = has_sector_breakdown(seg);
         for (const auto& item : *members[gi]) {
             const auto& e = d.exposures[item.exposure];
+            // The on-balance rule: the segment's satellite (flat when the portfolio has none), the path of the
+            // counterparty's sector when it has a sectoral satellite, the segment's ECB benchmark groups.
+            const NaceSector nace = by_sector ? d.counterparties[e.counterparty].nace : NaceSector::Unknown;
+            p.check_modelled(seg, g.segment, nace);
             if (external && external->has_exposure(item.exposure)) {
-                const auto own = exposure_param_paths(s, seg, p.params[g.segment][0][0], sat->second, macro, cfg, *external, item.exposure,
-                                                      p.benchmark_of(g.segment));
+                const auto own = own_param_paths(p, s, g.segment, nace, macro, cfg, *external, item.exposure);
                 for (std::size_t sc = 0; sc < 2; ++sc)
                     for (std::size_t t = 0; t <= 3; ++t) {
                         if (sc == 1 && t == 0) continue;
@@ -290,7 +291,7 @@ OffBalanceResult project_off_balance(Duck& duck, const Dataset& d, const Segment
                 ++log.own;
                 project_off_balance_item(e.stage, item.nominal, item.ccf, item.provision, own, cfg, g);
             } else {
-                project_off_balance_item(e.stage, item.nominal, item.ccf, item.provision, p.params[g.segment], cfg, g);
+                project_off_balance_item(e.stage, item.nominal, item.ccf, item.provision, p.paths(g.segment, nace), cfg, g);
             }
         }
     };
