@@ -57,7 +57,25 @@ For development and testing, all customer inputs are replaced by **synthetic equ
 2. **Derived starting point**: `sora calibrate` estimates the parameters from the history tables above. It is used for the reference dataset, for demos and onboarding, and as a challenger or plausibility check against the customer's parameters in production.
 3. **Benchmark fallback**: customer-loaded benchmark tables (e.g. the ECB benchmark PD/TR and LGD/LR per portfolio and country) for segments with no model or insufficient data. The EBA 10% coverage rule is applied per pivot asset class. The benchmark file format is Sora's own. The customer maps the ECB-provided files into it, or a per-exercise import adapter is added once a customer can share the layout (not the values). Implemented: scenario key `benchmark_parameters`, see "ECB benchmark parameters" below.
 
-Every parameter records its source (`external`, `derived`, `benchmark`) and the observation count. Both are reported in the output.
+Every parameter records its source (`external`, `derived`, `benchmark`, `calculator`) and the observation count. Both are reported in the output.
+
+#### From the regulatory calculator (source 1, `--calculator-parameters`)
+
+The customer's models can also be called at run time instead of exported: `sora run --calculator <url>
+--calculator-parameters <list|all>` requests the starting point per exposure from the calculator's
+`POST /v1/parameters/credit` (`plans/11_integrations.md`, "Credit parameters"). It is source 1 at exposure level,
+merged field by field into the same customer-parameter path as the file:
+
+1. exposure row of the parameter file (`--parameters` or `sim_risk_parameter`): the file wins, so an expert override
+   of a calculator value is an exposure row in the file (counted in CALC-023)
+2. calculator value (`pd12m_s1` ... `lrlt_s2`, `ccf`, `pd_reg`, `lgd_reg`, actual/0)
+3. segment rows of the parameter file (segment, portfolio, instrument, all)
+4. Sora's own value (derived starting point; fallback CCF; the PiT proxy for `pd_reg`/`lgd_reg`)
+
+A value the calculator does not return (rejected record, parameter left out) is never filled in or defaulted: it is
+counted (CALC-022, CALC-025) and the next source applies. Returned values are validated (decimal strings in [0, 1],
+only requested parameters and years, each once) and then pass the same checks as file values (PAR-010). The
+exposure's starting point is projected with its segment's satellite, like any exposure-level starting point.
 
 #### Vera-derived (source 1, for the CPPBank product demonstration)
 
@@ -103,7 +121,7 @@ contract,CL-000001,actual,2026,0.004,,,,,,0.12,,,,,external
 - `scenario = actual`, `year = 0` is the starting point. `baseline`/`adverse` with `year` 1–3 override the projected values.
 - Every parameter column is optional. Precedence per field, most specific first: exposure row > segment > portfolio > instrument > all > Sora's own value (derived calibration for the starting point, satellite projection for later years). An exposure-level starting point is projected with the segment's satellite model.
 - Values are decimal fractions in [0, 1], with `pd12m_s1 + tr1_2 ≤ 1` and `pd12m_s2 + tr2_1 ≤ 1`. Invalid values stop the run (PAR-010). Keys that match nothing are reported (PAR-001/002).
-- `parameters.csv` in the run output shows the effective values and their `source` (`derived`, `external`, `mixed`, `benchmark`).
+- `parameters.csv` in the run output shows the effective values and their `source` (`derived`, `external`, `mixed`, `benchmark`). With `--calculator-parameters` it also has one `level = exposure`, actual/0 row per exposure that took IFRS 9 fields from the calculator, with `source = calculator`: those fields hold the calculator values, the others are empty (the exposure's file row or its segment row applies). Every value received, and which were used, is in `calculator_parameters.csv`.
 
 ### ECB benchmark parameters
 

@@ -155,6 +155,7 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
                                          run.projection->path_source[i][sc][static_cast<std::size_t>(t - 1)]);
             }
         }
+        if (run.calculator_parameters) write_calculator_parameter_rows(f, d, *run.calculator_parameters);
     }
 
     std::map<std::string, std::array<double, 21>> totals;   // "scenario/year" -> sums
@@ -187,6 +188,7 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
     if (run.projection && run.projection->sectoral) write_sector_parameters(s, *run.projection, dir / "sector_parameters.csv");
     if (run.rea) write_rea_csv(s, *run.rea, dir / "rea.csv");
     if (run.off_balance) write_off_balance(d, s, *run.off_balance, dir);
+    if (run.calculator_parameters) write_calculator_parameters_csv(d, *run.calculator_parameters, dir / "calculator_parameters.csv");
 
     {
         auto f = open(dir / "summary.json");
@@ -227,6 +229,10 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
         if (run.off_balance) {
             f << ",\n  \"off_balance\": ";
             write_off_balance_summary(f, *run.off_balance);
+        }
+        if (run.calculator_parameters) {
+            f << ",\n  \"calculator_parameters\": ";
+            write_calculator_parameters_summary(f, *run.calculator_parameters);
         }
         f << "\n}\n";
     }

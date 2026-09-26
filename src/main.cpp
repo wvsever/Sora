@@ -11,6 +11,8 @@
 //          --calculator <url>  IRB REA through the regulatory calculator (rea.csv), with --calculator-cache <dir>,
 //          --calculator-ca <file>, --calculator-cert <file> --calculator-key <file>, --calculator-batch <n>;
 //          bearer token from $SORA_CALCULATOR_TOKEN
+//          --calculator-parameters <list|all>  starting-point credit parameters per exposure from the calculator
+//          (/v1/parameters/credit) as a customer parameter source; --calculator-rea off skips the IRB REA
 
 #ifdef _WIN32
 #include <windows.h>
@@ -40,6 +42,8 @@ struct Args {
     fs::path sim, scenario, out, parameters, base = fs::current_path();
     DuckOptions duck;
     calc::ClientOptions calculator;
+    std::vector<std::string> calculator_parameters;   // --calculator-parameters (empty = off)
+    bool calculator_rea = true;                       // --calculator-rea on|off
     unsigned workers = 0;   // 0 = hardware concurrency
 };
 
@@ -51,7 +55,8 @@ struct Args {
                  "options: --base <dir> --parameters <file|dir> --memory-limit <size> --threads <n> --workers <n>\n"
                  "         --temp-dir <dir>\n"
                  "         --calculator <url> [--calculator-cache <dir>] [--calculator-ca <file>]\n"
-                 "         [--calculator-cert <file> --calculator-key <file>] [--calculator-batch <n>]   (run only)\n");
+                 "         [--calculator-cert <file> --calculator-key <file>] [--calculator-batch <n>]\n"
+                 "         [--calculator-parameters <names|all>] [--calculator-rea on|off]   (run only)\n");
     std::exit(2);
 }
 
@@ -76,6 +81,12 @@ Args parse(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--calculator-cert")) a.calculator.cert_file = next();
         else if (!std::strcmp(argv[i], "--calculator-key")) a.calculator.key_file = next();
         else if (!std::strcmp(argv[i], "--calculator-batch")) a.calculator.max_batch = std::stoul(next());
+        else if (!std::strcmp(argv[i], "--calculator-parameters")) a.calculator_parameters = parse_calculator_parameters(next());
+        else if (!std::strcmp(argv[i], "--calculator-rea")) {
+            const std::string v = next();
+            if (v != "on" && v != "off") usage();
+            a.calculator_rea = v == "on";
+        }
         else if (!std::strcmp(argv[i], "--temp-dir")) a.duck.temp_directory = next();
         else if (!std::strcmp(argv[i], "--workers")) a.workers = static_cast<unsigned>(std::stoul(next()));
         else usage();
@@ -86,6 +97,10 @@ Args parse(int argc, char** argv) {
         usage();
     }
     if (a.calculator.cert_file.empty() != a.calculator.key_file.empty()) usage();
+    if (calculator_option && a.calculator.url.empty()) {
+        std::fprintf(stderr, "sora: %s needs --calculator <url>\n", calculator_option);
+        usage();
+    }
     return a;
 }
 
@@ -176,6 +191,18 @@ int main(int argc, char** argv) {
                 diag.findings.push_back({"PAR-002", "warning", "exposure keys not in sim_exposure (e.g. " + ext.unknown_keys.front() + ")", ext.unknown_keys.size()});
             diag.findings.push_back({"PAR-000", "info", "customer risk parameters loaded", ext.rows()});
         }
+        // Credit parameters from the calculator: exposure-level starting points, below the source's exposure rows.
+        std::optional<CreditParameterResult> calculator_parameters;
+        if (a.command == "run" && !a.calculator_parameters.empty()) {
+            Timer t("calculator (parameters)");
+            calculator_parameters = fetch_credit_parameters(duck, {d, seg, cfg, ext_source, a.calculator_parameters}, ext, a.calculator);
+            diag.findings.insert(diag.findings.end(), calculator_parameters->findings.begin(), calculator_parameters->findings.end());
+            if (calculator_parameters->all_rejected) {
+                print_findings(diag);
+                std::fprintf(stderr, "sora: the calculator rejected every credit parameter record; no results written\n");
+                return 1;
+            }
+        }
 
         Calibration cal;
         { Timer t("calibrate"); cal = calibrate(duck, d, seg, cfg.calibration); }
@@ -246,7 +273,7 @@ int main(int argc, char** argv) {
                 diag.findings.push_back({"OBS-005", "info", "drawn parts of commitments projected on-balance (loans and advances)", off_balance->commitment_drawn_exposures});
         }
         std::optional<ReaResult> rea;
-        if (run && !a.calculator.url.empty()) {
+        if (run && !a.calculator.url.empty() && a.calculator_rea) {
             Timer t("calculator (IRB REA)");
             rea = project_rea(duck, {d, seg, proj, cfg, sats, macro, ext.empty() ? nullptr : &ext, ext_source}, a.calculator);
             diag.findings.insert(diag.findings.end(), rea->findings.begin(), rea->findings.end());
@@ -257,7 +284,8 @@ int main(int argc, char** argv) {
             }
         }
         { Timer t("write outputs"); write_outputs({d, seg, cal, run ? &proj : nullptr, macro, cfg, diag, rea ? &*rea : nullptr,
-                                  off_balance ? &*off_balance : nullptr}, a.out); }
+                                  off_balance ? &*off_balance : nullptr,
+                                  calculator_parameters ? &*calculator_parameters : nullptr}, a.out); }
         print_findings(diag);
         std::fprintf(stderr, "  %zu exposures, %zu segments -> %s (peak RSS %.1f MB)\n", seg.in_scope,
                      seg.segments.size(), a.out.string().c_str(), peak_rss_mb());

@@ -180,6 +180,117 @@ def test_parameters_contract(base_url):
     assert {(v["year"], v["parameter"]) for v in values} == {(y, p) for y in req["years"] for p in req["parameters"]}
 
 
+# Records as Sora sends them for its starting-point parameters (sora run --calculator-parameters): exposure level,
+# the segment key, the stage and SIM attributes; one call at the reference date, years [0].
+PARAM_RECORDS = [
+    {"recordId": "LN-000001", "level": "exposure", "segment": "LOANS|NFC_SME|BE", "stage": "stage1",
+     "attributes": {"country_of_risk": "BE", "currency": "EUR", "eba_sector": "non_financial_corporation",
+                    "exposure_type": "loan", "is_sme": True, "measurement_category": "amortised_cost"}},
+    {"recordId": "LN-000002", "level": "exposure", "segment": "LOANS|HH_HP|DE", "stage": "stage2",
+     "attributes": {"country_of_risk": "DE", "currency": "EUR", "eba_sector": "household", "exposure_type": "loan",
+                    "household_purpose": "house_purchase", "measurement_category": "amortised_cost"}},
+    {"recordId": "LC-000003", "level": "exposure", "stage": "stage1",
+     "attributes": {"eba_sector": "non_financial_corporation", "exposure_type": "loan_commitment"}},
+]
+SORA_PARAMETERS = ["pd12m_s1", "pd12m_s2", "tr1_2", "tr2_1", "tr3_1", "tr3_2", "lgd_s1", "lgd_s2", "lgd_s3", "lrlt_s2",
+                   "ccf", "pd_reg", "lgd_reg"]
+
+
+def parameter_request(**ctx):
+    return {"context": context(**ctx), "parameters": SORA_PARAMETERS, "years": [0], "records": PARAM_RECORDS}
+
+
+def test_parameters_exposure_level_starting_point(base_url):
+    req = parameter_request()
+    status, body, _ = call(base_url, "POST", "/v1/parameters/credit", req)
+    assert status == 200, body
+    assert_schema(body, "ParameterResponse")
+    assert body["meta"]["requestId"] == req["context"]["requestId"]
+    assert body["meta"]["paramSet"] == req["context"]["paramSet"]
+    assert [r["recordId"] for r in body["results"]] == [r["recordId"] for r in PARAM_RECORDS]   # one per record, in order
+    for r in body["results"]:
+        assert r["status"] in ("ok", "rejected")
+        if r["status"] == "rejected":
+            assert r["errors"]
+            continue
+        seen = [(v["year"], v["parameter"]) for v in r.get("values", [])]
+        assert len(seen) == len(set(seen))                                       # each value at most once
+        assert {y for y, _ in seen} <= {0} and {p for _, p in seen} <= set(SORA_PARAMETERS)   # only what was asked
+        assert all(0 <= float(v["value"]) <= 1 for v in r.get("values", []))
+
+
+def test_parameters_idempotent_and_deterministic(base_url):
+    key = str(uuid.uuid4())
+    req = parameter_request(requestId=key)
+    a = call(base_url, "POST", "/v1/parameters/credit", req, key=key)
+    b = call(base_url, "POST", "/v1/parameters/credit", req, key=key)
+    assert a[0] == b[0] == 200 and a[1] == b[1]
+    c = call(base_url, "POST", "/v1/parameters/credit", parameter_request())[1]   # another key, same records
+    assert c["results"] == a[1]["results"]
+
+
+def test_parameters_record_without_level_is_rejected(base_url):
+    req = parameter_request()
+    req["records"] = [PARAM_RECORDS[0], {"recordId": "NO-LEVEL"}]
+    status, body, _ = call(base_url, "POST", "/v1/parameters/credit", req)
+    assert status == 200
+    assert_schema(body, "ParameterResponse")
+    assert [r["status"] for r in body["results"]] == ["ok", "rejected"]
+    assert body["results"][1]["errors"]
+
+
+def test_parameters_unknown_parameter_is_a_problem(base_url):
+    req = {**parameter_request(), "parameters": ["pd12m_s1", "not_a_parameter"]}
+    status, body, headers = call(base_url, "POST", "/v1/parameters/credit", req)
+    assert status in (400, 422)
+    assert headers.get("Content-Type", "").startswith("application/problem+json")
+    assert_schema(body, "Problem")
+
+
+def test_parameters_async_job(base_url):
+    key = str(uuid.uuid4())
+    status, job, _ = call(base_url, "POST", "/v1/jobs",
+                          {"calculation": "parameters-credit", "request": parameter_request(requestId=key)}, key=key)
+    assert status == 202
+    assert_schema(job, "Job")
+    status, job, _ = call(base_url, "GET", f"/v1/jobs/{job['jobId']}", key=None)
+    if job["status"] == "succeeded":
+        status, result, _ = call(base_url, "GET", f"/v1/jobs/{job['jobId']}/result", key=None)
+        assert status == 200
+        assert_schema(result, "ParameterResponse")
+        assert result["meta"]["requestId"] == key
+
+
+@pytest.mark.stub_only
+def test_stub_parameters_are_deterministic_per_record(base_url):
+    if os.environ.get("SORA_CALCULATOR_URL"):
+        pytest.skip("stub only")
+    body = call(base_url, "POST", "/v1/parameters/credit", parameter_request())[1]
+    vals = {r["recordId"]: {v["parameter"]: v["value"] for v in r["values"]} for r in body["results"]}
+    # formula: base x sector (NFC 1.2, household 0.8) x stage (stage2 1.5) x SME (1.1) for PDs and transition rates.
+    assert vals["LN-000001"]["pd12m_s1"] == "0.006600000"                 # 0.005 x 1.2 x 1.1
+    assert vals["LN-000002"]["pd12m_s1"] == "0.006000000"                 # 0.005 x 0.8 x 1.5
+    assert vals["LN-000001"]["lgd_s1"] == vals["LN-000002"]["lgd_s1"] == "0.250000000"   # LGDs are not scaled
+    assert vals["LC-000003"]["ccf"] == "0.400000000"
+    assert all(v["source"] == "model" for r in body["results"] for v in r["values"])
+
+
+def test_stub_omits_parameters_and_fixed_values():
+    from sora_tools.calculator_stub import start_background
+    server = start_background("fixed", omit="lgd_s2,ccf")
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        status, body, _ = call(base, "POST", "/v1/parameters/credit", parameter_request())
+    finally:
+        server.shutdown()
+    assert status == 200
+    assert_schema(body, "ParameterResponse")
+    for r in body["results"]:
+        params = {v["parameter"]: v["value"] for v in r["values"]}
+        assert set(params) == set(SORA_PARAMETERS) - {"lgd_s2", "ccf"}
+        assert params["pd12m_s1"] == "0.005000000" and params["pd_reg"] == "0.010000000"
+
+
 def test_async_job(base_url):
     key = str(uuid.uuid4())
     status, job, headers = call(base_url, "POST", "/v1/jobs",

@@ -403,6 +403,70 @@ IrbRequest make_irb_request(const RequestContext& ctx, const std::vector<IrbReco
     return r;
 }
 
+namespace {
+
+// Validates the response envelope: meta echoes the request id, the calculator and the parameter set.
+void check_meta(const json& j, const std::string& where, const std::string& request_id, const Capabilities& caps,
+                const std::string& param_set) {
+    const auto& meta = field(j, "meta", where);
+    const std::string wm = where + ".meta", wc = where + ".meta.calculator";
+    if (str_field(meta, "requestId", wm) != request_id)
+        throw CalculatorError(where + ": meta.requestId does not echo the request");
+    const auto& calc = field(meta, "calculator", wm);
+    const auto name = str_field(calc, "name", wc), version = str_field(calc, "version", wc);
+    if (name != caps.name || version != caps.version)
+        throw CalculatorError(where + ": calculator " + name + " " + version + " differs from the capabilities (" + caps.name +
+                              " " + caps.version + ")");
+    if (str_field(meta, "paramSet", wm) != param_set)
+        throw CalculatorError(where + ": meta.paramSet differs from the request");
+}
+
+// Parses a response whose top-level "results" array is decoded object by object (`decode`) and dropped while
+// parsing, so a large response never exists as a full JSON tree. Returns the rest of the document.
+template <class Decode>
+json parse_results(std::string_view text, const std::string& where, const Decode& decode) {
+    std::string top_key;   // current member of the top-level object
+    bool in_results = false;
+    json j;
+    try {
+        j = json::parse(text, [&](int depth, json::parse_event_t event, json& parsed) {
+            if (depth == 1 && event == json::parse_event_t::key) {
+                top_key = parsed.get<std::string>();
+                in_results = false;
+            } else if (depth == 1 && event == json::parse_event_t::array_start && top_key == "results") {
+                in_results = true;
+            } else if (depth == 2 && event == json::parse_event_t::object_end && in_results) {
+                decode(parsed);
+                return false;   // decoded: drop it
+            }
+            return true;
+        });
+    } catch (const json::exception& e) {
+        throw CalculatorError(where + ": invalid JSON (" + e.what() + ")");
+    }
+    const auto& results = field(j, "results", where);
+    if (!results.is_array()) throw CalculatorError(where + ": results is not an array");
+    // Decoded objects were dropped while parsing: anything left is not a result object.
+    if (!results.empty()) throw CalculatorError(where + ": results holds a value that is not an object");
+    return j;
+}
+
+std::vector<Message> decode_errors(const json& r, const std::string& w) {
+    std::vector<Message> out;
+    if (!r.contains("errors")) return out;
+    if (!r["errors"].is_array()) throw CalculatorError(w + ": errors is not an array");
+    for (const auto& m : r["errors"]) {
+        Message msg;
+        msg.code = str_field(m, "code", w + ".errors");
+        msg.message = str_field(m, "message", w + ".errors");
+        if (m.contains("field") && m["field"].is_string()) msg.field = m["field"].get<std::string>();
+        out.push_back(std::move(msg));
+    }
+    return out;
+}
+
+}  // namespace
+
 std::vector<IrbResult> decode_irb_response(std::string_view text, const std::vector<IrbRecord>& records,
                                            std::size_t first, std::size_t count, const std::string& request_id,
                                            const Capabilities& caps, const std::string& param_set) {
@@ -436,54 +500,127 @@ std::vector<IrbResult> decode_irb_response(std::string_view text, const std::vec
                 if (v < 0 || v > 1'000'000'000) throw CalculatorError(w + ": " + p + " outside [0, 1]");
             }
         } else if (status == "rejected") {
-            if (r.contains("errors")) {
-                if (!r["errors"].is_array()) throw CalculatorError(w + ": errors is not an array");
-                for (const auto& m : r["errors"]) {
-                    Message msg;
-                    msg.code = str_field(m, "code", w + ".errors");
-                    msg.message = str_field(m, "message", w + ".errors");
-                    if (m.contains("field") && m["field"].is_string()) msg.field = m["field"].get<std::string>();
-                    x.errors.push_back(std::move(msg));
-                }
-            }
+            x.errors = decode_errors(r, w);
         } else {
             throw CalculatorError(w + ": status must be ok or rejected, got " + status);
         }
     };
-    std::string top_key;   // current member of the top-level object
-    bool in_results = false;
-    json j;
-    try {
-        j = json::parse(text, [&](int depth, json::parse_event_t event, json& parsed) {
-            if (depth == 1 && event == json::parse_event_t::key) {
-                top_key = parsed.get<std::string>();
-                in_results = false;
-            } else if (depth == 1 && event == json::parse_event_t::array_start && top_key == "results") {
-                in_results = true;
-            } else if (depth == 2 && event == json::parse_event_t::object_end && in_results) {
-                decode(parsed);
-                return false;   // decoded: drop it
+    const json j = parse_results(text, where, decode);
+    check_meta(j, where, request_id, caps, param_set);
+    if (out.size() != count)
+        throw CalculatorError(where + ": " + std::to_string(out.size()) + " results for " + std::to_string(count) + " records");
+    return out;
+}
+
+// ---------------------------------------------------------------------------------------------- parameters
+
+namespace {
+
+json parameter_records_json(const std::vector<ParameterRecord>& records, std::size_t first, std::size_t count) {
+    json recs = json::array();
+    for (std::size_t i = first; i < first + count; ++i) {
+        const auto& r = records[i];
+        json o = {{"recordId", r.record_id}, {"level", r.level}};
+        if (!r.segment.empty()) o["segment"] = r.segment;
+        if (!r.stage.empty()) o["stage"] = r.stage;
+        if (!r.attributes.empty()) {
+            json a = json::object();
+            for (const auto& x : r.attributes) {
+                switch (x.kind) {
+                    case ParameterAttribute::Kind::String: a[x.name] = x.text; break;
+                    case ParameterAttribute::Kind::Boolean: a[x.name] = x.text == "true"; break;
+                    case ParameterAttribute::Kind::Integer: a[x.name] = std::stoll(x.text); break;
+                }
             }
-            return true;
-        });
-    } catch (const json::exception& e) {
-        throw CalculatorError(where + ": invalid JSON (" + e.what() + ")");
+            o["attributes"] = std::move(a);
+        }
+        recs.push_back(std::move(o));
     }
-    const auto& meta = field(j, "meta", where);
-    const std::string wm = where + ".meta", wc = where + ".meta.calculator";
-    if (str_field(meta, "requestId", wm) != request_id)
-        throw CalculatorError(where + ": meta.requestId does not echo the request");
-    const auto& calc = field(meta, "calculator", wm);
-    const auto name = str_field(calc, "name", wc), version = str_field(calc, "version", wc);
-    if (name != caps.name || version != caps.version)
-        throw CalculatorError(where + ": calculator " + name + " " + version + " differs from the capabilities (" + caps.name +
-                              " " + caps.version + ")");
-    if (str_field(meta, "paramSet", wm) != param_set)
-        throw CalculatorError(where + ": meta.paramSet differs from the request");
-    const auto& results = field(j, "results", where);
-    if (!results.is_array()) throw CalculatorError(where + ": results is not an array");
-    // Decoded objects were dropped while parsing: anything left is not a result object.
-    if (!results.empty()) throw CalculatorError(where + ": results holds a value that is not an object");
+    return recs;
+}
+
+// The request as a JSON object (std::map keys: dump() is canonical), without context.requestId.
+json parameter_request_json(const RequestContext& ctx, const ParameterSpec& spec, const std::vector<ParameterRecord>& records,
+                            std::size_t first, std::size_t count) {
+    if (first + count > records.size()) throw CalculatorError("encode_parameter_request: record range out of bounds");
+    json recs = parameter_records_json(records, first, count);
+    json c = {{"runId", ctx.run_id}, {"scenario", ctx.scenario}, {"projectionYear", ctx.year},
+              {"referenceDate", ctx.reference_date}, {"paramSet", ctx.param_set}, {"reportingCurrency", ctx.currency},
+              {"inputFingerprint", "sha256:" + sha256_hex(recs.dump())}};
+    return json{{"context", std::move(c)}, {"parameters", spec.parameters}, {"years", spec.years}, {"records", std::move(recs)}};
+}
+
+}  // namespace
+
+std::string encode_parameter_request(const RequestContext& ctx, const ParameterSpec& spec,
+                                     const std::vector<ParameterRecord>& records, std::size_t first, std::size_t count,
+                                     const std::string& request_id) {
+    json j = parameter_request_json(ctx, spec, records, first, count);
+    if (!request_id.empty()) j["context"]["requestId"] = request_id;
+    return j.dump();
+}
+
+PreparedRequest make_parameter_request(const RequestContext& ctx, const ParameterSpec& spec,
+                                       const std::vector<ParameterRecord>& records, std::size_t first, std::size_t count) {
+    json j = parameter_request_json(ctx, spec, records, first, count);
+    PreparedRequest r;
+    r.key = idempotency_key(ctx.run_id, "parameters-credit", j.dump());
+    j["context"]["requestId"] = r.key;
+    r.body = j.dump();
+    return r;
+}
+
+std::vector<ParameterResult> decode_parameter_response(std::string_view text, const ParameterSpec& spec,
+                                                       const std::vector<ParameterRecord>& records, std::size_t first,
+                                                       std::size_t count, const std::string& request_id,
+                                                       const Capabilities& caps, const std::string& param_set) {
+    const std::string where = "parameter response " + request_id;
+    if (first + count > records.size()) throw CalculatorError(where + ": record range out of bounds");
+    std::vector<ParameterResult> out;
+    out.reserve(count);
+    const auto decode = [&](const json& r) {
+        const std::size_t k = out.size();
+        if (k >= count) throw CalculatorError(where + ": more results than the " + std::to_string(count) + " records");
+        const auto& expected = records[first + k].record_id;
+        const std::string w = where + " result " + std::to_string(k);
+        ParameterResult& x = out.emplace_back();
+        x.record_id = str_field(r, "recordId", w);
+        if (x.record_id != expected) throw CalculatorError(w + ": recordId " + x.record_id + ", expected " + expected);
+        const auto status = str_field(r, "status", w);
+        if (status == "rejected") {
+            x.errors = decode_errors(r, w);
+            return;
+        }
+        if (status != "ok") throw CalculatorError(w + ": status must be ok or rejected, got " + status);
+        x.ok = true;
+        if (!r.contains("values")) return;   // nothing returned: every requested value is missing
+        const auto& values = r["values"];
+        if (!values.is_array()) throw CalculatorError(w + ": values is not an array");
+        for (const auto& v : values) {
+            ParameterValue pv;
+            const json year = field(v, "year", w + ".values");   // a copy: a reference trips -Wdangling-reference
+            if (!year.is_number_integer()) throw CalculatorError(w + ": values.year is not an integer");
+            pv.year = static_cast<int>(year.get<std::int64_t>());
+            pv.parameter = str_field(v, "parameter", w + ".values");
+            if (std::find(spec.years.begin(), spec.years.end(), pv.year) == spec.years.end())
+                throw CalculatorError(w + ": value for year " + std::to_string(pv.year) + ", which was not requested");
+            if (std::find(spec.parameters.begin(), spec.parameters.end(), pv.parameter) == spec.parameters.end())
+                throw CalculatorError(w + ": value for parameter " + pv.parameter + ", which was not requested");
+            pv.value = decimal_field(v, "value", 9, w + "." + pv.parameter);
+            if (pv.value < 0 || pv.value > 1'000'000'000) throw CalculatorError(w + ": " + pv.parameter + " outside [0, 1]");
+            if (v.contains("source")) {
+                pv.source = str_field(v, "source", w + ".values");
+                if (pv.source != "model" && pv.source != "benchmark" && pv.source != "override")
+                    throw CalculatorError(w + ": source must be model, benchmark or override, got " + pv.source);
+            }
+            for (const auto& prev : x.values)
+                if (prev.year == pv.year && prev.parameter == pv.parameter)
+                    throw CalculatorError(w + ": " + pv.parameter + " year " + std::to_string(pv.year) + " returned twice");
+            x.values.push_back(std::move(pv));
+        }
+    };
+    const json j = parse_results(text, where, decode);
+    check_meta(j, where, request_id, caps, param_set);
     if (out.size() != count)
         throw CalculatorError(where + ": " + std::to_string(out.size()) + " results for " + std::to_string(count) + " records");
     return out;
@@ -720,14 +857,15 @@ void Client::cache_write(const fs::path& file, const std::string& data) {
     if (stats_.cache_write_failures++ == 0) stats_.cache_write_error = error;
 }
 
-std::string Client::run_batch(Transport& t, const Batch& b, const std::string& body, const std::string& key) {
+std::string Client::run_batch(Transport& t, const Batch& b, const std::string& calculation, const std::string& path,
+                              const std::string& body, const std::string& key) {
     if (!b.job) {
-        const Response r = call(t, "POST", "/v1/credit-risk/irb", body, key);
-        if (r.status != 200) throw CalculatorError("POST /v1/credit-risk/irb (" + key + ") failed: " + problem_text(r));
+        const Response r = call(t, "POST", path, body, key);
+        if (r.status != 200) throw CalculatorError("POST " + path + " (" + key + ") failed: " + problem_text(r));
         return r.body;
     }
     // Async job. The job body is canonical too ("calculation" sorts before "request").
-    const Response r = call(t, "POST", "/v1/jobs", R"({"calculation":"irb","request":)" + body + "}", key);
+    const Response r = call(t, "POST", "/v1/jobs", "{\"calculation\":" + json_quote(calculation) + ",\"request\":" + body + "}", key);
     if (r.status != 202 && r.status != 200) throw CalculatorError("POST /v1/jobs (" + key + ") failed: " + problem_text(r));
     {
         std::lock_guard lock(mu_);
@@ -761,8 +899,13 @@ std::string Client::run_batch(Transport& t, const Batch& b, const std::string& b
     }
 }
 
-void Client::irb(const IrbStream& stream) {
+// `encode(context, records)` -> PreparedRequest of a batch; `decode(text, records, key)` -> its validated results.
+template <class Record, class Result, class Encode, class Decode>
+void Client::run_stream(const std::string& calculation, const std::string& path, const CallStream<Record, Result>& stream,
+                        const Encode& encode, const Decode& decode) {
     if (caps_.name.empty()) throw CalculatorError("calculator client: connect() first");
+    if (std::find(caps_.calculations.begin(), caps_.calculations.end(), calculation) == caps_.calculations.end())
+        throw CalculatorError("calculator " + caps_.name + " " + caps_.version + " does not support the calculation " + calculation);
     if (stream.counts.size() != stream.contexts.size()) throw CalculatorError("calculator client: one record count per call");
     // Batch size: the sync limit, unless a larger batch is configured (then those batches go through jobs).
     const std::size_t size = opt_.max_batch ? std::min(opt_.max_batch, caps_.max_records) : caps_.max_sync_records;
@@ -787,7 +930,7 @@ void Client::irb(const IrbStream& stream) {
         ctx.param_set = opt_.param_set;
     }
     const fs::path cache = opt_.cache_dir.empty() ? fs::path{}
-                                                  : opt_.cache_dir / (path_safe(caps_.name) + "_" + path_safe(caps_.version)) / "irb";
+                                                  : opt_.cache_dir / (path_safe(caps_.name) + "_" + path_safe(caps_.version)) / calculation;
     std::size_t nthreads = caps_.max_concurrent;
     if (opt_.max_concurrent) nthreads = std::min(nthreads, opt_.max_concurrent);
     nthreads = std::max<std::size_t>(1, std::min(nthreads, batches.size()));
@@ -796,7 +939,7 @@ void Client::irb(const IrbStream& stream) {
     // sink: records, bodies and results exist only for the batches in that window. Finished batches wait in
     // their slot until all earlier ones are delivered, so the sink sees them in order whatever the timing.
     struct Done {
-        std::vector<IrbResult> results;
+        std::vector<Result> results;
         bool ready = false;
     };
     const std::size_t window = 2 * nthreads;
@@ -819,17 +962,17 @@ void Client::irb(const IrbStream& stream) {
                     i = next++;
                 }
                 const Batch& b = batches[i];
-                std::vector<IrbRecord> records;
+                std::vector<Record> records;
                 stream.fill(b.call, b.first, b.count, records);
                 if (records.size() != b.count) throw CalculatorError("calculator client: fill produced a wrong record count");
-                IrbRequest req = make_irb_request(contexts[b.call], records, 0, b.count);
+                PreparedRequest req = encode(contexts[b.call], records);
                 const fs::path file = cache.empty() ? fs::path{} : cache / (sha256_hex(req.body) + ".json");
                 Done done;
                 bool hit = false;
                 if (!file.empty()) {
                     if (const auto text = read_file(file)) {
                         try {
-                            done.results = decode_irb_response(*text, records, 0, b.count, req.key, caps_, opt_.param_set);
+                            done.results = decode(*text, records, req.key);
                             hit = true;
                         } catch (const CalculatorError&) {   // unreadable entry: fetch again and overwrite it
                         }
@@ -842,12 +985,12 @@ void Client::irb(const IrbStream& stream) {
                     if (stats_.offline)
                         throw CalculatorError("calculator unreachable and batch " + req.key + " is not in the replay cache");
                     if (!t) t = factory_();
-                    const std::string text = run_batch(*t, b, req.body, req.key);
+                    const std::string text = run_batch(*t, b, calculation, path, req.body, req.key);
                     std::string().swap(req.body);
-                    done.results = decode_irb_response(text, records, 0, b.count, req.key, caps_, opt_.param_set);
+                    done.results = decode(text, records, req.key);
                     if (!file.empty()) cache_write(file, text);
                 }
-                std::vector<IrbRecord>().swap(records);
+                std::vector<Record>().swap(records);
                 done.ready = true;
                 {
                     std::lock_guard lock(wmu);
@@ -876,6 +1019,43 @@ void Client::irb(const IrbStream& stream) {
     worker();
     for (auto& th : pool) th.join();
     if (failure) std::rethrow_exception(failure);
+}
+
+void Client::irb(const IrbStream& stream) {
+    run_stream(
+        "irb", "/v1/credit-risk/irb", stream,
+        [](const RequestContext& ctx, const std::vector<IrbRecord>& records) { return make_irb_request(ctx, records, 0, records.size()); },
+        [this](std::string_view text, const std::vector<IrbRecord>& records, const std::string& key) {
+            return decode_irb_response(text, records, 0, records.size(), key, caps_, opt_.param_set);
+        });
+}
+
+void Client::parameters(const ParameterSpec& spec, const ParameterStream& stream) {
+    if (spec.parameters.empty() || spec.years.empty()) throw CalculatorError("calculator client: no parameters or years requested");
+    run_stream(
+        "parameters-credit", "/v1/parameters/credit", stream,
+        [&spec](const RequestContext& ctx, const std::vector<ParameterRecord>& records) {
+            return make_parameter_request(ctx, spec, records, 0, records.size());
+        },
+        [this, &spec](std::string_view text, const std::vector<ParameterRecord>& records, const std::string& key) {
+            return decode_parameter_response(text, spec, records, 0, records.size(), key, caps_, opt_.param_set);
+        });
+}
+
+std::vector<ParameterResult> Client::parameters(const ParameterSpec& spec, const RequestContext& context,
+                                                const std::vector<ParameterRecord>& records) {
+    std::vector<ParameterResult> out(records.size());
+    ParameterStream s;
+    s.contexts = {context};
+    s.counts = {records.size()};
+    s.fill = [&](std::size_t, std::size_t first, std::size_t count, std::vector<ParameterRecord>& batch) {
+        batch.assign(records.begin() + static_cast<std::ptrdiff_t>(first), records.begin() + static_cast<std::ptrdiff_t>(first + count));
+    };
+    s.sink = [&](std::size_t, std::size_t first, std::vector<ParameterResult>& results) {
+        std::move(results.begin(), results.end(), out.begin() + static_cast<std::ptrdiff_t>(first));
+    };
+    parameters(spec, s);
+    return out;
 }
 
 std::vector<std::vector<IrbResult>> Client::irb(const std::vector<IrbCall>& calls) {

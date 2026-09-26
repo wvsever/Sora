@@ -32,6 +32,8 @@ SOURCES = {
     "external": "customer parameter file (--parameters or sim_risk_parameter), all fields",
     "mixed": "some fields from the customer file or the ECB benchmark, the others Sora's own values",
     "benchmark": "ECB benchmark parameters for both groups (PD/TR and LGD/LR), without adjustment",
+    "calculator": "exposure-level starting point from the regulatory calculator (/v1/parameters/credit, "
+                  "--calculator-parameters); fields left empty come from the exposure's file row or its segment",
 }
 CALIBRATION_GROUPS = {
     "stage1": ("pd12m_s1", "tr1_2"),
