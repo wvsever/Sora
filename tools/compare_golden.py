@@ -2,7 +2,8 @@
 """Run the C++ engine on the reference SIM and compare its output with the golden results.
 
 Tolerances: money per segment/scenario/year 1 cent or relative 1e-12 (whichever is larger); parameters and
-ratios (LTV) 1e-9.
+ratios (LTV) 1e-9. EBA template layouts (cr_sector.csv) print amounts in EUR million and parameters and ratios in
+percent: the same tolerances in those units, plus one unit in the last printed decimal for rounding.
 The reference SIM is produced on demand (extract test data + reference mapping) if --sim is not given.
 """
 
@@ -34,8 +35,22 @@ def rows(path: Path, key_cols: list[str]) -> dict:
         return {tuple(r[k] for k in key_cols): r for r in csv.DictReader(f)}
 
 
-def compare(name: str, golden: Path, actual: Path, keys: list[str], money: bool, ratio_prefix: str | None = None) -> list[str]:
-    """`money`: amounts at 1 cent, except columns starting with `ratio_prefix` (1e-9). Otherwise all 1e-9."""
+def template_percent(col: str) -> bool:
+    """EBA template columns in percent (parameters and ratios); the others are amounts in EUR million."""
+    return "%" in col or col.startswith(("PD ", "TR", "LGD", "LRLT", "Coverage ratio"))
+
+
+def template_tolerance(col: str, golden: float) -> float:
+    """1 cent (EUR million, 8 decimals) or 1e-9 (percent, 7 decimals), plus the last printed decimal."""
+    if template_percent(col):
+        return 1e-7 + 1e-7 + 1e-12
+    return max(0.01, 1e-12 * abs(golden) * 1e6) / 1e6 + 1e-8 + 1e-12
+
+
+def compare(name: str, golden: Path, actual: Path, keys: list[str], money: bool, ratio_prefix: str | None = None,
+            tolerance=None) -> list[str]:
+    """`money`: amounts at 1 cent, except columns starting with `ratio_prefix` (1e-9). Otherwise all 1e-9.
+    `tolerance(column, golden value)`, if given, replaces both."""
     g, a = rows(golden / name, keys), rows(actual / name, keys)
     errors = []
     if set(g) != set(a):
@@ -51,7 +66,7 @@ def compare(name: str, golden: Path, actual: Path, keys: list[str], money: bool,
                     errors.append(f"{name} {k} {col}: {av!r} != {gv!r}")
                 continue
             is_money = money and not (ratio_prefix and col.startswith(ratio_prefix))
-            tol = max(0.01, 1e-12 * abs(gf)) if is_money else 1e-9
+            tol = tolerance(col, gf) if tolerance else max(0.01, 1e-12 * abs(gf)) if is_money else 1e-9
             diff = abs(af - gf)
             if diff > worst[0]:
                 worst = (diff, (k, col))
@@ -78,6 +93,8 @@ def main() -> int:
         errors += compare("parameters.csv", args.golden, out, ["key", "scenario", "year"], money=False)
         errors += compare("projection.csv", args.golden, out, ["segment", "scenario", "year"], money=True)
         errors += compare("collateral.csv", args.golden, out, ["segment", "scenario", "year"], money=True, ratio_prefix="ltv_")
+        errors += compare("cr_sector.csv", args.golden, out, ["RowNum", "Geographical breakdown", "Scenario", "Year"],
+                          money=True, tolerance=template_tolerance)
         gs, es = json.loads((args.golden / "summary.json").read_text()), json.loads((out / "summary.json").read_text())
         for field in ("segments", "exposures"):
             if gs[field] != es[field]:

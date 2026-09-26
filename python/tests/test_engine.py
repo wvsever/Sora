@@ -173,6 +173,44 @@ def test_cr_scen_layout_and_consistency(base_run):
                 assert 0 <= float(r[c]) <= 100
 
 
+def test_cr_sector_matches_golden_and_reconciles_with_cr_scen(base_run):
+    """cr_sector.csv equals the golden file (EUR million to 1 cent, percent to 1e-7), and its TOTAL row equals
+    the non-financial corporations rows of CR_SCEN (debt securities row 6 + loans row 13) for every geography,
+    scenario and year; C = energy-intensive + other; sectors add up to the total."""
+    key = ("RowNum", "Geographical breakdown", "Scenario", "Year")
+    g, a = read(GOLDEN / "cr_sector.csv", *key), read(base_run / "cr_sector.csv", *key)
+    assert g.keys() == a.keys() and len(next(iter(a.values()))) == 8 + 46
+    for k in g:
+        for col in g[k]:
+            if not g[k][col] or col in key or col in ("Pivot", "COREP asset class", "NACE code") or col.startswith("Exposures by"):
+                assert g[k][col] == a[k][col], (k, col)
+            else:   # one cent in EUR million, 1e-9 in percent, plus the last printed decimal
+                pct = "%" in col or col.startswith(("PD ", "TR", "LGD", "LRLT", "Coverage ratio"))
+                assert abs(float(g[k][col]) - float(a[k][col])) <= (2.1e-7 if pct else 2.1e-8), (k, col)
+    scen = read(base_run / "cr_scen.csv", "Geographical breakdown", "Scenario", "Year", "RowNum")
+    num = lambda r, c: float(r[c] or 0)  # noqa: E731
+    amounts = ("Total exposure (total Exp)", "of which: stage 1 (Exp S1)", "of which: stage 2 (Exp S2)",
+               "Non-performing exposure (Exp S3)", "POCI exposures (Exp POCI)", "Stock of provisions (Prov Stock)",
+               "of which: non-performing assets (Prov Stock S3)", "Provisions old stage 3 (Prov old S3-S3)",
+               "Stage 3 flow (SX-S3 flow)")
+    totals = [k for k in a if k[0] == "23"]
+    assert len(totals) == len(a) // 23
+    for rn, geo, sc, year in totals:
+        t = a[(rn, geo, sc, year)]
+        for col in amounts:
+            nfc = num(scen[(geo, sc, year, "6")], col) + num(scen[(geo, sc, year, "13")], col)
+            assert abs(num(t, col) - nfc) < 1e-6, (geo, sc, year, col)
+            parts = sum(num(a[(str(n), geo, sc, year)], col) for n in (1, 2, 3, *range(6, 23)))
+            assert abs(num(t, col) - parts) < 1e-6, (geo, sc, year, col)                  # no unknown sectors here
+            c = num(a[("3", geo, sc, year)], col)
+            assert abs(c - num(a[("4", geo, sc, year)], col) - num(a[("5", geo, sc, year)], col)) < 1e-6
+    exp = "Total exposure (total Exp)"
+    # The reference data's manufacturers are all in energy-intensive divisions (C10, C19-C21, C23-C25, C28).
+    assert num(a[("4", "Total", "Actual", "2026")], exp) > 0 and num(a[("5", "Total", "Actual", "2026")], exp) == 0
+    assert num(a[("23", "Total", "Adverse", "2029")], "Stock of provisions (Prov Stock)") > \
+        num(a[("23", "Total", "Baseline", "2029")], "Stock of provisions (Prov Stock)")
+
+
 def test_collateral_matches_golden_and_cr_scen_ltv(base_run):
     """collateral.csv equals the golden file, and the CR_SCEN LTV columns (percent) are the ratio of the summed
     secured exposure to the summed real-estate collateral value (Total row, all geographies)."""

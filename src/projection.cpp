@@ -18,6 +18,8 @@ std::size_t param_weight_stage(std::size_t param) {
     }
 }
 
+bool has_sector_breakdown(const Segment& seg) { return seg.portfolio.rfind("NFC", 0) == 0; }
+
 double ParamAccum::average(std::size_t param) const {
     const double w = weight[param_weight_stage(param)];
     return w > 0 ? sum[param] / w : std::numeric_limits<double>::quiet_NaN();
@@ -32,6 +34,33 @@ void accumulate(ParamAccum& a, const Params& p, double w1, double w2, double w3)
         const double w = param_weight_stage(i) == 0 ? w1 : param_weight_stage(i) == 1 ? w2 : w3;
         if (w != 0) a.sum[i] += param_field(p, i) * w;
     }
+}
+// a += b, field by field (b is one exposure's contribution).
+void add(std::array<std::array<YearResult, 3>, 2>& a, const std::array<std::array<YearResult, 3>, 2>& b) {
+    for (std::size_t sc = 0; sc < 2; ++sc)
+        for (std::size_t t = 0; t < 3; ++t) {
+            YearResult& x = a[sc][t];
+            const YearResult& y = b[sc][t];
+            x.exp_s1 += y.exp_s1; x.exp_s2 += y.exp_s2; x.exp_s3_old += y.exp_s3_old; x.exp_s3_new += y.exp_s3_new;
+            x.exp_poci += y.exp_poci;
+            x.flow_s1_s2 += y.flow_s1_s2; x.flow_s2_s1 += y.flow_s2_s1; x.flow_s1_s3 += y.flow_s1_s3; x.flow_s2_s3 += y.flow_s2_s3;
+            x.prov_s1_s1 += y.prov_s1_s1; x.prov_s2_s1 += y.prov_s2_s1; x.prov_s1_s2 += y.prov_s1_s2; x.prov_s2_s2 += y.prov_s2_s2;
+            x.prov_cum_s1_s3 += y.prov_cum_s1_s3; x.prov_cum_s2_s3 += y.prov_cum_s2_s3; x.prov_old_s3 += y.prov_old_s3;
+            x.prov_stock_s1 += y.prov_stock_s1; x.prov_stock_s2 += y.prov_stock_s2; x.prov_stock_s3 += y.prov_stock_s3;
+            x.prov_stock_poci += y.prov_stock_poci;
+            x.impairment += y.impairment;
+        }
+}
+
+// Only the terms project_exposure adds (non-zero weights), so that a += b gives the same sums as accumulating
+// into a directly.
+void add(std::array<std::array<ParamAccum, 4>, 2>& a, const std::array<std::array<ParamAccum, 4>, 2>& b) {
+    for (std::size_t sc = 0; sc < 2; ++sc)
+        for (std::size_t t = 0; t < 4; ++t) {
+            for (std::size_t w = 0; w < 3; ++w) a[sc][t].weight[w] += b[sc][t].weight[w];
+            for (std::size_t i = 0; i < kParamCount; ++i)
+                if (b[sc][t].weight[param_weight_stage(i)] != 0) a[sc][t].sum[i] += b[sc][t].sum[i];
+        }
 }
 }  // namespace
 
@@ -136,6 +165,7 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
     out.start_source.resize(nseg);
     out.path_source.resize(nseg);
     out.accum.resize(nseg);
+    out.sectors.resize(nseg);
     auto check = [&](const Params& p, const std::string& what) {
         for (const auto& m : check_parameters(p)) out.parameter_errors.push_back(what + ": " + m);
     };
@@ -187,10 +217,24 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
         // Local accumulators (no false sharing between workers), copied to the result slot at the end.
         std::array<std::array<YearResult, 3>, 2> acc{};
         std::array<std::array<ParamAccum, 4>, 2> pacc{};
+        // NACE sector breakdown: each exposure is projected into a zeroed buffer that is then added to both the
+        // segment and its sector. Adding x to 0 is exact, so the segment sums (and their order) are unchanged.
+        const bool by_sector = has_sector_breakdown(s.segments[seg]);
+        std::array<std::int32_t, kNaceSectors> slot;
+        slot.fill(-1);
+        std::vector<SectorSlice> slices;
+        std::array<std::array<YearResult, 3>, 2> one{};
+        std::array<std::array<ParamAccum, 4>, 2> pone{};
         for (std::size_t m = first[seg]; m < first[seg + 1]; ++m) {
             const std::size_t i = members[m];
             const auto& e = d.exposures[i];
             const double gca = to_double(e.gca) * s.fx[i], allowance = to_double(e.allowance) * s.fx[i];
+            auto& res = by_sector ? one : acc;
+            auto& pres = by_sector ? pone : pacc;
+            if (by_sector) {
+                one = {};
+                pone = {};
+            }
             if (external && external->has_exposure(i)) {
                 // Exposure-level parameters: own starting point and path (same macro drivers as the segment).
                 auto check_own = [&](const Params& p, const std::string& what) {
@@ -202,13 +246,28 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
                         check_own(own[sc][static_cast<std::size_t>(t)], d.exposure_ids.at(e.id) + " " + kScenarios[sc] + "/" + std::to_string(t));
                 check_own(own[0][0], d.exposure_ids.at(e.id) + " actual/0");
                 ++log.own;
-                project_exposure(e.stage, gca, allowance, own, cfg, acc, &pacc);
+                project_exposure(e.stage, gca, allowance, own, cfg, res, &pres);
             } else {
-                project_exposure(e.stage, gca, allowance, out.params[seg], cfg, acc, &pacc);
+                project_exposure(e.stage, gca, allowance, out.params[seg], cfg, res, &pres);
+            }
+            if (by_sector) {
+                const auto sec = d.counterparties[e.counterparty].nace;
+                auto& k = slot[static_cast<std::size_t>(sec)];
+                if (k < 0) {
+                    k = static_cast<std::int32_t>(slices.size());
+                    slices.emplace_back().sector = sec;
+                }
+                auto& sl = slices[static_cast<std::size_t>(k)];
+                add(acc, one);
+                add(pacc, pone);
+                add(sl.results, one);
+                add(sl.accum, pone);
             }
         }
         out.results[seg] = acc;
         out.accum[seg] = pacc;
+        std::sort(slices.begin(), slices.end(), [](const SectorSlice& a, const SectorSlice& b) { return a.sector < b.sector; });
+        out.sectors[seg] = std::move(slices);
     };
     // Largest segments first, handed out dynamically; the assignment affects timing only, never results.
     std::vector<std::size_t> order(nseg);

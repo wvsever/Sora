@@ -75,7 +75,7 @@ WITH fx AS (
     UNION SELECT '{ccy}', 1.0
 ),
 e AS (
-    SELECT e.*, c.eba_sector, c.is_sme,
+    SELECT e.*, c.eba_sector, c.is_sme, c.nace_code,
            coalesce(e.country_of_risk, c.country_of_residence) AS country,
            CASE WHEN e.exposure_type = 'debt_security' THEN 'DEBT_SEC' ELSE 'LOANS' END AS instrument,
            fx.r AS fx
@@ -101,13 +101,21 @@ SELECT exposure_id, instrument,
                  WHEN household_purpose = 'consumption' THEN 'HH_CONS'
                  ELSE 'HH_OTHER' END
     END AS portfolio,
-    country, stage,
+    country, stage, nace_code,
     CAST(gross_carrying_amount AS DOUBLE) * fx AS gca,
     CAST(coalesce(loss_allowance, 0) AS DOUBLE) * fx AS allowance,
     fx
 FROM e
 ORDER BY exposure_id
 """
+
+
+def top_countries(rows, n) -> list[str]:
+    """Country buckets: top N by exposure (ties by country code), largest first; the others are OTHER."""
+    by_country = defaultdict(float)
+    for r in rows:
+        by_country[r["country"]] += r["gca"]
+    return sorted(by_country, key=lambda c: (-by_country[c], c))[:n]
 
 
 def load_exposures(con, cfg, manifest) -> list[dict]:
@@ -118,11 +126,7 @@ def load_exposures(con, cfg, manifest) -> list[dict]:
     cur = con.execute(sql)
     cols = [d[0] for d in cur.description]
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-    # Country buckets: top N by exposure (ties by country code), others OTHER.
-    by_country = defaultdict(float)
-    for r in rows:
-        by_country[r["country"]] += r["gca"]
-    top = sorted(by_country, key=lambda c: (-by_country[c], c))[: cfg["segmentation"]["top_countries"]]
+    top = top_countries(rows, cfg["segmentation"]["top_countries"])
     for r in rows:
         r["bucket"] = r["country"] if r["country"] in top else "OTHER"
         r["segment"] = f"{r['instrument']}|{r['portfolio']}|{r['bucket']}"
@@ -433,6 +437,232 @@ def write_collateral(path: Path, ltv: dict):
                 w.writerow([s, sc, t, *(f"{x:.2f}" for x in v), *ratios])
 
 
+# ----------------------------------------------------------------------------------------- CR_SECTOR
+
+# NACE Rev. 2.1 sections by division (01..99). Division numbers mean the same sections in NACE Rev. 2, except for
+# the letters, so a code of either revision maps by its division. Divisions 97-99 (households as employers,
+# extraterritorial bodies) and unused numbers are not NFC activities: sector unknown.
+NACE_DIVISIONS = (("A", 1, 3), ("B", 5, 9), ("C", 10, 33), ("D", 35, 35), ("E", 36, 39), ("F", 41, 43),
+                  ("G", 45, 47), ("H", 49, 53), ("I", 55, 56), ("J", 58, 60), ("K", 61, 63), ("L", 64, 66),
+                  ("M", 68, 68), ("N", 69, 75), ("O", 77, 82), ("P", 84, 84), ("Q", 85, 85), ("R", 86, 88),
+                  ("S", 90, 93), ("T", 94, 96))
+ENERGY_INTENSIVE = range(17, 31)          # 2027 draft template guidance, Table 4: C10-C12 and C17-C30
+ENERGY_INTENSIVE_LOW = range(10, 13)
+CR_SECTOR_LABELS = {
+    "A": "A - Agriculture, forestry and fishing", "B": "B - Mining and quarrying", "C": "C - Manufacturing",
+    "C_EI": "C Manufacturing - energy-intensive activities", "C_OT": "C Manufacturing - other",
+    "D": "D - Electricity, gas, steam and air conditioning supply",
+    "E": "E - Water supply; sewerage, waste management and remediation activities", "F": "F - Construction",
+    "G": "G - Wholesale and retail trade", "H": "H - Transportation and storage",
+    "I": "I - Accommodation and food service activities",
+    "J": "J - Publishing, broadcasting, and content production and distribution activities",
+    "K": "K - Telecommunication, computer programming, consulting, computing infrastructure and other information "
+         "service activities",
+    "L": "L - Financial and insurance activities", "M": "M - Real estate activities",
+    "N": "N - Professional, scientific and technical activities", "O": "O - Administrative and support service activities",
+    "P": "P - Public administration and defence; compulsory social security", "Q": "Q - Education",
+    "R": "R - Human health and social work activities", "S": "S - Arts, sports and recreation",
+    "T": "T - Other service activities", "TOTAL": "TOTAL exposures to NFC",
+}
+
+
+def nace_sector(code) -> str:
+    """CR_SECTOR sector of a NACE code (Rev. 2 or 2.1, e.g. C24.10, C24, 24.10 or C): the Rev. 2.1 section letter,
+    C_EI / C_OT for manufacturing (energy-intensive or other), or UNKNOWN. A bare letter is read as a Rev. 2.1
+    section; a bare C counts as C_OT (the division is needed for the energy-intensive split)."""
+    code = (code or "").strip().upper()
+    letter = code[:1] if code[:1].isalpha() else ""
+    digits = code[len(letter):len(letter) + 2]
+    if len(digits) == 2 and digits.isdigit():
+        div = int(digits)
+        for sec, lo, hi in NACE_DIVISIONS:
+            if lo <= div <= hi:
+                if sec == "C":
+                    return "C_EI" if div in ENERGY_INTENSIVE or div in ENERGY_INTENSIVE_LOW else "C_OT"
+                return sec
+        return "UNKNOWN"
+    if letter and len(code) == 1 and letter in CR_SECTOR_LABELS:
+        return "C_OT" if letter == "C" else letter
+    return "UNKNOWN"
+
+
+# (row number, pivot, sector key, member sectors); the total includes exposures of unknown sector.
+CR_SECTOR_ROWS = []
+for _k in ("A", "B", "C", "C_EI", "C_OT", *"DEFGHIJKLMNOPQRST", "TOTAL"):
+    CR_SECTOR_ROWS.append((len(CR_SECTOR_ROWS) + 1, "Sum" if _k == "TOTAL" else "o/w" if _k.startswith("C_") else "Pivot",
+                           _k, None if _k == "TOTAL" else ("C_EI", "C_OT") if _k == "C" else (_k,)))
+
+SLOTS = (("actual", 0), ("baseline", 1), ("baseline", 2), ("baseline", 3), ("adverse", 1), ("adverse", 2), ("adverse", 3))
+AMOUNTS = ("exp_s1", "exp_s2", "exp_s3_old", "exp_s3_new", "exp_poci", "prov_s1", "prov_s2", "prov_s3", "prov_poci",
+           "flow_s2_s1", "flow_s1_s2", "flow_s1_s3", "flow_s2_s3", "prov_s1_s2", "prov_s2_s2", "prov_s1_s3", "prov_s2_s3",
+           "cum_s1_s3", "cum_s2_s3", "prov_s1_s1", "prov_s2_s1", "prov_old_s3")
+WEIGHT_STAGE = {"pd12m_s1": 0, "tr1_2": 0, "lgd_s1": 0, "pd12m_s2": 1, "tr2_1": 1, "lgd_s2": 1, "lrlt_s2": 1,
+                "tr3_1": 2, "tr3_2": 2, "lgd_s3": 2}
+
+
+def new_agg() -> dict:
+    return {**{k: 0.0 for k in AMOUNTS}, "w": [0.0, 0.0, 0.0], "psum": {k: 0.0 for k in PARAMS}}
+
+
+def add_params(agg, p, w):
+    """Exposure-weighted parameters: S1 exposure at the start of the year for PD12M S1, TR1-2, LGD S1; S2 for
+    PD12M S2, TR2-1, LGD S2, LRLT S2; old S3 for TR3-1, TR3-2, LGD S3."""
+    for i in range(3):
+        agg["w"][i] += w[i]
+    for k in PARAMS:
+        if w[WEIGHT_STAGE[k]] != 0:
+            agg["psum"][k] += p[k] * w[WEIGHT_STAGE[k]]
+
+
+def sector_cells(exposures, params0, projected, cfg) -> dict:
+    """{(segment, sector): [agg per slot]} for the NFC segments. The sector is carried through the projection:
+    each (segment, sector) stock is projected with the segment's parameters, exactly as the engine projects each
+    exposure. Because Boxes 3-8 are linear in the stage stocks and Box 9 applies per exposure, the sectors of a
+    segment add up to the segment."""
+    stocks, s3 = {}, defaultdict(list)
+    for r in exposures:
+        if not r["portfolio"].startswith("NFC") or r["stage"] not in (*STAGES, "poci"):
+            continue
+        key = (r["segment"], nace_sector(r["nace_code"]))
+        st = stocks.setdefault(key, {k: [0.0, 0.0] for k in (*STAGES, "poci")})
+        st[r["stage"]][0] += r["gca"]
+        st[r["stage"]][1] += r["allowance"]
+        if r["stage"] == "stage3":
+            s3[key].append((r["gca"], r["allowance"]))
+    cells = {}
+    for key, st in sorted(stocks.items()):
+        seg = key[0]
+        slots = [new_agg() for _ in SLOTS]
+        a = slots[0]
+        (a["exp_s1"], a["prov_s1"]), (a["exp_s2"], a["prov_s2"]) = st["stage1"], st["stage2"]
+        (a["exp_s3_old"], a["prov_s3"]), (a["exp_poci"], a["prov_poci"]) = st["stage3"], st["poci"]
+        add_params(a, params0[seg], (st["stage1"][0], st["stage2"][0], st["stage3"][0]))
+        prev = {}
+        for row in project_segment(st, projected[seg], cfg, s3[key]):
+            sc, t = row["scenario"], row["year"]
+            b = slots[SLOTS.index((sc, t))]
+            e1, e2 = prev.get(sc, (st["stage1"][0], st["stage2"][0]))             # exposure at the start of the year
+            add_params(b, projected[seg][sc][t], (e1, e2, st["stage3"][0]))
+            prev[sc] = (row["exp_s1"], row["exp_s2"])
+            for k in ("exp_s1", "exp_s2", "exp_s3_old", "exp_s3_new", "exp_poci", "flow_s2_s1", "flow_s1_s2",
+                      "flow_s1_s3", "flow_s2_s3", "prov_s1_s2", "prov_s2_s2", "prov_s1_s1", "prov_s2_s1", "prov_old_s3"):
+                b[k] = row[k]
+            b["prov_s1"], b["prov_s2"] = row["prov_stock_s1"], row["prov_stock_s2"]
+            b["prov_s3"], b["prov_poci"] = row["prov_stock_s3"], row["prov_stock_poci"]
+            b["cum_s1_s3"], b["cum_s2_s3"] = row["prov_cum_s1_s3"], row["prov_cum_s2_s3"]
+            before = slots[SLOTS.index((sc, t - 1))] if t > 1 else None
+            b["prov_s1_s3"] = row["prov_cum_s1_s3"] - (before["cum_s1_s3"] if before else 0.0)
+            b["prov_s2_s3"] = row["prov_cum_s2_s3"] - (before["cum_s2_s3"] if before else 0.0)
+        cells[key] = slots
+    return cells
+
+
+def _param(a, k):
+    w = a["w"][WEIGHT_STAGE[k]]
+    return a["psum"][k] / w if w > 0 else None
+
+
+def _ratio(num, den):
+    return num / den if den > 0 else None
+
+
+def _flow(k):
+    return lambda a, actual: None if actual else a[k]
+
+
+# (header, percent?, value(agg, actual)): the 2027 draft CSV_CR_SECTOR columns. Sora uses no sectoral models
+# (columns 1-2 are 0), and PD / LGD PiT are not produced (blank), as in cr_scen.csv.
+CR_SECTOR_COLUMNS = (
+    ("PD/TR - Percentage of exposures with projections based on sectoral models, e.g. via sensitivities by sector (%)",
+     True, lambda a, actual: 0.0),
+    ("LGD/LR - Percentage of exposures with projections based on sectoral models, e.g. via sensitivities by sector (%)",
+     True, lambda a, actual: 0.0),
+    ("PD PiT (%)", True, lambda a, actual: None),
+    ("PD 12M S1 (TR1-3)", True, lambda a, actual: _param(a, "pd12m_s1")),
+    ("TR1-2", True, lambda a, actual: _param(a, "tr1_2")),
+    ("PD 12M S2 (TR2-3)", True, lambda a, actual: _param(a, "pd12m_s2")),
+    ("TR2-1", True, lambda a, actual: _param(a, "tr2_1")),
+    ("TR3-1", True, lambda a, actual: _param(a, "tr3_1") if actual else None),
+    ("TR3-2", True, lambda a, actual: _param(a, "tr3_2") if actual else None),
+    ("LGD PiT new (%)", True, lambda a, actual: None),
+    ("LGD S1", True, lambda a, actual: _param(a, "lgd_s1")),
+    ("LGD S2", True, lambda a, actual: _param(a, "lgd_s2")),
+    ("LRLT S2", True, lambda a, actual: _param(a, "lrlt_s2")),
+    ("LGD S3", True, lambda a, actual: _param(a, "lgd_s3")),
+    ("Stage 1 flow (S2-S1 flow)", False, _flow("flow_s2_s1")),
+    ("Stage 2 flow (S1-S2 flow)", False, _flow("flow_s1_s2")),
+    ("Stage 3 flow (SX-S3 flow)", False, lambda a, actual: None if actual else a["flow_s1_s3"] + a["flow_s2_s3"]),
+    ("Stage 3 flow from Stage 1 (S1-S3 Flow)", False, _flow("flow_s1_s3")),
+    ("Stage 3 flow from Stage 2 (S2-S3 Flow)", False, _flow("flow_s2_s3")),
+    ("Provisions stage 1 to stage 2 (Prov S1-S2)", False, _flow("prov_s1_s2")),
+    ("Provisions stage 2 to stage 2 (Prov S2-S2)", False, _flow("prov_s2_s2")),
+    ("Provisions new stage 3 (Prov SX-S3)", False, lambda a, actual: None if actual else a["prov_s1_s3"] + a["prov_s2_s3"]),
+    ("Provisions stage 1 to stage 3 (Prov S1-S3)", False, _flow("prov_s1_s3")),
+    ("Provisions stage 2 to stage 3 (Prov S2-S3)", False, _flow("prov_s2_s3")),
+    ("Cumulative provisions new stage 3 (Prov Cumul SX-S3)", False,
+     lambda a, actual: None if actual else a["cum_s1_s3"] + a["cum_s2_s3"]),
+    ("Cumulative provisions stage 1 to stage 3 (Prov Cumul S1-S3)", False, _flow("cum_s1_s3")),
+    ("Cumulative provisions stage 2 to stage 3 (Prov Cumul S2-S3)", False, _flow("cum_s2_s3")),
+    ("Provisions stage 1 to stage 1 (Prov S1-S1)", False, _flow("prov_s1_s1")),
+    ("Provisions stage 2 to stage 1 (Prov S2-S1)", False, _flow("prov_s2_s1")),
+    ("Provisions old stage 3 (Prov old S3-S3)", False, _flow("prov_old_s3")),
+    ("Total exposure (total Exp)", False,
+     lambda a, actual: a["exp_s1"] + a["exp_s2"] + a["exp_s3_old"] + a["exp_s3_new"] + a["exp_poci"]),
+    ("Performing exposure (Exp)", False, lambda a, actual: a["exp_s1"] + a["exp_s2"]),
+    ("of which: stage 1 (Exp S1)", False, lambda a, actual: a["exp_s1"]),
+    ("of which: stage 2 (Exp S2)", False, lambda a, actual: a["exp_s2"]),
+    ("Non-performing exposure (Exp S3)", False, lambda a, actual: a["exp_s3_old"] + a["exp_s3_new"]),
+    ("of which: existing Non-performing exposure (Old Exp S3)", False, lambda a, actual: a["exp_s3_old"]),
+    ("of which: cumulative new non-performing exposure (Cumul New Exp S3)", False, lambda a, actual: a["exp_s3_new"]),
+    ("POCI exposures (Exp POCI)", False, lambda a, actual: a["exp_poci"]),
+    ("Stock of provisions (Prov Stock)", False,
+     lambda a, actual: a["prov_s1"] + a["prov_s2"] + a["prov_s3"] + a["prov_poci"]),
+    ("of which: performing assets (Prov Stock Perf)", False, lambda a, actual: a["prov_s1"] + a["prov_s2"]),
+    ("of which: stage 1 (Prov Stock S1)", False, lambda a, actual: a["prov_s1"]),
+    ("of which: stage 2 (Prov Stock S2)", False, lambda a, actual: a["prov_s2"]),
+    ("of which: non-performing assets (Prov Stock S3)", False, lambda a, actual: a["prov_s3"]),
+    ("of which: POCI (Prov Stock POCI)", False, lambda a, actual: a["prov_poci"]),
+    ("Coverage ratio: performing exposure", True,
+     lambda a, actual: _ratio(a["prov_s1"] + a["prov_s2"], a["exp_s1"] + a["exp_s2"])),
+    ("Coverage ratio: non-performing exposure", True,
+     lambda a, actual: _ratio(a["prov_s3"], a["exp_s3_old"] + a["exp_s3_new"])),
+)
+
+
+def write_cr_sector(path: Path, cells: dict, top: list[str], ref_year: int):
+    """cr_sector.csv in the 2027 draft CSV_CR_SECTOR layout: 23 sector rows per geography (Total, top countries,
+    Other), scenario and year. Amounts in EUR million (8 decimals), parameters and ratios in percent (7 decimals)."""
+    geos = ["Total", *top, "Other"]
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(["RowNum", "Pivot", "Geographical breakdown", "Scenario", "Year", "COREP asset class", "NACE code",
+                    "Exposures by sector of economic activity (as per scope defined in section 2.3.3 EBA Methodology Note)",
+                    *(c[0] for c in CR_SECTOR_COLUMNS)])
+        for slot, (sc, t) in enumerate(SLOTS):
+            for geo in geos:
+                for num, pivot, key, members in CR_SECTOR_ROWS:
+                    a = new_agg()
+                    for (seg, sector), slots in cells.items():
+                        bucket = seg.split("|")[2]
+                        if geo != "Total" and bucket != (geo if geo != "Other" else "OTHER"):
+                            continue
+                        if members is not None and sector not in members:
+                            continue
+                        b = slots[slot]
+                        for k in AMOUNTS:
+                            a[k] += b[k]
+                        for i in range(3):
+                            a["w"][i] += b["w"][i]
+                        for k in PARAMS:
+                            a["psum"][k] += b["psum"][k]
+                    values = []
+                    for _, pct, get in CR_SECTOR_COLUMNS:
+                        v = get(a, slot == 0)
+                        values.append("" if v is None else f"{v * 100.0:.7f}" if pct else f"{v / 1e6:.8f}")
+                    w.writerow([num, pivot, geo, sc.capitalize(), ref_year + t, "Exposures in scope of CSV_CR_SECTOR",
+                                CR_SECTOR_LABELS[key], CR_SECTOR_LABELS[key], *values])
+
+
 # ----------------------------------------------------------------------------------------- main
 
 def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
@@ -505,6 +735,8 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
                     totals[(row["scenario"], row["year"])][k] += row[k]
 
     write_collateral(out / "collateral.csv", collateral_ltv(con, exposures, macro, cfg, manifest))
+    write_cr_sector(out / "cr_sector.csv", sector_cells(exposures, params0, projected, cfg),
+                    top_countries(exposures, cfg["segmentation"]["top_countries"]), int(manifest["reference_date"][:4]))
 
     summary = {
         "reference_date": manifest["reference_date"], "sim_mapping_release": manifest.get("mapping_release"),

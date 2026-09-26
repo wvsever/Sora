@@ -30,6 +30,7 @@ add_library(sora_core
   src/projection.cpp
   src/output.cpp
   src/cr_scen.cpp
+  src/cr_sector.cpp
   src/collateral.cpp
   src/validation.cpp
 )

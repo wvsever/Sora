@@ -125,13 +125,49 @@ def test_collateral_pro_rata_allocation():
     assert not any(e == "E9" for e, _ in v)
 
 
+def test_nace_sector():
+    """NACE Rev. 2 and Rev. 2.1 codes map to Rev. 2.1 sections by division; C splits into energy-intensive
+    (C10-C12, C17-C30) and other."""
+    cases = {"C24.10": "C_EI", "C10.11": "C_EI", "C30.30": "C_EI", "C13.10": "C_OT", "C16": "C_OT", "C": "C_OT",
+             "L68.20": "M", "M68.20": "M", "J62.01": "K", "J58.11": "J", "K64.20": "L", "M69.10": "N", "N77.11": "O",
+             "Q86.10": "R", "R93.11": "S", "S96.02": "T", "G45.11": "G", "24.10": "C_EI", " f41.20 ": "F", "L": "L",
+             "T97.00": "UNKNOWN", "U99.00": "UNKNOWN", "U": "UNKNOWN", "C4": "UNKNOWN", "": "UNKNOWN", None: "UNKNOWN",
+             "n/a": "UNKNOWN"}
+    for code, sector in cases.items():
+        assert ref.nace_sector(code) == sector, code
+
+
+def test_sector_cells_add_up_to_the_segment():
+    """Carrying the sector through the projection: the (segment, sector) projections add up to the segment."""
+    P = flat(pd12m_s1=0.02, pd12m_s2=0.10, tr1_2=0.05, tr2_1=0.20, lgd_s1=0.40, lgd_s2=0.50, lgd_s3=0.60, lrlt_s2=0.08)
+    exposures = [{"segment": "LOANS|NFC_SME_OTHER|BE", "portfolio": "NFC_SME_OTHER", "nace_code": code, "stage": st,
+                  "gca": g, "allowance": a}
+                 for code, st, g, a in (("C24.10", "stage1", 1000, 3), ("F41.20", "stage1", 500, 2),
+                                        ("C24.10", "stage2", 200, 10), ("F41.20", "stage3", 100, 70),
+                                        ("A01.11", "stage3", 100, 10), ("A01.11", "poci", 10, 4))]
+    exposures.append({**exposures[0], "segment": "LOANS|HH_CONS|BE", "portfolio": "HH_CONS"})   # not NFC
+    projected = {"LOANS|NFC_SME_OTHER|BE": {"baseline": P, "adverse": P}}
+    params0 = {"LOANS|NFC_SME_OTHER|BE": P[1]}
+    cells = ref.sector_cells(exposures, params0, projected, {"constraints": {"adverse_final_year_blend": [5 / 6, 1 / 6]}})
+    assert sorted(k[1] for k in cells) == ["A", "C_EI", "F"]
+    stock = {"stage1": [1500, 5], "stage2": [200, 10], "stage3": [200, 80], "poci": [10, 4]}
+    whole = ref.project_segment(stock, projected["LOANS|NFC_SME_OTHER|BE"], CFG, [(100, 70), (100, 10)])
+    for row in whole:
+        slot = ref.SLOTS.index((row["scenario"], row["year"]))
+        for k in ("exp_s1", "exp_s2", "exp_s3_new", "flow_s1_s3", "prov_old_s3", "prov_s1_s1", "prov_s2_s2"):
+            assert approx(sum(c[slot][k] for c in cells.values()), row[k]), k
+        assert approx(sum(c[slot]["prov_s3"] for c in cells.values()), row["prov_stock_s3"])
+    # Year-1 S1 weights are the t0 stage 1 stocks; the energy-intensive part has 1000 of 1500.
+    assert approx(cells[("LOANS|NFC_SME_OTHER|BE", "C_EI")][1]["w"][0], 1000)
+
+
 def test_golden_results_are_reproducible(reference_sim, tmp_path):
     """tests/golden/20260630 is produced by the reference implementation from the reference mapping.
     Regenerate: python tools/reference/sora_reference.py --sim <sim> --scenario tests/scenarios/test_eba2025.yaml \
     --out tests/golden/20260630"""
     ref.run(reference_sim, REPO / "tests" / "scenarios" / "test_eba2025.yaml", tmp_path, REPO)
     golden = REPO / "tests" / "golden" / "20260630"
-    for name in ("segments.csv", "parameters.csv", "projection.csv", "collateral.csv"):
+    for name in ("segments.csv", "parameters.csv", "projection.csv", "collateral.csv", "cr_sector.csv"):
         assert (tmp_path / name).read_text() == (golden / name).read_text(), name
     a, b = json.loads((tmp_path / "summary.json").read_text()), json.loads((golden / "summary.json").read_text())
     a.pop("sim_mapping_release"), b.pop("sim_mapping_release")
