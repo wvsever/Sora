@@ -97,6 +97,46 @@ void write_sector_summary(std::ostream& f, const Dataset& d, const Segmentation&
       << ",\n    \"lgd_lr_share\": " << rate(total > 0 ? used[1] / total : 0.0) << "\n  }";
 }
 
+// prior_year.csv: stocks per t0 segment at the prior year-end (EUR). Exposures (provisions) are blank when an
+// exposure of the segment has no amount or FX rate (no FX rate), all amounts when the history has no rows then.
+std::vector<PriorStock> write_prior_year(const Dataset& d, const Segmentation& s, const PriorYear& p, const fs::path& file) {
+    std::vector<PriorStock> st(s.segments.size());
+    for (std::size_t i = 0; i < d.exposures.size(); ++i)
+        if (s.segment_of[i] >= 0) st[static_cast<std::size_t>(s.segment_of[i])].add(p, i);
+    auto f = open(file);
+    f << "segment,date,contracts,missing_amount,missing_fx,exp_s1,exp_s2,exp_s3,exp_poci,prov_s1,prov_s2,prov_s3,prov_poci\n";
+    for (std::size_t i = 0; i < s.segments.size(); ++i) {
+        const auto& x = st[i];
+        f << s.segments[i].key << ',' << p.date << ',' << x.contracts << ',' << x.missing_amount << ',' << x.missing_fx;
+        const bool exp_ok = x.exposures_known(p.available), prov_ok = x.provisions_known(p.available);
+        for (std::size_t k = 0; k < 4; ++k) f << ',' << (exp_ok ? money(x.exp[k]) : "");
+        for (std::size_t k = 0; k < 4; ++k) f << ',' << (prov_ok ? money(x.prov[k]) : "");
+        f << '\n';
+    }
+    return st;
+}
+
+// The summary.json "prior_year" object: date, counts and stock totals (null unless every exposure is known).
+void write_prior_summary(std::ostream& f, const PriorYear& p, const std::vector<PriorStock>& st) {
+    PriorStock t;
+    for (const auto& x : st) t.add(x);
+    const bool exp_ok = t.exposures_known(p.available), prov_ok = t.provisions_known(p.available);
+    f << "{\n    \"date\": \"" << p.date << "\",\n    \"year\": " << p.year << ",\n    \"available\": "
+      << (p.available ? "true" : "false") << ",\n    \"history_rows\": " << p.history_rows << ",\n    \"exposures\": "
+      << p.exposures << ",\n    \"amount_gca\": " << p.amount_gca << ",\n    \"amount_principal\": " << p.amount_principal
+      << ",\n    \"missing_amount\": " << p.missing_amount << ",\n    \"missing_fx\": " << p.missing_fx
+      << ",\n    \"allowance_split_history\": " << p.allowance_split_history << ",\n    \"allowance_split_t0_share\": "
+      << p.allowance_split_t0_share << ",\n    \"out_of_scope\": " << p.out_of_scope << ",\n    \"not_in_sim_exposure\": "
+      << p.not_in_sim_exposure << ",\n    \"not_in_sim_exposure_allowance\": " << money(p.not_in_sim_exposure_allowance)
+      << ",\n    \"stocks\": {";
+    const char* names[4] = {"s1", "s2", "s3", "poci"};
+    for (std::size_t k = 0; k < 4; ++k)
+        f << (k ? ",\n" : "\n") << "      \"exp_" << names[k] << "\": " << (exp_ok ? money(t.exp[k]) : "null");
+    for (std::size_t k = 0; k < 4; ++k)
+        f << ",\n      \"prov_" << names[k] << "\": " << (prov_ok ? money(t.prov[k]) : "null");
+    f << "\n    }\n  }";
+}
+
 }  // namespace
 
 void write_outputs(const RunOutput& run, const fs::path& dir) {
@@ -181,9 +221,11 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
     if (run.projection) {
         const auto coll = collateral_ltv(d, s, run.macro, run.config);
         write_collateral(s, coll, dir / "collateral.csv");
-        write_cr_scen(d, s, *run.projection, dir / "cr_scen.csv", &coll);
-        write_cr_sector(d, s, *run.projection, dir / "cr_sector.csv");
+        write_cr_scen(d, s, *run.projection, dir / "cr_scen.csv", &coll, run.prior_year);
+        write_cr_sector(d, s, *run.projection, dir / "cr_sector.csv", run.prior_year);
     }
+    std::vector<PriorStock> prior_stock;
+    if (run.prior_year) prior_stock = write_prior_year(d, s, *run.prior_year, dir / "prior_year.csv");
     if (run.projection && run.projection->benchmark.enabled) write_benchmarks(s, run.projection->benchmark, dir / "benchmarks.csv");
     if (run.projection && run.projection->sectoral) write_sector_parameters(s, *run.projection, dir / "sector_parameters.csv");
     if (run.rea) write_rea_csv(s, *run.rea, dir / "rea.csv");
@@ -214,6 +256,10 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
             first = false;
         }
         f << "\n  }";
+        if (run.prior_year) {
+            f << ",\n  \"prior_year\": ";
+            write_prior_summary(f, *run.prior_year, prior_stock);
+        }
         if (run.projection && run.projection->benchmark.enabled) {
             f << ",\n  \"benchmark\": ";
             write_benchmark_summary(f, run.config.benchmark, run.projection->benchmark);

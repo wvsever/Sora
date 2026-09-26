@@ -1,6 +1,6 @@
 {
   "reference_date": "2026-06-30",
-  "sim_mapping_release": "cppbank@708bc6895468",
+  "sim_mapping_release": "cppbank@83d22930e359",
   "scenario": "test_eba2025",
   "segments": 153,
   "exposures": 52872,
@@ -152,6 +152,32 @@
       "prov_stock_s3": 140629696.99,
       "prov_stock_poci": 32541035.99,
       "impairment": 38622221.57
+    }
+  },
+  "prior_year": {
+    "date": "2025-12-31",
+    "year": 2025,
+    "available": true,
+    "history_rows": 46313,
+    "exposures": 41190,
+    "amount_gca": 11234,
+    "amount_principal": 27318,
+    "missing_amount": 2638,
+    "missing_fx": 0,
+    "allowance_split_history": 0,
+    "allowance_split_t0_share": 12514,
+    "out_of_scope": 4100,
+    "not_in_sim_exposure": 1023,
+    "not_in_sim_exposure_allowance": 0.0,
+    "stocks": {
+      "exp_s1": null,
+      "exp_s2": null,
+      "exp_s3": null,
+      "exp_poci": null,
+      "prov_s1": 14361272.36,
+      "prov_s2": 91963466.55,
+      "prov_s3": 280907868.43,
+      "prov_poci": 111496799.88
     }
   },
   "benchmark": {

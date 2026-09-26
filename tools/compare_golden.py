@@ -8,7 +8,8 @@ cr_scen_off_bs.csv (EUR million, 8 decimals) is compared to 2e-8 (2 cents). benc
 exposure to 1 cent, the model flags, rules and benchmark keys exactly; summary.json "benchmark": counts exactly,
 pivot exposures to 1 cent and coverage shares to 1e-9. sector_parameters.csv (sectoral satellites): parameters to
 1e-9, keys, GVA keys and group sources exactly; summary.json "sector_satellites": counts exactly, exposures to 1 cent
-and shares to 1e-9.
+and shares to 1e-9. prior_year.csv (prior-year Actual stocks): counts exactly, amounts to 1 cent, blank cells exactly;
+summary.json "prior_year": counts, date and flags exactly, amounts to 1 cent (null exactly).
 The reference SIM is produced on demand (extract test data + reference mapping) if --sim is not given.
 """
 
@@ -100,6 +101,8 @@ def main() -> int:
         errors += compare("collateral.csv", args.golden, out, ["segment", "scenario", "year"], money=True, ratio_prefix="ltv_")
         errors += compare("cr_sector.csv", args.golden, out, ["RowNum", "Geographical breakdown", "Scenario", "Year"],
                           money=True, tolerance=template_tolerance)
+        if (args.golden / "prior_year.csv").exists():         # prior-year Actual rows (stocks at the prior year-end)
+            errors += compare("prior_year.csv", args.golden, out, ["segment"], money=True)
         if (args.golden / "off_balance.csv").exists():        # CR_SCEN_OFF_BS (scenario key off_balance)
             errors += compare("off_balance.csv", args.golden, out, ["segment", "exposure_type", "scenario", "year"], money=True)
             errors += compare("cr_scen_off_bs.csv", args.golden, out, ["RowNum", "Scenario", "Year"], money=True,
@@ -113,6 +116,15 @@ def main() -> int:
         for field in ("segments", "exposures"):
             if gs[field] != es[field]:
                 errors.append(f"summary {field}: engine {es[field]} vs golden {gs[field]}")
+        if "prior_year" in gs:
+            gp, ep = gs["prior_year"], es.get("prior_year", {})
+            for field, v in gp.items():
+                values = v.items() if isinstance(v, dict) else [(None, v)]
+                for sub, gv in values:
+                    ev = ep.get(field, {}).get(sub) if sub else ep.get(field)
+                    ok = abs(ev - gv) <= 0.01 if isinstance(gv, float) and isinstance(ev, (int, float)) else ev == gv
+                    if not ok:
+                        errors.append(f"summary prior_year.{field}{'.' + sub if sub else ''}: engine {ev} vs golden {gv}")
         if "off_balance" in gs:
             for field in ("items", "fallback_items", "unmatched_items", "customer_ccf_items", "loan_undrawn_items",
                           "commitment_drawn_exposures"):

@@ -1,8 +1,9 @@
 name: sim_stage_history
 description: >-
   Month-end history of stage and loss allowance per exposure. Used by `sora calibrate` to estimate
-  stage transition rates (TR1-2, TR2-1, PD12M S1/S2) and loss rates. Provide at least 12 months,
-  preferably 5 years. Include the reference date.
+  stage transition rates (TR1-2, TR2-1, PD12M S1/S2) and loss rates, and by `sora run` for the prior-year
+  Actual rows of CR_SCEN and CR_SECTOR (stocks at the year-end before the reference date). Provide at least
+  12 months, preferably 5 years. Include the reference date and the prior year-end.
 grain: One row per exposure and period end.
 primary_key: [exposure_id, period_end]
 partition_by: [entity_id]
@@ -54,6 +55,14 @@ columns:
     required: false
     description: Amount written off during the month.
     example: "0.00"
+  principal_outstanding:
+    type: amount
+    required: false
+    description: >-
+      Outstanding principal at period end (on-balance), where the gross carrying amount is not available. Used as
+      a proxy for the gross carrying amount (it excludes accrued interest) in the prior-year stocks of CR_SCEN and
+      CR_SECTOR, only when gross_carrying_amount is NULL. Not used for calibration weights.
+    example: "396800.00"
 foreign_keys:
   - columns: [entity_id]
     references: sim_entity

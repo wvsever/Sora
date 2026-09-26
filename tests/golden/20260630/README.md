@@ -13,12 +13,13 @@ Expected outputs for the C++ engine, produced by the independent reference imple
 | `parameters.csv` | Calibrated starting-point parameters (`actual`, year 0) and projected parameters per scenario and year, in the `sim_risk_parameter` layout. `calibration_levels` shows which hierarchy level each part came from. |
 | `projection.csv` | Stage flows, exposures, provisions per component (EBA Boxes 3–9) and impairment per segment, scenario and year |
 | `collateral.csv` | Static-balance-sheet LTV per segment, scenario (actual year 0, baseline and adverse 1..3) and t0 stage: secured exposure, real-estate collateral value under the property price paths, LTV (`plans/03_scenario_engine.md`, Collateral repricing and LTV) |
-| `cr_sector.csv` | EBA 2027 draft CSV_CR_SECTOR layout: the NFC portfolio (CR_SCEN rows 6 + 13) by NACE Rev. 2.1 section, with C split into energy-intensive and other, per geography (Total, top countries, Other), scenario and year (actual, baseline and adverse 1..3); 46 template columns, amounts in EUR million, parameters and ratios in percent (`plans/03_scenario_engine.md`, CR_SECTOR) |
+| `cr_sector.csv` | EBA 2027 draft CSV_CR_SECTOR layout: the NFC portfolio (CR_SCEN rows 6 + 13) by NACE Rev. 2.1 section, with C split into energy-intensive and other, per geography (Total, top countries, Other), scenario and year (prior-year actual 2025, actual, baseline and adverse 1..3); 46 template columns, amounts in EUR million, parameters and ratios in percent (`plans/03_scenario_engine.md`, CR_SECTOR; prior-year rows: stocks only) |
+| `prior_year.csv` | Prior-year Actual stocks (31 Dec 2025, the year-end before the reference date's year) per t0 segment: contracts with a stage history row then, `missing_amount` / `missing_fx`, exposures and provisions per stage (EUR), blank where an exposure of the segment has no history amount (`plans/03_scenario_engine.md`, Prior-year Actual rows). The engine's `cr_scen.csv` prior-year rows are these stocks by template row |
 | `off_balance.csv` | Off-balance items (loan commitments, financial guarantees, other commitments given, and `loan`: the undrawn part of loans; scenario key `off_balance`) per parameter segment, exposure type, scenario and year (actual year 0, baseline and adverse 1..3): nominal amounts by stage (`nom_*`), post-CCF amounts, stage flows, provisions per component and impairment in the `projection.csv` columns (`plans/03_scenario_engine.md`, Off-balance-sheet exposures) |
 | `cr_scen_off_bs.csv` | The same in the EBA CSV_CR_SCEN_OFF_BS layout (2027 draft templates): 22 rows per scenario and year (per commitment type a Sum row and six counterparty-sector rows, then Total), EUR million |
 | `benchmarks.csv` | ECB benchmark rule (scenario key `benchmark_parameters`, synthetic benchmarks `tests/params/synthetic_ecb_benchmarks.csv`) per segment: t0 exposure, model coverage per group (PD/TR, LGD/LR), the rule that applies (`none`, `sovereign`, `coverage`, `no_model`) and the benchmark key used, `unavailable` or empty (`plans/09_risk_parameters.md`, ECB benchmark parameters) |
 | `sector_parameters.csv` | Sectoral (GVA) satellites (scenario key `sector_satellites`, synthetic coefficients `tests/params/synthetic_sector_satellites.csv`): per NFC segment and NACE sector with coefficients, the GVA sector and key (`gva_relative` = 1: GDP of the country plus the sector's EU GVA deviation, non-EU countries), the ten parameters per scenario and year 1..3, and the source of each group (`sectoral`, `portfolio`, `benchmark`) (`plans/03_scenario_engine.md`, Sectoral (GVA) satellites) |
-| `summary.json` | Totals (`off_balance`: item counts and off-balance totals per scenario and year; `benchmark`: segment counts, model coverage and benchmark share per pivot asset class; `sector_satellites`: sectors per group, NFC exposure and the share projected with sectoral models) |
+| `summary.json` | Totals (`off_balance`: item counts and off-balance totals per scenario and year; `benchmark`: segment counts, model coverage and benchmark share per pivot asset class; `sector_satellites`: sectors per group, NFC exposure and the share projected with sectoral models; `prior_year`: date, counts and stock totals of the prior-year Actual rows) |
 
 The results are **synthetic**. Since the dataset was regenerated with realistic stage transitions (DS-016 fixed,
 see `tests/data/DATASET_ISSUES.md`), the magnitudes are plausible, but they still exist to check that the engine
@@ -42,6 +43,7 @@ its units (EUR million, percent), plus one unit in the last printed decimal. `cr
 8 decimals) is compared to 2e-8. `benchmarks.csv`: exposure to 1 cent, flags, rules and keys exactly; the summary's
 `benchmark` counts exactly and its coverage shares to 1e-9. `sector_parameters.csv`: parameters to 1e-9, keys and
 sources exactly; the summary's `sector_satellites` counts exactly, exposures to 1 cent and shares to 1e-9.
+`prior_year.csv`: counts exactly, amounts to 1 cent, blank cells exactly; the summary's `prior_year` counts, date and flags exactly, amounts to 1 cent.
 
 Facilities (the test scenario sets `off_balance.include_loan_undrawn` and `commitment_drawn_on_balance`,
 `plans/03_scenario_engine.md`, Off-balance-sheet exposures, item 7): the drawn part (GCA) of 6,455 staged commitments
@@ -118,3 +120,24 @@ projected rows, and columns 1-2 now filled), `off_balance.csv`, `cr_scen_off_bs.
 `sector_parameters.csv` is new (5,700 rows: 50 NFC segments x 19 sectors x 6); `segments.csv`, `parameters.csv` (the
 segment paths stay the portfolio model's), `collateral.csv` and `benchmarks.csv` do not. With the key removed from the
 scenario the engine reproduces the previous golden files exactly.
+
+Prior-year Actual rows (EBA 2027 draft MN para 71 and Table 2: end-of-year stocks of the year before the starting
+point in the t0 portfolios; `plans/03_scenario_engine.md`, Prior-year Actual rows). Date 31 Dec 2025, labelled 2025
+(the year-end before the reference date's year; for the EBA's 31 December starting point this is t0 - 12 months). Of
+46,313 stage history rows at that date, 41,190 belong to in-scope t0 exposures (4,100 are out of the on-balance scope,
+1,023 are not in `sim_exposure`: expired commitments and matured leases, zero allowance). Amounts: 11,234 from the
+ledger's gross carrying amount, 27,318 from the new `sim_stage_history.principal_outstanding` (DS-046), 2,638 without
+an amount (1,978 loan commitments, 222 other commitments, 87 financial guarantees drawn on-balance at t0, 266 debt
+securities, 85 finance leases). Rows containing those have blank exposure cells and coverage ratios; provision cells are
+complete. Filled: house purchase, consumption and the two CRE portfolios (44 segments) and the empty CB segments; e.g.
+lending for house purchase EUR 2,792.82m (2025) against 2,528.02m (2026), NPE coverage 72.3% against 33.8%. On-balance
+provision stocks at 31 Dec 2025: S1 14.36m, S2 91.96m, S3 280.91m, POCI 111.50m (t0: 23.84m, 40.92m, 91.94m, 32.54m);
+the S3 and POCI stocks fall by the June 2026 write-offs (DS-047). 12,514 facilities split the allowance with the t0
+drawn share (no undrawn history).
+
+Golden change log (prior-year Actual rows, 2026-09-26): `cr_sector.csv` +276 rows (Actual 2025: 12 geographies x
+23 sectors, first in the file; the 1,932 existing rows are unchanged; NFC provision stock 2025 EUR 210.05m against
+105.59m at t0, exposure cells blank because the NFC "other" loans include drawn commitments and leases);
+`prior_year.csv` new (153 segments); `summary.json` new object `prior_year` and the mapping release of the extended
+mapping (`principal_outstanding` in `sim_stage_history`, additive: every other SIM value is unchanged, so the other
+golden files are byte-identical). The engine's `cr_scen.csv` (not a golden file) gains 264 rows (Actual 2025).

@@ -16,6 +16,7 @@ SCENARIOS = ("actual", "baseline", "adverse")
 # Key columns per output file (the rest are values). Unknown CSV files are keyed by their text columns.
 FILE_KEYS: dict[str, tuple[str, ...]] = {
     "segments.csv": ("segment",),
+    "prior_year.csv": ("segment", "date"),
     "parameters.csv": ("level", "key", "scenario", "year"),
     "projection.csv": ("segment", "scenario", "year"),
     "collateral.csv": ("segment", "scenario", "year"),

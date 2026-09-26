@@ -62,6 +62,8 @@ SCENARIO_PATH_KEYS = (("macro_path",), ("satellites",), ("starting_parameters",)
 
 OUTPUT_FILES = {
     "segments.csv": "Segments and starting-point stocks: exposure and provisions per stage (EUR).",
+    "prior_year.csv": "Stocks per segment at the prior year-end (CR_SCEN/CR_SECTOR prior-year Actual rows; EUR, "
+                      "blank where not derivable).",
     "parameters.csv": "Starting-point and projected parameters per segment, scenario and year, with source "
                       "(derived/external/mixed/benchmark) and calibration_levels; with --calculator-parameters also "
                       "exposure rows (actual/0) with the fields taken from the calculator (source calculator).",

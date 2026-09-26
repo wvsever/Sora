@@ -218,7 +218,8 @@ std::string csv(const std::string& s) {
 
 }  // namespace
 
-void write_cr_sector(const Dataset& d, const Segmentation& s, const Projection& p, const fs::path& file) {
+void write_cr_sector(const Dataset& d, const Segmentation& s, const Projection& p, const fs::path& file,
+                     const PriorYear* prior) {
     constexpr std::size_t kSlots = 7;   // 0 = actual, 1..3 baseline, 4..6 adverse
     const std::size_t nbucket = s.top_countries.size() + 1;   // top countries, then OTHER
     const auto nseg = s.segments.size();
@@ -293,6 +294,49 @@ void write_cr_sector(const Dataset& d, const Segmentation& s, const Projection& 
     const char* scen_name[kSlots] = {"Actual", "Baseline", "Baseline", "Baseline", "Adverse", "Adverse", "Adverse"};
     const int year_off[kSlots] = {0, 1, 2, 3, 1, 2, 3};
     char buf[64];
+    // One template row. `known` (prior-year rows): exposure / provision cells are written only if known.
+    auto emit = [&](const Row& row, const std::string& geo, const char* scen, int year, const Agg& a, bool actual,
+                    const std::pair<bool, bool>* known) {
+        const std::string label = csv(row.label);
+        f << row.num << ',' << row.pivot << ',' << geo << ',' << scen << ',' << year
+          << ",Exposures in scope of CSV_CR_SECTOR," << label << ',' << label;
+        for (const auto& c : kColumns) {
+            Value v = c.get(a, actual);
+            if (known && v && !prior_cell_known(c.header, c.percent, known->first, known->second)) v.reset();
+            f << ',';
+            if (!v) continue;
+            if (c.percent) std::snprintf(buf, sizeof buf, "%.7f", *v * 100.0);
+            else std::snprintf(buf, sizeof buf, "%.8f", *v / 1e6);
+            f << buf;
+        }
+        f << '\n';
+    };
+
+    // Prior-year Actual rows: stocks at the prior year-end by t0 bucket and sector, before the starting point.
+    if (prior) {
+        std::vector<PriorStock> pcells(nbucket * kNaceSectors);
+        for (std::size_t i = 0; i < d.exposures.size(); ++i) {
+            const auto sid = s.segment_of[i];
+            if (sid < 0 || !has_sector_breakdown(s.segments[static_cast<std::size_t>(sid)])) continue;
+            const auto nace = static_cast<std::size_t>(d.counterparties[d.exposures[i].counterparty].nace);
+            pcells[bucket[static_cast<std::size_t>(sid)] * kNaceSectors + nace].add(*prior, i);
+        }
+        for (std::size_t g = 0; g < geos.size(); ++g) {
+            for (const auto& row : kRows) {
+                PriorStock st;
+                for (std::size_t b = 0; b < nbucket; ++b) {
+                    if (g != 0 && b != g - 1) continue;
+                    for (std::size_t k = 0; k < kNaceSectors; ++k)
+                        if (row.sectors & (1U << k)) st.add(pcells[b * kNaceSectors + k]);
+                }
+                Agg a;
+                a.exp_s1 = st.exp[0]; a.exp_s2 = st.exp[1]; a.exp_s3_old = st.exp[2]; a.exp_poci = st.exp[3];
+                a.prov_s1 = st.prov[0]; a.prov_s2 = st.prov[1]; a.prov_s3 = st.prov[2]; a.prov_poci = st.prov[3];
+                const std::pair<bool, bool> known{st.exposures_known(prior->available), st.provisions_known(prior->available)};
+                emit(row, geos[g], "Actual", prior->year, a, true, &known);
+            }
+        }
+    }
     for (std::size_t slot = 0; slot < kSlots; ++slot) {
         for (std::size_t g = 0; g < geos.size(); ++g) {
             for (const auto& row : kRows) {
@@ -302,18 +346,7 @@ void write_cr_sector(const Dataset& d, const Segmentation& s, const Projection& 
                     for (std::size_t k = 0; k < kNaceSectors; ++k)
                         if (row.sectors & (1U << k)) a.add(cell(slot, b, static_cast<NaceSector>(k)));
                 }
-                const std::string label = csv(row.label);
-                f << row.num << ',' << row.pivot << ',' << geos[g] << ',' << scen_name[slot] << ','
-                  << (ref_year + year_off[slot]) << ",Exposures in scope of CSV_CR_SECTOR," << label << ',' << label;
-                for (const auto& c : kColumns) {
-                    const Value v = c.get(a, slot == 0);
-                    f << ',';
-                    if (!v) continue;
-                    if (c.percent) std::snprintf(buf, sizeof buf, "%.7f", *v * 100.0);
-                    else std::snprintf(buf, sizeof buf, "%.8f", *v / 1e6);
-                    f << buf;
-                }
-                f << '\n';
+                emit(row, geos[g], scen_name[slot], ref_year + year_off[slot], a, slot == 0, nullptr);
             }
         }
     }

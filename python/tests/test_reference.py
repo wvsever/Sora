@@ -168,7 +168,7 @@ def test_golden_results_are_reproducible(reference_sim, tmp_path):
     ref.run(reference_sim, REPO / "tests" / "scenarios" / "test_eba2025.yaml", tmp_path, REPO)
     golden = REPO / "tests" / "golden" / "20260630"
     for name in ("segments.csv", "parameters.csv", "projection.csv", "collateral.csv", "cr_sector.csv",
-                 "off_balance.csv", "cr_scen_off_bs.csv", "benchmarks.csv", "sector_parameters.csv"):
+                 "off_balance.csv", "cr_scen_off_bs.csv", "benchmarks.csv", "sector_parameters.csv", "prior_year.csv"):
         assert (tmp_path / name).read_text() == (golden / name).read_text(), name
     a, b = json.loads((tmp_path / "summary.json").read_text()), json.loads((golden / "summary.json").read_text())
     a.pop("sim_mapping_release"), b.pop("sim_mapping_release")
@@ -554,10 +554,10 @@ def test_golden_sector_satellites():
     cols = [ref.CR_SECTOR_COLUMNS[i][0] for i in (0, 1)]
     for r in csv.DictReader(open(golden / "cr_sector.csv")):
         v = [float(r[c]) for c in cols]
-        exposure = float(r["Total exposure (total Exp)"])
         if r["Scenario"] == "Actual":
             assert v == [0.0, 0.0]
             continue
+        exposure = float(r["Total exposure (total Exp)"])
         if r["RowNum"] != "23" and exposure > 0:
             assert v[0] in (0.0, 100.0) and v[1] in (0.0, 100.0)
         if r["RowNum"] == "23" and r["Geographical breakdown"] == "Total":
@@ -568,3 +568,103 @@ def test_golden_sector_satellites():
             assert v == [100.0, 0.0]                      # E: PD/TR only
     uses = {(r["sector"], r["pd_tr"], r["lgd_lr"]) for r in csv.DictReader(open(golden / "sector_parameters.csv"))}
     assert ("D", "portfolio", "sectoral") in uses and ("E", "sectoral", "portfolio") in uses
+
+
+# ----------------------------------------------------------------------------------------- prior-year Actual rows
+
+def test_prior_year_end_rule():
+    """31 December of the year before the reference date's year (EBA 2027: t0 end-2026, history end-2025), or the
+    scenario key prior_year_end: a month end in an earlier calendar year (YAML dates are accepted)."""
+    import datetime
+    assert ref.prior_year_end({}, "2026-06-30") == "2025-12-31"
+    assert ref.prior_year_end({}, "2026-12-31") == "2025-12-31"
+    assert ref.prior_year_end({"prior_year_end": "2025-06-30"}, "2026-06-30") == "2025-06-30"
+    assert ref.prior_year_end({"prior_year_end": datetime.date(2024, 2, 29)}, "2025-03-31") == "2024-02-29"
+    for bad in ("2025-06-29", "2026-03-31", "2025-13-31", "31.12.2025", "2023-02-29"):
+        with pytest.raises(ValueError):
+            ref.prior_year_end({"prior_year_end": bad}, "2026-06-30")
+
+
+def test_prior_year_cells():
+    """Prior-year rows report stocks only (MN 2027 draft Table 2); an exposure without an amount blanks the exposure
+    cells and coverage ratios of its rows, never estimated; provisions stay; parameters and flows are blank."""
+    columns = [c[0] for c in ref.CR_SECTOR_COLUMNS]
+    p = ref.new_prior()
+    ref.add_prior(p, ("stage1", 1000.0, 10.0, True))
+    ref.add_prior(p, ("stage3", 200.0, 100.0, True))
+    complete = dict(p)
+    ref.add_prior(p, ("stage2", None, 5.0, False))
+    assert ref.prior_complete(p, True) == (False, True) and ref.prior_complete(complete, True) == (True, True)
+    v = dict(zip(columns, ref.template_values(ref.CR_SECTOR_COLUMNS, ref.prior_agg(p), True, ref.prior_complete(p, True))))
+    assert v["Total exposure (total Exp)"] == "" and v["of which: stage 1 (Exp S1)"] == ""
+    assert v["Coverage ratio: non-performing exposure"] == ""
+    assert v["Stock of provisions (Prov Stock)"] == f"{115 / 1e6:.8f}"
+    assert v["PD 12M S1 (TR1-3)"] == "" and v["Stage 2 flow (S1-S2 flow)"] == "" and v["LGD S3"] == ""
+    assert v[columns[0]] == "0.0000000"
+    v = dict(zip(columns, ref.template_values(ref.CR_SECTOR_COLUMNS, ref.prior_agg(complete), True, (True, True))))
+    assert v["Total exposure (total Exp)"] == f"{1200 / 1e6:.8f}"
+    assert v["of which: existing Non-performing exposure (Old Exp S3)"] == f"{200 / 1e6:.8f}"
+    assert v["of which: cumulative new non-performing exposure (Cumul New Exp S3)"] == f"{0:.8f}"
+    assert v["Coverage ratio: non-performing exposure"] == "50.0000000"
+    v = ref.template_values(ref.CR_SECTOR_COLUMNS, ref.prior_agg(complete), True, ref.prior_complete(complete, False))
+    assert all(x in ("", "0.0000000") for x in v)           # no history at the date: nothing but the share columns
+
+
+def test_prior_year_history_at_t0_reproduces_starting_point(reference_sim):
+    """Applied at the reference month end, the prior-year computation (stage history, FX, allowance split) gives the
+    t0 stocks of segments.csv for the portfolios whose history has every amount at that date (house purchase,
+    consumption, CRE loans), to the cent."""
+    import yaml
+    cfg = yaml.safe_load((REPO / "tests" / "scenarios" / "test_eba2025.yaml").read_text())
+    manifest = json.loads((reference_sim / "sim_manifest.json").read_text())
+    con = ref.connect(reference_sim)
+    exposures = ref.load_exposures(con, cfg, manifest)
+    prior, stats = ref.prior_year_stocks(con, exposures, {**cfg, "prior_year_end": "2026-06-30"},
+                                         {**manifest, "reference_date": "2027-06-30"})
+    assert stats["available"] and stats["amount_principal"] == 0 and stats["missing_fx"] == 0
+    agg = {}
+    for r in exposures:
+        if r["exposure_id"] in prior:
+            ref.add_prior(agg.setdefault(r["segment"], ref.new_prior()), prior[r["exposure_id"]])
+    golden = {r["segment"]: r for r in csv.DictReader(open(REPO / "tests" / "golden" / "20260630" / "segments.csv"))}
+    checked = 0
+    for s, a in agg.items():
+        if s.split("|")[1] not in ("HH_HOUSE", "HH_CONS", "NFC_SME_CRE", "NFC_LARGE_CRE"):
+            continue
+        assert ref.prior_complete(a, True) == (True, True), s
+        for st, k in zip(ref.PRIOR_STAGES, ("s1", "s2", "s3", "poci")):
+            assert abs(a[f"exp_{st}"] - float(golden[s][f"exp_{k}"])) < 0.01, (s, st)
+            assert abs(a[f"prov_{st}"] - float(golden[s][f"prov_{k}"])) < 0.01, (s, st)
+        checked += 1
+    assert checked == 44
+
+
+def test_golden_prior_year():
+    """Prior-year Actual rows of the golden results (31 Dec 2025): counts add up, exposure cells are blank exactly
+    where an exposure has no history amount (debt securities, finance leases, drawn parts of commitments), and the
+    CR_SECTOR prior-year rows are the NFC segments of prior_year.csv."""
+    golden = REPO / "tests" / "golden" / "20260630"
+    p = json.loads((golden / "summary.json").read_text())["prior_year"]
+    assert (p["date"], p["year"], p["available"]) == ("2025-12-31", 2025, True)
+    assert p["exposures"] == p["amount_gca"] + p["amount_principal"] + p["missing_amount"]
+    assert p["history_rows"] == p["exposures"] + p["out_of_scope"] + p["not_in_sim_exposure"]
+    rows = list(csv.DictReader(open(golden / "prior_year.csv")))
+    assert sum(int(r["contracts"]) for r in rows) == p["exposures"]
+    for r in rows:
+        assert (r["exp_s1"] == "") == (int(r["missing_amount"]) > 0), r["segment"]
+        assert r["prov_s1"] != ""
+        if r["segment"].startswith(("DEBT_SEC|CI", "DEBT_SEC|GG", "DEBT_SEC|OFC")):
+            assert r["exp_s1"] == ""
+        if r["segment"].split("|")[1] in ("HH_HOUSE", "HH_CONS", "NFC_SME_CRE", "NFC_LARGE_CRE"):
+            assert r["exp_s1"] != ""
+    for k in ("s1", "s2", "s3", "poci"):
+        assert abs(sum(float(r[f"prov_{k}"]) for r in rows) - p["stocks"][f"prov_{k}"]) < 0.05
+        assert p["stocks"][f"exp_{k}"] is None
+    nfc = [r for r in rows if "|NFC" in r["segment"]]
+    sector = {(r["RowNum"], r["Geographical breakdown"]): r for r in csv.DictReader(open(golden / "cr_sector.csv"))
+              if r["Scenario"] == "Actual" and r["Year"] == "2025"}
+    assert len(sector) == 23 * len({g for _, g in sector})
+    total = sector[("23", "Total")]
+    assert abs(float(total["Stock of provisions (Prov Stock)"]) * 1e6 -
+               sum(float(r[f"prov_{k}"]) for r in nfc for k in ("s1", "s2", "s3", "poci"))) < 1
+    assert total["Total exposure (total Exp)"] == "" and total["PD 12M S1 (TR1-3)"] == ""

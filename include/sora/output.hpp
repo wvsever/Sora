@@ -5,6 +5,7 @@
 
 #include "sora/credit_parameters.hpp"
 #include "sora/off_balance.hpp"
+#include "sora/prior_year.hpp"
 #include "sora/projection.hpp"
 #include "sora/rea.hpp"
 #include "sora/validation.hpp"
@@ -24,6 +25,7 @@ struct RunOutput {
     // Credit parameters from the calculator (--calculator-parameters): exposure rows in parameters.csv,
     // calculator_parameters.csv, summary "calculator_parameters"
     const CreditParameterResult* calculator_parameters = nullptr;
+    const PriorYear* prior_year = nullptr;   // prior-year Actual rows: prior_year.csv, CR_SCEN/CR_SECTOR, summary "prior_year"
 };
 
 void write_outputs(const RunOutput& run, const std::filesystem::path& dir);
