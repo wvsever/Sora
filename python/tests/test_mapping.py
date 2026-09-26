@@ -32,12 +32,16 @@ def test_reference_mapping_reconciles_with_source(reference_sim, testdata):
     assert _sum(reference_sim, "sim_exposure", "loss_allowance", off_types) == src_prov
     counts = {r[0]: r[1] for r in duckdb.sql(
         f"SELECT exposure_type, count(*) FROM read_parquet('{reference_sim}/sim_exposure/**/*.parquet') GROUP BY 1").fetchall()}
-    # Every source contract reaches the SIM (compared with the source row counts, not a pinned number).
-    def src_rows(table):
+    # Every source contract reaches the SIM (compared with the source row counts, not a pinned number),
+    # except expired commitments and matured finance leases, which carry no stage (derecognised, DS-040/041).
+    def src_rows(table, where="true"):
         return duckdb.sql(f"""SELECT count(*) FROM read_csv('{testdata}/accounting/{table}/**/*.csv',
-                              all_varchar=true, union_by_name=true, hive_partitioning=false)""").fetchone()[0]
+                              all_varchar=true, union_by_name=true, hive_partitioning=false) WHERE {where}""").fetchone()[0]
     assert counts["loan"] == src_rows("contract_loan")
-    assert counts["loan_commitment"] + counts["financial_guarantee"] + counts["other_commitment"] ==         src_rows("contract_commitment")
+    assert counts["loan_commitment"] + counts["financial_guarantee"] + counts["other_commitment"] == \
+        src_rows("contract_commitment", "declared_stage IS NOT NULL OR fair_value_option_elected = 'true'")
+    assert counts["finance_lease"] == \
+        src_rows("contract_lease", "role = 'lessor' AND is_finance_lease = 'true' AND declared_stage IS NOT NULL")
 
 
 def test_manifest_written(reference_sim):

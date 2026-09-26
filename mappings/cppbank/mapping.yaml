@@ -23,12 +23,13 @@ sources:
     contract_commitment:
     contract_lease:
     contract_security_position:
-    contract_arrears:
+    contract_arrears_position:
     collateral:
     collateral_allocation:
     guarantee_received:
     impairment_allowance:
     contract_credit_event:
+    contract_default_cure_event:
     contract_event:
     contract_recovery_cashflow:
 

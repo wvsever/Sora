@@ -1,9 +1,9 @@
 {
   "reference_date": "2026-06-30",
-  "sim_mapping_release": "cppbank@d26098e5e538",
+  "sim_mapping_release": "cppbank@f565600b8f4d",
   "scenario": "test_eba2025",
   "segments": 151,
-  "exposures": 46447,
+  "exposures": 46417,
   "starting_point": {
     "exp_s1": 14532515251.74,
     "exp_s2": 571217033.74,
