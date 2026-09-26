@@ -42,6 +42,58 @@ A separate process (`sora-mcp`), shipped with Sora and run on the customer's pre
 | `explain_result` | Break down a result (segment, year) into drivers: exposure, TR, LGD, collateral |
 | `diff_runs` | Compare two runs or two mapping versions |
 
+### As built (phase 5b)
+
+`python/sora_tools/mcp_server.py`, console script `sora-mcp` (stdio), optional extra `pip install -e "python[mcp]"`
+(official MCP Python SDK, 1.x `FastMCP` or 2.x `MCPServer`). The tools are plain Python (`SoraTools`) and are tested
+without the SDK; `sora-mcp call <tool> '<json>'` calls one without MCP. Usage and options: `python/README.md`.
+
+| Tool | Built on |
+|---|---|
+| `describe` (table, column, code list, `format="llm"`, `table="outputs"`) | `schema.py`, `docs.llm` |
+| `profile_source` | `profile.py` (no file written; `tables` filter; sample rows only on opt-in) |
+| `test_mapping` | `mapping.run_mapping` into `<workdir>/sim/…`, then `validate.validate` |
+| `validate_sim` | `validate.validate` |
+| `reconcile` | `reconcile.py`: controls in `<mapping>/reconciliation.yaml` (a SIM query and a source query per control, keyed totals compared within a tolerance). `mappings/cppbank/reconciliation.yaml` checks loans per entity, the loss allowance against the allowance sub-ledger (finds the EUR 15,000 commitment difference of INV-RC-001) and counterparties |
+| `run_scenario` | `sora run` via `SORA_ENGINE`, output in `<workdir>/runs/…`, returns totals and diagnostics |
+| `explain_result` | `explain.py` (also `sora-tools explain`) |
+| `diff_runs` | `diff_runs.py` (also `sora-tools diff-runs`) |
+
+**Security design.** Reads only under configured roots (`--root` / `SORA_MCP_ROOTS`; resolved paths, symlinks
+included; paths referenced by the scenario YAML and the mapping's `types_file` too). Writes only into
+server-named directories of the work directory. Metadata only by default: raw values need `include_values` in the
+call **and** the customer setting `--allow-values`, capped at `--max-rows`. The engine runs with an argument list,
+no shell, a timeout and a binary the agent cannot choose. Every call is audited (`audit.jsonl`: time, user, tool,
+arguments, input fingerprint, status). Results carry `status` `ok` / `error` / `denied` / `requires_approval`.
+
+**Production mappings and approval.** A mapping is production when `mapping.yaml` has `status: production`
+(`draft` by default) or its path matches a production pattern (`--production-pattern`, default `*/production/*`).
+`test_mapping` on it writes nothing and returns `requires_approval` with a request id: a hash of the action, the
+mapping release (hash of all mapping files) and the export. A person approves with
+`sora-mcp approve <id> --by <name>` (`sora-mcp pending` lists requests); the record is kept in an approvals directory
+outside the work directory. Any change to the mapping files is a new release and needs a new approval, so an agent
+cannot edit an approved production mapping and run it.
+
+**`explain_result`.** Per segment: starting stocks, stage shares and coverage; parameters per scenario and year with
+their `source` and meaning, the calibration level of each parameter group (`calibration_levels`: segment, portfolio,
+instrument, all) and the change against the starting point; the ECB benchmark rule per group (`none`, `sovereign`,
+`coverage`, `no_model`, key or `unavailable`); per scenario and year the stage flows, the provision components with
+their EBA box (Box 5 S1-S1, Box 4 S2-S1, Box 6 S1-S2, Box 7 S2-S2, Box 8 cumulative S1/S2-S3, Box 9 old S3, Box 3
+stocks), the stock change by stage, and consistency checks (impairment = change in the stock; stage 3 stock = Boxes
+8 + 9); for NFC segments with sectoral (GVA) satellites the sectors with their own path (`sector_parameters.csv`:
+source per group, GVA key); off-balance items of the segment. Plus a short narrative. Without a segment: totals, top
+segments and the sectoral-model shares.
+
+**`diff_runs`.** Per file, rows matched by key (segment / scenario / year, template row keys for the CR_* files),
+numbers within `max(abs_tol, rel_tol * |value|)` (parameter files: `abs_tol` at most 1e-9); rows only in one run, changed rows, per-column changes and the
+largest difference; `summary.json` and diagnostics changes; impairment totals per scenario and year and the top-N
+movers. Attribution: per segment the stock is `S_t = E_t * c_t`, each stock change is split symmetrically into
+`dE * mean(c)` (exposure) and `dc * mean(E)` (coverage: parameters, stage mix, starting provisions), and the
+impairment change `dS_t - dS_{t-1}` gets the difference, so the parts add up exactly. Drivers list the parameter
+fields of the segment that changed (at t and t+1, with the `source`), moved sectoral satellite paths of the segment,
+and changed starting stocks. With a PD overlay
+(adverse PDs x 1.5, `python/tests/test_mcp_tools.py`) the whole change is coverage and the drivers show `+50.0%`.
+
 ### Safety and governance
 
 - Runs locally. The customer chooses the agent and the LLM provider.
@@ -154,5 +206,5 @@ Also delivered:
 | 0–1 | OpenAPI contract v0.1, stub server (`fixed`, `faults`), contract tests |
 | 1–3 | SIM schema v1, export spec, reference mapping, `sora-tools map` / `sora-tools validate`; `Impairment` internal |
 | 4–5 | REST client (batching, retries, replay cache) and IRB REA projection (done); `/v1/parameters/credit` integration; stub `formula` mode |
-| 5b | `sora-mcp` (describe, profile, test_mapping, validate) |
-| 6–7 | IRB, SA and output floor through the calculator; `explain_result`, `diff_runs`; Parquet bodies |
+| 5b | `sora-mcp` (describe, profile_source, test_mapping, validate_sim, reconcile, run_scenario, explain_result, diff_runs): done |
+| 6–7 | IRB, SA and output floor through the calculator; Parquet bodies |

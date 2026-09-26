@@ -1,6 +1,6 @@
 {
   "reference_date": "2026-06-30",
-  "sim_mapping_release": "cppbank@f565600b8f4d",
+  "sim_mapping_release": "cppbank@708bc6895468",
   "scenario": "test_eba2025",
   "segments": 153,
   "exposures": 52872,

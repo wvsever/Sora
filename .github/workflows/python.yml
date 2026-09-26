@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install sora-tools
-        run: pip install -e "python[test,scenario]"
+        run: pip install -e "python[test,scenario,mcp]"
       - name: Extract reference test data
         run: python tools/extract_testdata.py
       - name: Lint SIM schema
