@@ -21,7 +21,8 @@ def quote_str(value: str) -> str:
 
 
 def sandboxed_connection(read_dirs: list[Path], write_dirs: list[Path] = (),
-                         memory_limit: str = "4GB", threads: int | None = None) -> duckdb.DuckDBPyConnection:
+                         memory_limit: str = "4GB", threads: int | None = None,
+                         progress_bar: bool = True) -> duckdb.DuckDBPyConnection:
     for d in write_dirs:
         Path(d).mkdir(parents=True, exist_ok=True)
     dirs = [str(Path(d).resolve()) for d in [*read_dirs, *write_dirs]]
@@ -29,6 +30,8 @@ def sandboxed_connection(read_dirs: list[Path], write_dirs: list[Path] = (),
     con.execute(f"SET memory_limit = {quote_str(memory_limit)}")
     if threads:
         con.execute(f"SET threads = {int(threads)}")
+    if not progress_bar:   # the progress bar writes to stdout, which is the protocol channel of sora-mcp
+        con.execute("SET enable_progress_bar = false")
     con.execute("SET autoinstall_known_extensions = false")
     con.execute("SET autoload_known_extensions = false")
     con.execute("SET allowed_directories = [" + ", ".join(quote_str(d) for d in dirs) + "]")
