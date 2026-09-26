@@ -36,6 +36,8 @@ build/release/sora run build/sim/20260630 --scenario tests/scenarios/test_eba202
 #      cr_sector.csv (EBA CSV_CR_SECTOR: NFC by NACE section), summary.json, diagnostics.json
 #      with the scenario key off_balance: off_balance.csv (commitments and guarantees given, nominal and post-CCF)
 #      and cr_scen_off_bs.csv (EBA CSV_CR_SCEN_OFF_BS layout)
+#      with the scenario key benchmark_parameters: benchmarks.csv (ECB benchmark rule per segment: model coverage,
+#      10% rule per pivot asset class, sovereigns) and benchmark parameters in parameters.csv (source benchmark)
 #   add --parameters <file> to use customer risk parameters (plans/09_risk_parameters.md)
 
 # IRB REA through a regulatory calculator (here the stub): adds rea.csv and summary.json "rea"
@@ -135,7 +137,7 @@ The primary target is the EBA EU-wide stress test credit-risk methodology: the 2
 | Macro scenario | `docs/` (ESRB/ECB xlsx) | Converted to a normalised CSV by `tools/scenario_import` |
 | Starting-point PD / TR / LGD / LR | Customer model output, or `sora calibrate` | Not present in the dataset itself. For the CPPBank demo it is derived by `baselcalculator` ("Vera") from the same book and converted with `sora-tools vera-params` (`tools/New-SoraDataset.ps1`). See `plans/09_risk_parameters.md`. |
 | Satellite models | Customer | Macro → parameter sensitivities per segment (synthetic in tests) |
-| ECB benchmark parameters | Customer (received from ECB, confidential) | Loaded in Sora's benchmark format (synthetic in tests) |
+| ECB benchmark parameters | Customer (received from ECB, confidential) | Loaded in Sora's benchmark format with the scenario key `benchmark_parameters` and applied by the EBA rule (10% model coverage per pivot asset class, sovereigns mandatory, no adjustment). Synthetic in tests: `tests/params/synthetic_ecb_benchmarks.csv`. See `plans/09_risk_parameters.md`. |
 
 ## Integration
 
@@ -234,11 +236,12 @@ sora/
 ├── scenarios/                # normalised scenario data (sora-tools scenario-import)
 ├── tools/
 │   ├── extract_testdata.py   # extract tests/data/*.7z into build/
+│   ├── synthetic_ecb_benchmarks.py  # generator of the synthetic ECB benchmark file (tests/params)
 │   └── reference/            # independent reference implementation (golden results)
 ├── tests/
 │   ├── data/                 # reference dataset (20260630.7z) + README
 │   ├── golden/               # expected results for the reference dataset
-│   ├── params/               # synthetic stand-ins for customer inputs (satellites, ...)
+│   ├── params/               # synthetic stand-ins for customer inputs (satellites, ECB benchmarks, ...)
 │   └── scenarios/
 ├── benchmarks/
 ├── examples/

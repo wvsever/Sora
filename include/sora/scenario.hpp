@@ -15,6 +15,16 @@
 
 namespace sora {
 
+// ECB credit-risk benchmark rule (benchmark.hpp). Enabled by the scenario key `benchmark_parameters`.
+struct BenchmarkConfig {
+    bool enabled = false;
+    std::filesystem::path file;                 // Sora's benchmark format (plans/09_risk_parameters.md)
+    double coverage_threshold = 0.10;           // model coverage per pivot asset class (MN 2027 para 117)
+    int model_level = 1;                        // coarsest calibration level that counts as a model: 0 segment, 1 portfolio
+    bool sovereign = true;                      // general governments: the country's benchmark is mandatory (para 146)
+    std::vector<std::string> country_fallback;  // benchmark keys after the segment's country (default: country_fallback)
+};
+
 // Off-balance-sheet projection (CR_SCEN_OFF_BS, off_balance.hpp). Enabled by the scenario key `off_balance`;
 // the measurement and intragroup scope are those of `scope`.
 struct OffBalanceConfig {
@@ -38,6 +48,7 @@ struct ScenarioConfig {
     bool no_cure_from_s3 = true;
     double blend_adverse = 5.0 / 6.0, blend_baseline = 1.0 / 6.0;
     OffBalanceConfig off_balance;
+    BenchmarkConfig benchmark;
 };
 
 // Relative paths in the YAML resolve against `base_dir` (the repository or working directory).

@@ -257,7 +257,8 @@ OffBalanceResult project_off_balance(Duck& duck, const Dataset& d, const Segment
         for (const auto& item : *members[gi]) {
             const auto& e = d.exposures[item.exposure];
             if (external && external->has_exposure(item.exposure)) {
-                const auto own = exposure_param_paths(s, seg, p.params[g.segment][0][0], sat->second, macro, cfg, *external, item.exposure);
+                const auto own = exposure_param_paths(s, seg, p.params[g.segment][0][0], sat->second, macro, cfg, *external, item.exposure,
+                                                      p.benchmark_of(g.segment));
                 for (std::size_t sc = 0; sc < 2; ++sc)
                     for (std::size_t t = 0; t <= 3; ++t) {
                         if (sc == 1 && t == 0) continue;

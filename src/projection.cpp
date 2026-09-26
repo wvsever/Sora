@@ -139,7 +139,8 @@ void project_exposure(Stage stage, double gca, double allowance, const std::arra
 
 std::array<ParamPath, 2> exposure_param_paths(const Segmentation& s, const Segment& seg, const Params& start,
                                               const Satellite& sat, const MacroTable& macro, const ScenarioConfig& cfg,
-                                              const ExternalParameters& external, std::size_t exposure) {
+                                              const ExternalParameters& external, std::size_t exposure,
+                                              const SegmentBenchmark* benchmark) {
     Params p0 = start;
     external.apply_exposure(exposure, {0, 0}, p0);
     std::array<ParamPath, 2> own;
@@ -152,13 +153,20 @@ std::array<ParamPath, 2> exposure_param_paths(const Segmentation& s, const Segme
         }
         own[sc][4] = own[sc][3];
     }
+    // ECB benchmarks apply at portfolio level, to every exposure of the segment (MN 2027 para 115).
+    if (benchmark) apply_benchmark(*benchmark, own);
     return own;
 }
 
 Projection project(const Dataset& d, const Segmentation& s, const Calibration& cal,
                    const std::map<std::string, Satellite>& satellites, const MacroTable& macro,
-                   const ScenarioConfig& cfg, const ExternalParameters* external, unsigned workers) {
+                   const ScenarioConfig& cfg, const ExternalParameters* external, unsigned workers,
+                   const BenchmarkTable* benchmarks) {
     Projection out;
+    // ECB benchmark rule: decided once, serially, before any parameter path (benchmark.hpp).
+    if (cfg.benchmark.enabled && benchmarks)
+        out.benchmark = decide_benchmarks(d, s, cal, satellites, *benchmarks, cfg.benchmark, external);
+    static const Satellite kNoSatellite{};   // flat path for fully benchmarked portfolios without a satellite model
     const auto nseg = s.segments.size();
     out.results.resize(nseg);
     out.params.resize(nseg);
@@ -174,8 +182,10 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
     for (std::size_t i = 0; i < nseg; ++i) {
         const auto& seg = s.segments[i];
         const auto it = satellites.find(seg.portfolio);
-        if (it == satellites.end()) throw Error("no satellite coefficients for portfolio " + seg.portfolio);
-        sat[i] = &it->second;
+        const SegmentBenchmark* bm = out.benchmark_of(i);
+        if (it == satellites.end() && !(bm && bm->applied[0] && bm->applied[1]))
+            throw Error("no satellite coefficients for portfolio " + seg.portfolio);
+        sat[i] = it == satellites.end() ? &kNoSatellite : &it->second;
         // Starting point: derived calibration, overlaid field-wise by customer parameters.
         start[i] = cal.params[i];
         const std::size_t n = external ? external->apply_segment(s, seg, {0, 0}, start[i]) : 0;
@@ -189,6 +199,14 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
                 out.path_source[i][sc][static_cast<std::size_t>(t - 1)] = applied == 0 ? "derived" : applied >= kParamCount ? "external" : "mixed";
             }
             path[4] = path[3];
+        }
+        if (bm) {   // ECB benchmarks replace the projected groups, after satellite and customer values
+            apply_benchmark(*bm, out.params[i]);
+            for (auto& sc : out.path_source[i])
+                for (auto& src : sc) src = bm->applied[0] && bm->applied[1] ? "benchmark" : "mixed";
+        }
+        for (std::size_t sc = 0; sc < 2; ++sc) {
+            const auto& path = out.params[i][sc];
             for (int t = 1; t <= 3; ++t) check(path[static_cast<std::size_t>(t)], seg.key + " " + kScenarios[sc] + "/" + std::to_string(t));
         }
     }
@@ -240,7 +258,8 @@ Projection project(const Dataset& d, const Segmentation& s, const Calibration& c
                 auto check_own = [&](const Params& p, const std::string& what) {
                     for (const auto& msg : check_parameters(p)) log.errors.emplace_back(i, what + ": " + msg);
                 };
-                const auto own = exposure_param_paths(s, s.segments[seg], start[seg], *sat[seg], macro, cfg, *external, i);
+                const auto own = exposure_param_paths(s, s.segments[seg], start[seg], *sat[seg], macro, cfg, *external, i,
+                                                      out.benchmark_of(seg));
                 for (std::size_t sc = 0; sc < 2; ++sc)
                     for (int t = 1; t <= 3; ++t)
                         check_own(own[sc][static_cast<std::size_t>(t)], d.exposure_ids.at(e.id) + " " + kScenarios[sc] + "/" + std::to_string(t));

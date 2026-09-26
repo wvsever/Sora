@@ -85,6 +85,14 @@ std::size_t ExternalParameters::apply_exposure(std::size_t exposure, ParamKey k,
     return n;
 }
 
+int ExternalParameters::segment_level(const Segmentation& s, const Segment& seg, ParamKey k, std::size_t param) const {
+    for (std::size_t lv = 0; lv < seg.levels.size(); ++lv) {   // specific -> general
+        const auto f = by_level_.find(s.level_keys.view(seg.levels[lv]));
+        if (f != by_level_.end() && f->second[slot(k)].v[param]) return static_cast<int>(lv);
+    }
+    return -1;
+}
+
 std::vector<std::string> ExternalParameters::unmatched_segment_keys(const Segmentation& s) const {
     std::vector<std::string> out;
     for (const auto& [k, _] : by_level_)

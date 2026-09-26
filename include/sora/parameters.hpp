@@ -55,6 +55,9 @@ public:
     // Field-wise overlay for one exposure (by exposure index). Returns the number of fields set.
     std::size_t apply_exposure(std::size_t exposure, ParamKey k, Params& p) const;
     bool has_exposure(std::size_t exposure) const { return by_exposure_.count(exposure) != 0; }
+    // Most specific hierarchy level of the segment (0 = segment, 1 = portfolio, 2 = instrument, 3 = all) whose row
+    // supplies field `param` for `k`, or -1 if none does (ECB benchmark rule: customer projections as a model).
+    int segment_level(const Segmentation& s, const Segment& seg, ParamKey k, std::size_t param) const;
 
     // Segment-level keys that match no hierarchy key of the segmentation.
     std::vector<std::string> unmatched_segment_keys(const Segmentation& s) const;

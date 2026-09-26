@@ -40,6 +40,13 @@ Method (see plans/03_scenario_engine.md and plans/09_risk_parameters.md):
    scenario's regulatory fallback (CRR Art. 111(2)). Post-CCF amount = CCF x nominal is projected with Boxes 3-9
    exactly as on-balance exposures (starting provision = undrawn share of the facility's allowance, old S3 floor
    per item); the nominal amount follows the same stage flows.
+6. ECB benchmarks (scenario key `benchmark_parameters`, EBA 2027 draft MN paras 115-117 and 146). Model coverage
+   per pivot asset class (instrument|portfolio) and parameter group (PD/TR, LGD/LR) = share of t0 exposure whose
+   group starting point was calibrated within the pivot class (segment or portfolio level) and whose portfolio has
+   a satellite model. General governments take the benchmark of their own country (mandatory); a pivot class below
+   the coverage threshold (10%) takes the benchmark for all its segments; above it, only its segments without a
+   model do. The benchmark (segment country, then the country fallback) replaces the projected parameters of the
+   group for years 1..3 without adjustment; the starting point stays the institution's own.
 """
 
 from __future__ import annotations
@@ -666,6 +673,164 @@ def write_cr_scen_off_bs(path: Path, rows: list[dict], ref_year: int):
             emit(num + 1, "Sum", "Total", "", "Total", [(t, c) for t in OFF_BALANCE_TYPES for c, _ in OFF_BALANCE_SECTORS])
 
 
+# ----------------------------------------------------------------------------------------- ECB benchmarks
+
+# Projected parameters by benchmark group (EBA MN 2027 draft para 117 applies the 10% rule to "the PD/TR and LR/LGD
+# parameters, respectively"). TR3-1/TR3-2 are starting-point only and never benchmarked.
+BENCHMARK_GROUPS = {"pd_tr": ("pd12m_s1", "pd12m_s2", "tr1_2", "tr2_1"), "lgd_lr": ("lgd_s1", "lgd_s2", "lgd_s3", "lrlt_s2")}
+# Calibration parts (calibration_levels) behind each group's starting point.
+BENCHMARK_PARTS = {"pd_tr": ("stage1", "stage2"), "lgd_lr": ("lgd", "lrlt")}
+MODEL_LEVELS = {"segment": 0, "portfolio": 1}
+
+
+def benchmark_config(cfg) -> dict | None:
+    """The scenario's `benchmark_parameters` block with defaults, or None if absent."""
+    b = cfg.get("benchmark_parameters")
+    if not b:
+        return None
+    out = {"file": b["file"], "coverage_threshold": float(b.get("coverage_threshold", 0.10)),
+           "model_level": b.get("model_level", "portfolio"), "sovereign": bool(b.get("sovereign", True)),
+           "country_fallback": list(b.get("country_fallback", cfg.get("country_fallback", [])))}
+    if out["model_level"] not in MODEL_LEVELS:
+        raise ValueError("benchmark_parameters.model_level must be segment or portfolio")
+    if not 0.0 <= out["coverage_threshold"] <= 1.0:
+        raise ValueError("benchmark_parameters.coverage_threshold outside [0, 1]")
+    return out
+
+
+def load_benchmarks(path: Path, cfg) -> dict:
+    """{(instrument, portfolio, country): {group: {(scenario, t): {parameter: value}}}} from Sora's benchmark
+    format (long CSV, `#` comment lines). Years are scenario years, mapped to projection years by `year_map`.
+    A group must be complete (all its parameters for baseline and adverse years 1..3) or absent."""
+    year_to_t = {y: t for t, y in cfg["year_map"].items()}
+    group_of = {p: g for g, ps in BENCHMARK_GROUPS.items() for p in ps}
+    raw: dict = {}
+    with open(path) as f:
+        for r in csv.DictReader(line for line in f if not line.startswith("#")):
+            key = (r["instrument"], r["portfolio"], r["country"])
+            if r["instrument"] not in ("LOANS", "DEBT_SEC"):
+                raise ValueError(f"benchmarks: unknown instrument {r['instrument']}")
+            if r["parameter"] not in group_of:
+                raise ValueError(f"benchmarks: unknown parameter {r['parameter']}")
+            if r["scenario"] not in ("baseline", "adverse"):
+                raise ValueError(f"benchmarks: unknown scenario {r['scenario']}")
+            y = int(r["year"])
+            if y not in year_to_t:                                  # outside the horizon of this scenario
+                continue
+            v = float(r["value"])
+            if not 0.0 <= v <= 1.0:
+                raise ValueError(f"benchmarks: {r['parameter']} outside [0, 1] for {key}")
+            cell = raw.setdefault(key, {}).setdefault(group_of[r["parameter"]], {}).setdefault((r["scenario"], year_to_t[y]), {})
+            if r["parameter"] in cell:
+                raise ValueError(f"benchmarks: duplicate {r['parameter']} for {key} {r['scenario']} {y}")
+            cell[r["parameter"]] = v
+    for key, groups in raw.items():
+        for g, slots in groups.items():
+            if len(slots) != 6 or any(len(v) != len(BENCHMARK_GROUPS[g]) for v in slots.values()):
+                raise ValueError(f"benchmarks: incomplete {g} parameters for {'|'.join(key)}")
+            for (scen, t), v in slots.items():
+                if g == "pd_tr" and (v["pd12m_s1"] + v["tr1_2"] > 1 + 1e-12 or v["pd12m_s2"] + v["tr2_1"] > 1 + 1e-12):
+                    raise ValueError(f"benchmarks: stage outflows above 1 for {'|'.join(key)} {scen} {t}")
+    return raw
+
+
+def benchmark_decisions(segments, sources, seg_stock, sat, bench, bcfg) -> tuple[dict, dict]:
+    """The benchmark application rule (EBA MN 2027 draft paras 115-117 and 146; 2025 MN paras 124-126 and 155).
+
+    Model coverage: a segment's group is covered by a satellite model if its portfolio has satellite coefficients
+    and the group's starting point was calibrated within the pivot asset class (calibration level no coarser than
+    `model_level`: segment, or portfolio = instrument|portfolio|ALL). Per pivot asset class (instrument|portfolio)
+    and group, coverage = covered t0 exposure / t0 exposure (gross carrying amount).
+      * general governments (`sovereign`): the benchmark of the segment's own country is mandatory (para 146);
+      * coverage < threshold: benchmark for every segment of the pivot asset class (para 117);
+      * otherwise: benchmark for the segments without a model (para 115); the pivot asset class then mixes model
+        and benchmark parameters, exposure-weighted (para 117's weighted average).
+    The benchmark key is the segment's country, then `country_fallback`; if none has the group, the model
+    parameters are kept ("unavailable"). Returns ({segment: {group: decision}}, {pivot: coverage})."""
+    max_level = MODEL_LEVELS[bcfg["model_level"]]
+
+    def exposure(s):
+        return sum(seg_stock[s][st][0] for st in (*STAGES, "poci"))
+
+    def covered(s, g):
+        return s.split("|")[1] in sat and all(
+            sources[s][part] in parents(s)[:max_level + 1] for part in BENCHMARK_PARTS[g])
+
+    pivots: dict = {}
+    for s in segments:
+        pv = pivots.setdefault("|".join(s.split("|")[:2]), {"exposure": 0.0, "model": dict.fromkeys(BENCHMARK_GROUPS, 0.0),
+                                                            "benchmark": dict.fromkeys(BENCHMARK_GROUPS, 0.0)})
+        e = exposure(s)
+        pv["exposure"] += e
+        for g in BENCHMARK_GROUPS:
+            pv["model"][g] += e if covered(s, g) else 0.0
+    decisions = {}
+    for s in segments:
+        instrument, portfolio, bucket = s.split("|")
+        pv = pivots[f"{instrument}|{portfolio}"]
+        decisions[s] = {}
+        for g in BENCHMARK_GROUPS:
+            coverage = pv["model"][g] / pv["exposure"] if pv["exposure"] > 0 else 0.0
+            chain = ([bucket] if bucket != "OTHER" else []) + bcfg["country_fallback"]
+            has = lambda c: g in bench.get((instrument, portfolio, c), {})  # noqa: E731
+            if bcfg["sovereign"] and portfolio == "GG" and bucket != "OTHER" and has(bucket):
+                rule, chain = "sovereign", [bucket]
+            elif coverage < bcfg["coverage_threshold"]:
+                rule = "coverage"
+            elif not covered(s, g):
+                rule = "no_model"
+            else:
+                rule = "none"
+            key = next((c for c in chain if has(c)), None) if rule != "none" else None
+            decisions[s][g] = {"model": covered(s, g), "rule": rule,
+                               "benchmark": key if key else ("unavailable" if rule != "none" else "")}
+            if key:
+                pv["benchmark"][g] += exposure(s)
+    return decisions, pivots
+
+
+def apply_benchmark(P: dict, decision: dict, bench: dict, segment: str, scenario: str) -> None:
+    """Replace the projected parameters (years 1..3, year 4 = flat continuation) of the benchmarked groups, without
+    any adjustment (MN para 115)."""
+    instrument, portfolio, _ = segment.split("|")
+    for g, d in decision.items():
+        if d["benchmark"] in ("", "unavailable"):
+            continue
+        values = bench[(instrument, portfolio, d["benchmark"])][g]
+        for t in (1, 2, 3):
+            P[t].update(values[(scenario, t)])
+    P[4] = dict(P[3])
+
+
+def write_benchmarks(path: Path, segments, seg_stock, decisions):
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(["segment", "exposure", "pd_tr_model", "lgd_lr_model", "pd_tr_rule", "lgd_lr_rule",
+                    "pd_tr_benchmark", "lgd_lr_benchmark"])
+        for s in segments:
+            d = decisions[s]
+            w.writerow([s, f"{sum(seg_stock[s][st][0] for st in (*STAGES, 'poci')):.2f}",
+                        int(d["pd_tr"]["model"]), int(d["lgd_lr"]["model"]), d["pd_tr"]["rule"], d["lgd_lr"]["rule"],
+                        d["pd_tr"]["benchmark"], d["lgd_lr"]["benchmark"]])
+
+
+def benchmark_summary(bcfg, decisions, pivots) -> dict:
+    count = lambda g, pred: sum(1 for d in decisions.values() if pred(d[g]))  # noqa: E731
+    applied = lambda d: d["benchmark"] not in ("", "unavailable")          # noqa: E731
+    return {
+        "file": Path(bcfg["file"]).name, "coverage_threshold": bcfg["coverage_threshold"],
+        "model_level": bcfg["model_level"], "sovereign": bcfg["sovereign"],
+        "segments_pd_tr": count("pd_tr", applied), "segments_lgd_lr": count("lgd_lr", applied),
+        "segments_unavailable": sum(1 for d in decisions.values() if any(x["benchmark"] == "unavailable" for x in d.values())),
+        "pivots": {p: {"exposure": round(v["exposure"], 2),
+                       **{f"{g}_model_coverage": round(v["model"][g] / v["exposure"], 9) if v["exposure"] > 0 else 0.0
+                          for g in BENCHMARK_GROUPS},
+                       **{f"{g}_benchmark_share": round(v["benchmark"][g] / v["exposure"], 9) if v["exposure"] > 0 else 0.0
+                          for g in BENCHMARK_GROUPS}}
+                   for p, v in sorted(pivots.items())},
+    }
+
+
 # ----------------------------------------------------------------------------------------- CR_SECTOR
 
 # NACE Rev. 2.1 sections by division (01..99). Division numbers mean the same sections in NACE Rev. 2, except for
@@ -934,6 +1099,13 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
             w.writerow([s, i, p, c, macro_key(macro, c, cfg), counts_by_seg[s],
                         *(fmt(st[k][0]) for k in (*STAGES, "poci")), *(fmt(st[k][1]) for k in (*STAGES, "poci"))])
 
+    # ECB benchmarks (optional scenario key benchmark_parameters): which segments take benchmark parameters.
+    bcfg = benchmark_config(cfg)
+    decisions = pivots = None
+    if bcfg:
+        bench = load_benchmarks(repo / bcfg["file"], cfg)
+        decisions, pivots = benchmark_decisions(segments, sources, seg_stock, sat, bench, bcfg)
+
     # parameters.csv: starting point and projections (the sim_risk_parameter layout)
     projected = {}
     with open(out / "parameters.csv", "w", newline="") as f:
@@ -943,11 +1115,22 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
             lv = ";".join(f"{k}={v}" for k, v in sorted(sources[s].items()))
             w.writerow(["segment", s, "actual", 0, *(fmtp(params0[s][k]) for k in PARAMS), "derived", lv])
             projected[s] = {}
+            applied = [g for g, d in (decisions or {}).get(s, {}).items() if d["benchmark"] not in ("", "unavailable")]
+            source = "derived" if not applied else "benchmark" if len(applied) == len(BENCHMARK_GROUPS) else "mixed"
+            portfolio = s.split("|")[1]
+            if portfolio not in sat and source != "benchmark":
+                raise KeyError(f"no satellite coefficients for portfolio {portfolio}")
+            seg_sat = sat if portfolio in sat else {portfolio: dict.fromkeys(
+                ("beta_gdp", "beta_unemployment", "beta_property", "lgd_property_sensitivity"), 0.0)}
             for scen in ("baseline", "adverse"):
-                P = project_parameters(s, params0[s], sat, macro, scen, cfg)
+                P = project_parameters(s, params0[s], seg_sat, macro, scen, cfg)
+                if applied:
+                    apply_benchmark(P, decisions[s], bench, s, scen)
                 projected[s][scen] = P
                 for t in (1, 2, 3):
-                    w.writerow(["segment", s, scen, t, *(fmtp(P[t][k]) for k in PARAMS), "derived", ""])
+                    w.writerow(["segment", s, scen, t, *(fmtp(P[t][k]) for k in PARAMS), source, ""])
+    if bcfg:
+        write_benchmarks(out / "benchmarks.csv", segments, seg_stock, decisions)
 
     # projection.csv
     totals = defaultdict(lambda: defaultdict(float))
@@ -977,6 +1160,9 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
                                             ("prov_s3", "stage3", 1), ("prov_poci", "poci", 1))},
         "totals": {f"{sc}/{y}": {k: round(v, 2) for k, v in d.items()} for (sc, y), d in sorted(totals.items())},
     }
+
+    if bcfg:
+        summary["benchmark"] = benchmark_summary(bcfg, decisions, pivots)
 
     if cfg.get("off_balance"):                     # CR_SCEN_OFF_BS (optional; on-balance results are unaffected)
         ob_rows, stats = project_off_balance(con, sim, cfg, manifest, top, segments, projected)

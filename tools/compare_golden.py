@@ -4,7 +4,9 @@
 Tolerances: money per segment/scenario/year 1 cent or relative 1e-12 (whichever is larger); parameters and
 ratios (LTV) 1e-9. EBA template layouts print amounts in EUR million and parameters and ratios in percent:
 cr_sector.csv uses the same tolerances in those units, plus one unit in the last printed decimal for rounding;
-cr_scen_off_bs.csv (EUR million, 8 decimals) is compared to 2e-8 (2 cents).
+cr_scen_off_bs.csv (EUR million, 8 decimals) is compared to 2e-8 (2 cents). benchmarks.csv (ECB benchmark rule):
+exposure to 1 cent, the model flags, rules and benchmark keys exactly; summary.json "benchmark": counts exactly,
+pivot exposures to 1 cent and coverage shares to 1e-9.
 The reference SIM is produced on demand (extract test data + reference mapping) if --sim is not given.
 """
 
@@ -100,6 +102,8 @@ def main() -> int:
             errors += compare("off_balance.csv", args.golden, out, ["segment", "exposure_type", "scenario", "year"], money=True)
             errors += compare("cr_scen_off_bs.csv", args.golden, out, ["RowNum", "Scenario", "Year"], money=True,
                               abs_tol=2e-8)
+        if (args.golden / "benchmarks.csv").exists():         # ECB benchmark rule (scenario key benchmark_parameters)
+            errors += compare("benchmarks.csv", args.golden, out, ["segment"], money=True)
         gs, es = json.loads((args.golden / "summary.json").read_text()), json.loads((out / "summary.json").read_text())
         for field in ("segments", "exposures"):
             if gs[field] != es[field]:
@@ -109,6 +113,18 @@ def main() -> int:
                 if gs["off_balance"][field] != es.get("off_balance", {}).get(field):
                     errors.append(f"summary off_balance.{field}: engine {es.get('off_balance', {}).get(field)} vs golden "
                                   f"{gs['off_balance'][field]}")
+        if "benchmark" in gs:
+            gb, eb = gs["benchmark"], es.get("benchmark", {})
+            for field in ("segments_pd_tr", "segments_lgd_lr", "segments_unavailable", "model_level", "sovereign"):
+                if gb[field] != eb.get(field):
+                    errors.append(f"summary benchmark.{field}: engine {eb.get(field)} vs golden {gb[field]}")
+            if set(gb["pivots"]) != set(eb.get("pivots", {})):
+                errors.append("summary benchmark.pivots: pivot asset classes differ")
+            for pivot, gv in gb["pivots"].items():
+                for field, v in gv.items():
+                    ev = eb.get("pivots", {}).get(pivot, {}).get(field)
+                    if ev is None or abs(ev - v) > (0.01 if field == "exposure" else 1e-9):
+                        errors.append(f"summary benchmark.pivots.{pivot}.{field}: engine {ev} vs golden {v}")
     for e in errors[:30]:
         print("  MISMATCH", e)
     print(f"{'FAILED' if errors else 'PASSED'}: {len(errors)} mismatches")

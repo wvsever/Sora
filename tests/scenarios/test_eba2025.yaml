@@ -19,6 +19,12 @@ off_balance:                                # CR_SCEN_OFF_BS; measurement and in
     financial_guarantee: 1.0
     other_commitment: 0.5
     unconditionally_cancellable: 0.1        # loan/other commitments cancellable at any time (CRR3, Art. 495d)
+benchmark_parameters:                       # ECB credit-risk benchmarks (EBA MN 2027 draft paras 115-117, 146)
+  file: tests/params/synthetic_ecb_benchmarks.csv   # SYNTHETIC values, not ECB benchmarks
+  coverage_threshold: 0.10                  # satellite model coverage per pivot asset class (the "10% rule")
+  model_level: portfolio                    # coarsest calibration level that counts as a model: segment | portfolio
+  sovereign: true                           # general governments: the country's benchmark is mandatory (para 146)
+  country_fallback: [WR, EU]                # benchmark key for OTHER and countries without benchmarks
 segmentation:
   top_countries: 10
 calibration:

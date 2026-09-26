@@ -328,3 +328,83 @@ def test_off_balance_customer_ccf(reference_sim, base_run, tmp_path):
     # CCF 1 everywhere except that exposure (0): post-CCF stage 1 = nominal stage 1 - its nominal.
     assert abs(t["exp_s1"] - (t["nom_s1"] - nominal)) < 0.05
     assert t["exp_s1"] > b["exp_s1"]
+
+
+BENCHMARK_COLUMNS = ("PD/TR - Percentage of exposures for which ECB benchmark parameters were used (%)",
+                     "LGD/LR - Percentage of exposures for which ECB benchmark parameters were used (%)")
+
+
+def test_benchmarks_match_golden_and_cr_scen(base_run):
+    """ECB benchmark rule on the reference data (scenario key benchmark_parameters): benchmarks.csv and the summary
+    match the golden results; CR_SCEN reports the exposure share with benchmark parameters (MN 2027 para 117)."""
+    g, a = read(GOLDEN / "benchmarks.csv", "segment"), read(base_run / "benchmarks.csv", "segment")
+    assert g.keys() == a.keys()
+    for k in g:
+        assert abs(float(g[k]["exposure"]) - float(a[k]["exposure"])) <= 0.01
+        assert {c: v for c, v in g[k].items() if c != "exposure"} == {c: v for c, v in a[k].items() if c != "exposure"}
+    summary = json.loads((base_run / "summary.json").read_text())["benchmark"]
+    golden = json.loads((GOLDEN / "summary.json").read_text())["benchmark"]
+    assert {k: v for k, v in summary.items() if k != "pivots"} == {k: v for k, v in golden.items() if k != "pivots"}
+    assert "BMK-001" in (base_run / "diagnostics.json").read_text()
+    rows = {(r["Geographical breakdown"], r["Scenario"], r["Year"], r["RowNum"]): r
+            for r in csv.DictReader(open(base_run / "cr_scen.csv"))}
+    for (geo, scen, year, n), r in rows.items():
+        for c in BENCHMARK_COLUMNS:
+            assert 0.0 <= float(r[c]) <= 100.0 + 1e-9
+            if scen == "Actual":
+                assert float(r[c]) == 0.0                  # the starting point is always the institution's own
+    for scen, year in (("Baseline", "2027"), ("Adverse", "2029")):
+        assert float(rows[("Total", scen, year, "11")][BENCHMARK_COLUMNS[0]]) == 100.0     # loans to CI: 0% coverage
+        assert float(rows[("Total", scen, year, "9")][BENCHMARK_COLUMNS[1]]) == 0.0        # CB: no benchmark exists
+        pv = summary["pivots"]["LOANS|GG"]
+        assert abs(float(rows[("Total", scen, year, "10")][BENCHMARK_COLUMNS[0]]) - 100 * pv["pd_tr_benchmark_share"]) < 1e-6
+        total = sum(v["exposure"] * v["pd_tr_benchmark_share"] for v in summary["pivots"].values())
+        exposure = sum(v["exposure"] for v in summary["pivots"].values())
+        assert abs(float(rows[("Total", scen, year, "22")][BENCHMARK_COLUMNS[0]]) - 100 * total / exposure) < 1e-6
+
+
+def test_benchmark_rule_variant_matches_reference(reference_sim, tmp_path):
+    """With segment-level models only and a 50% threshold, the rule exercises every branch on the reference data
+    (coverage, segments without a model, sovereigns, PD/TR and LGD/LR separately); engine and reference agree, and
+    without the scenario key nothing is benchmarked."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sora_reference", REPO / "tools" / "reference" / "sora_reference.py")
+    ref = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ref)
+    text = SCENARIO.read_text()
+    variant = tmp_path / "variant.yaml"
+    variant.write_text(text.replace("model_level: portfolio", "model_level: segment")
+                       .replace("coverage_threshold: 0.10", "coverage_threshold: 0.50"))
+    ref.run(reference_sim, variant, tmp_path / "ref", REPO)
+    r = subprocess.run([str(ENGINE), "run", str(reference_sim), "--scenario", str(variant), "-o", str(tmp_path / "eng"),
+                        "--base", str(REPO), "--workers", "3"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    rules = {row["pd_tr_rule"] for row in csv.DictReader(open(tmp_path / "ref" / "benchmarks.csv"))}
+    rules |= {row["lgd_lr_rule"] for row in csv.DictReader(open(tmp_path / "ref" / "benchmarks.csv"))}
+    assert rules == {"none", "coverage", "no_model", "sovereign"}
+    for name, key in (("benchmarks.csv", ("segment",)), ("parameters.csv", ("key", "scenario", "year")),
+                      ("projection.csv", ("segment", "scenario", "year"))):
+        g, a = read(tmp_path / "ref" / name, *key), read(tmp_path / "eng" / name, *key)
+        assert g.keys() == a.keys()
+        for k in g:
+            for col in g[k]:
+                try:
+                    assert abs(float(g[k][col]) - float(a[k][col])) <= 0.01, (name, k, col)
+                except ValueError:
+                    assert g[k][col] == a[k][col], (name, k, col)
+    assert "mixed" in {row["source"] for row in csv.DictReader(open(tmp_path / "eng" / "parameters.csv"))}
+
+    plain = tmp_path / "plain.yaml"
+    lines, skip = [], False
+    for line in text.splitlines():
+        skip = line.startswith("benchmark_parameters:") or (skip and line.startswith(" "))
+        if not skip:
+            lines.append(line)
+    plain.write_text("\n".join(lines) + "\n")
+    r = subprocess.run([str(ENGINE), "run", str(reference_sim), "--scenario", str(plain), "-o", str(tmp_path / "plain"),
+                        "--base", str(REPO)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert not (tmp_path / "plain" / "benchmarks.csv").exists()
+    assert "benchmark" not in json.loads((tmp_path / "plain" / "summary.json").read_text())
+    params = list(csv.DictReader(open(tmp_path / "plain" / "parameters.csv")))
+    assert {row["source"] for row in params} == {"derived"}

@@ -127,6 +127,7 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
         write_cr_scen(d, s, *run.projection, dir / "cr_scen.csv", &coll);
         write_cr_sector(d, s, *run.projection, dir / "cr_sector.csv");
     }
+    if (run.projection && run.projection->benchmark.enabled) write_benchmarks(s, run.projection->benchmark, dir / "benchmarks.csv");
     if (run.rea) write_rea_csv(s, *run.rea, dir / "rea.csv");
     if (run.off_balance) write_off_balance(d, s, *run.off_balance, dir);
 
@@ -154,6 +155,10 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
             first = false;
         }
         f << "\n  }";
+        if (run.projection && run.projection->benchmark.enabled) {
+            f << ",\n  \"benchmark\": ";
+            write_benchmark_summary(f, run.config.benchmark, run.projection->benchmark);
+        }
         if (run.rea) {
             f << ",\n  \"rea\": ";
             write_rea_summary(f, *run.rea);

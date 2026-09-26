@@ -183,9 +183,27 @@ int main(int argc, char** argv) {
         { Timer t("load scenario"); macro = load_macro(duck, cfg.macro_path); sats = load_satellites(duck, cfg.satellites_path); }
         Projection proj;
         const bool run = a.command == "run";
+        BenchmarkTable benchmarks;   // ECB benchmark parameters (scenario key benchmark_parameters)
+        if (run && cfg.benchmark.enabled) {
+            Timer t("load benchmarks");
+            benchmarks.load(duck, cfg.benchmark.file, cfg);
+            diag.findings.push_back({"BMK-000", "info", "benchmark parameter values loaded (" + std::to_string(benchmarks.keys()) +
+                                     " portfolio-country keys)", benchmarks.rows()});
+        }
         if (run) {
             Timer t("project");
-            proj = project(d, seg, cal, sats, macro, cfg, ext.empty() ? nullptr : &ext, a.workers);
+            proj = project(d, seg, cal, sats, macro, cfg, ext.empty() ? nullptr : &ext, a.workers,
+                           cfg.benchmark.enabled ? &benchmarks : nullptr);
+            if (proj.benchmark.enabled) {
+                std::size_t applied = 0, unavailable = 0;
+                for (const auto& dec : proj.benchmark.decisions) {
+                    applied += dec[0].applied() || dec[1].applied() ? 1 : 0;
+                    unavailable += dec[0].unavailable || dec[1].unavailable ? 1 : 0;
+                }
+                diag.findings.push_back({"BMK-001", "info", "segments with ECB benchmark parameters", applied});
+                if (unavailable)
+                    diag.findings.push_back({"BMK-002", "warning", "segments that need ECB benchmark parameters but have none in the file: model parameters kept", unavailable});
+            }
             if (proj.exposures_with_own_parameters)
                 diag.findings.push_back({"PAR-003", "info", "exposures with exposure-level parameters", proj.exposures_with_own_parameters});
             if (!proj.parameter_errors.empty()) {

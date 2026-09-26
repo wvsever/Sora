@@ -216,7 +216,7 @@ ReaResult project_rea(Duck& duck, const ReaInputs& in, const calc::ClientOptions
             const auto sat = in.satellites.find(segment.portfolio);
             if (sat == in.satellites.end()) throw Error("no satellite coefficients for portfolio " + segment.portfolio);
             p = exposure_param_paths(s, segment, proj.params[seg][0][0], sat->second, in.macro, in.config, *in.external,
-                                     i)[sc][static_cast<std::size_t>(year)];
+                                     i, proj.benchmark_of(seg))[sc][static_cast<std::size_t>(year)];
         } else {
             p = proj.params[seg][sc][static_cast<std::size_t>(year)];
         }

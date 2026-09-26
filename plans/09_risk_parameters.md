@@ -55,7 +55,7 @@ For development and testing, all customer inputs are replaced by **synthetic equ
 
 1. **External parameter file** (`risk_parameters.csv`): the customer's own IFRS 9 / IRB model output, per contract or per segment. This is the production path, and the only one acceptable for a real EBA submission.
 2. **Derived starting point**: `sora calibrate` estimates the parameters from the history tables above. It is used for the reference dataset, for demos and onboarding, and as a challenger or plausibility check against the customer's parameters in production.
-3. **Benchmark fallback**: customer-loaded benchmark tables (e.g. the ECB benchmark PD/TR and LGD/LR per portfolio and country) for segments with no model or insufficient data. The EBA 10% coverage rule is applied per pivot asset class. The benchmark file format is Sora's own. The customer maps the ECB-provided files into it, or a per-exercise import adapter is added once a customer can share the layout (not the values).
+3. **Benchmark fallback**: customer-loaded benchmark tables (e.g. the ECB benchmark PD/TR and LGD/LR per portfolio and country) for segments with no model or insufficient data. The EBA 10% coverage rule is applied per pivot asset class. The benchmark file format is Sora's own. The customer maps the ECB-provided files into it, or a per-exercise import adapter is added once a customer can share the layout (not the values). Implemented: scenario key `benchmark_parameters`, see "ECB benchmark parameters" below.
 
 Every parameter records its source (`external`, `derived`, `benchmark`) and the observation count. Both are reported in the output.
 
@@ -103,7 +103,103 @@ contract,CL-000001,actual,2026,0.004,,,,,,0.12,,,,,external
 - `scenario = actual`, `year = 0` is the starting point. `baseline`/`adverse` with `year` 1–3 override the projected values.
 - Every parameter column is optional. Precedence per field, most specific first: exposure row > segment > portfolio > instrument > all > Sora's own value (derived calibration for the starting point, satellite projection for later years). An exposure-level starting point is projected with the segment's satellite model.
 - Values are decimal fractions in [0, 1], with `pd12m_s1 + tr1_2 ≤ 1` and `pd12m_s2 + tr2_1 ≤ 1`. Invalid values stop the run (PAR-010). Keys that match nothing are reported (PAR-001/002).
-- `parameters.csv` in the run output shows the effective values and their `source` (`derived`, `external`, `mixed`).
+- `parameters.csv` in the run output shows the effective values and their `source` (`derived`, `external`, `mixed`, `benchmark`).
+
+### ECB benchmark parameters
+
+Implemented in `src/benchmark.cpp` (engine) and `tools/reference/sora_reference.py` (reference); outputs
+`benchmarks.csv`, `parameters.csv` source `benchmark`/`mixed`, the summary's `benchmark` object and the CR_SCEN
+columns "Percentage of exposures for which ECB benchmark parameters were used".
+
+**Methodology** (EBA 2027 draft MN; 2025 final MN paragraph in brackets):
+
+| MN | Rule | Sora |
+|---|---|---|
+| 109 (119) | Starting points come from the bank's own IFRS 9 models | Benchmarks never replace the starting point (`actual`/0); the file has no year 0 |
+| 113 (122) | Models first; benchmarks only where no appropriate satellite model exists | A group is "modelled" unless the rule below says otherwise |
+| 115 (124) | No appropriate satellite model → ECB benchmarks **without any adjustment** (no expert adjustment or scaling), at **portfolio level, not rating class level** | The benchmark replaces the projected values of the segment and of every exposure in it (exposure-level customer values included), after satellite and customer projections. Nothing scales it |
+| 117 (126) | If the satellite models do not estimate all PD/TR, respectively LR/LGD, parameters for at least **10% of the pivot asset class exposure**, the benchmark applies to the **entire pivot asset class**; above 10% a weighted average of model and benchmark parameters is allowed; CR_SCEN reports the % of exposures (GCA) with benchmark parameters | Coverage per pivot asset class (`instrument|portfolio`, all countries) and per group (PD/TR = PD12M S1, PD12M S2, TR1-2, TR2-1; LGD/LR = LGD S1, LGD S2, LGD S3, LRLT S2). Below the threshold: every segment takes the benchmark. At or above it: only the segments without a model do; the pivot class then carries the exposure-weighted mix of model and benchmark parameters (the para 117 weighted average) |
+| 146 (155) | Sovereign (general government, amortised cost) exposures: ECB parameters **mandatory** for every country they are provided for; other countries: own parameters under the hierarchy of approaches | `sovereign: true`: GG segments (loans and debt securities) whose country has a benchmark take it, modelled or not; the OTHER bucket and other countries follow the coverage rule |
+| fn. 13 (fn. 22) | No benchmarks for debt securities to CB, CI, OFC, NFC, nor for loans to central banks | Where the rule asks for a benchmark and the file has none, the model parameters stay and the segment is reported (`unavailable`, warning BMK-002) |
+| TG 2027 para 32 | Main asset class parameters consistent with the pivot ones | CR_SCEN Sum rows aggregate the pivot rows (exposure-weighted) |
+
+**Model coverage** of a segment for a group: the segment's portfolio has satellite coefficients, and either the
+group's starting point was calibrated within the pivot asset class (`calibration_levels` of `stage1`+`stage2` for
+PD/TR, `lgd`+`lrlt` for LGD/LR at the segment or, with `model_level: portfolio`, the `instrument|portfolio|ALL`
+level; a fallback to `instrument|ALL|ALL`, `ALL|ALL|ALL` or `none` means the institution has no data-based model of
+that pivot class), or the customer supplies the group's projected values for every scenario and year at such a
+level (`--parameters`, the institution's own satellite output). Coverage is weighted by t0 gross carrying amount
+(S1 + S2 + S3 + POCI, reporting currency). A portfolio without satellite coefficients is allowed only if both
+groups of all its segments are benchmarked (a flat, macro-independent satellite is then used for nothing but
+TR3-x, which stay at the starting point).
+
+**Benchmark key**: the segment's country bucket, then `country_fallback` (default: the scenario's), e.g. `WR`, `EU`
+aggregates for the OTHER bucket and for countries without their own benchmark. Sovereigns (para 146) only use their own
+country. A group is taken from one key as a whole.
+
+**Scenario key:**
+
+```yaml
+benchmark_parameters:
+  file: tests/params/synthetic_ecb_benchmarks.csv   # Sora's benchmark format (below)
+  coverage_threshold: 0.10      # model coverage per pivot asset class below which the whole class is benchmarked
+  model_level: portfolio        # coarsest calibration level that counts as a model: segment | portfolio
+  sovereign: true               # general governments: the country's benchmark is mandatory (para 146)
+  country_fallback: [WR, EU]    # benchmark keys after the segment's country (default: the scenario's country_fallback)
+```
+
+Without the key nothing changes (results are byte-identical to a run without benchmarks). The decision is made once,
+serially, before the parallel projection, so results stay bit-identical for any `--workers N`.
+
+#### Benchmark file format
+
+A long CSV, one value per row, like the normalised macro file. Lines starting with `#` are comments (a synthetic
+file says so in its first line).
+
+```text
+# SYNTHETIC ECB-style credit-risk benchmarks for tests. NOT ECB values.
+instrument,portfolio,country,scenario,year,parameter,value
+LOANS,CI,DE,baseline,2025,pd12m_s1,0.001700
+LOANS,CI,DE,adverse,2027,lrlt_s2,0.057020
+```
+
+| Column | Content |
+|---|---|
+| `instrument` | `LOANS` or `DEBT_SEC` (Sora instrument, CR_SCEN Portfolio) |
+| `portfolio` | EBA pivot asset class as in Sora segments: `CB`, `GG`, `CI`, `OFC`, `NFC_SME_CRE`, `NFC_SME_OTHER`, `NFC_LARGE_CRE`, `NFC_LARGE_OTHER`, `HH_HOUSE`, `HH_CONS`, `HH_OTHER` (debt securities: `NFC`) |
+| `country` | ISO country code, or an aggregate key (`EU`, `WR`, ...) used through `country_fallback` |
+| `scenario` | `baseline` or `adverse` |
+| `year` | Scenario (calendar) year; mapped to projection years 1..3 with the scenario's `year_map`. Other years are ignored |
+| `parameter` | `pd12m_s1`, `pd12m_s2`, `tr1_2`, `tr2_1` (group PD/TR) or `lgd_s1`, `lgd_s2`, `lgd_s3`, `lrlt_s2` (group LGD/LR). TR3-x are not projected and not accepted |
+| `value` | Decimal fraction in [0, 1] (12-month point in time, as in `sim_risk_parameter`) |
+
+Validation (the run stops): unknown instrument, scenario or parameter, a value outside [0, 1], duplicates, a group
+that is incomplete for a key (all four parameters for baseline and adverse years 1..3, or nothing), and
+`pd12m_s1 + tr1_2 > 1` or `pd12m_s2 + tr2_1 > 1`. One key may carry one group only (e.g. LGD/LR only). The format
+holds any portfolio × country × scenario × year table; the ECB's own files are mapped into it by the customer.
+
+`tests/params/synthetic_ecb_benchmarks.csv` (generator `tools/synthetic_ecb_benchmarks.py`, deterministic) is the
+synthetic stand-in: invented, plausible magnitudes for the ten loan pivot classes except central banks and for
+debt securities to general governments (fn. 13), in the EU top countries of the reference data (BE, DE, ES, FR, LU,
+PL) and the aggregates EU and WR, for the scenario years 2025–2027 of the test scenario.
+
+#### Outputs
+
+- `benchmarks.csv`, per segment: `exposure` (t0 GCA), `pd_tr_model`, `lgd_lr_model` (1 = covered by a model),
+  `pd_tr_rule`, `lgd_lr_rule` (`none`, `sovereign`, `coverage` = pivot class below the threshold, `no_model` =
+  segment without a model in a pivot class above it), `pd_tr_benchmark`, `lgd_lr_benchmark` (benchmark key applied,
+  `unavailable`, or empty).
+- `parameters.csv`: projected rows have `source = benchmark` when both groups come from the benchmark, `mixed` when one
+  does.
+- `summary.json` `benchmark`: settings, segment counts (`segments_pd_tr`, `segments_lgd_lr`, `segments_unavailable`) and
+  per pivot asset class the exposure, model coverage and benchmark share per group.
+- `cr_scen.csv`: the two "ECB benchmark parameter application" columns, % of t0 exposure of the row with benchmark
+  parameters in the projected years (0 for Actual).
+- Diagnostics: BMK-000 (values loaded), BMK-001 (segments with benchmark parameters), BMK-002 (benchmark needed but
+  missing).
+
+Not implemented: a customer-chosen weighted average inside a segment (para 117 mix at a finer grain than the
+segment), and the para 118 challenger comparison of model against benchmark parameters.
 
 ### Segmentation
 
@@ -140,7 +236,7 @@ The mapping table is data (`segments.csv`), not code. Unmapped records are repor
 
 - Exposure-weighted, per segment, from the latest 6–12 monthly observations.
 - Annualise transitions with the matrix power of the average monthly matrix. Never multiply a monthly rate by 12.
-- Minimum observation count per segment (configurable, default 100 contracts). Below it, fall back to the parent segment (country → Total) and then to the benchmark.
+- Minimum observation count per segment (configurable, default 100 contracts). Below it, fall back to the parent segment (country → portfolio → instrument → all). A starting point that had to fall back beyond the portfolio (pivot asset class) counts as "no model" for the ECB benchmark rule below.
 - Conservatism only: approximated starting points may only be adjusted upwards (MN paras 109–110).
 - Technical floor on PD of 0.001% (from the 2025 template guidance; configurable).
 - Calibration is deterministic and writes a parameter file in the external format. That file can be reviewed, edited and passed back as source 1.

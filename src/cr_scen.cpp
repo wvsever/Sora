@@ -22,6 +22,8 @@ struct Agg {
     ParamAccum pa;
     double mat_w = 0, mat_sum = 0;
     LtvCell ltv;
+    double bm_w = 0;                       // t0 exposure (ECB benchmark application columns)
+    std::array<double, 2> bm_used{};      // t0 exposure with PD/TR, LGD/LR benchmark parameters
 
     void add(const Agg& o) {
         exp_s1 += o.exp_s1; exp_s2 += o.exp_s2; exp_s3_old += o.exp_s3_old; exp_s3_new += o.exp_s3_new; exp_poci += o.exp_poci;
@@ -34,6 +36,9 @@ struct Agg {
         for (std::size_t i = 0; i < kParamCount; ++i) pa.sum[i] += o.pa.sum[i];
         mat_w += o.mat_w; mat_sum += o.mat_sum;
         ltv.add(o.ltv);
+        bm_w += o.bm_w;
+        bm_used[0] += o.bm_used[0];
+        bm_used[1] += o.bm_used[1];
     }
 };
 
@@ -97,8 +102,8 @@ const std::vector<Column>& columns() {
         return [m](const Agg& a, bool actual) -> Value { return actual ? Value{} : Value{a.*m}; };
     };
     static const std::vector<Column> c = {
-        {"PD/TR - Percentage of exposures for which ECB benchmark parameters were used (%)", [](const Agg&, bool) { return Value{0.0}; }, true},
-        {"LGD/LR - Percentage of exposures for which ECB benchmark parameters were used (%)", [](const Agg&, bool) { return Value{0.0}; }, true},
+        {"PD/TR - Percentage of exposures for which ECB benchmark parameters were used (%)", [](const Agg& a, bool) { return Value{a.bm_w > 0 ? a.bm_used[0] / a.bm_w : 0.0}; }, true},
+        {"LGD/LR - Percentage of exposures for which ECB benchmark parameters were used (%)", [](const Agg& a, bool) { return Value{a.bm_w > 0 ? a.bm_used[1] / a.bm_w : 0.0}; }, true},
         {"PD PiT (%)", [](const Agg&, bool) { return Value{}; }, true},
         {"PD 12M S1 (TR1-3)", [](const Agg& a, bool) { return param(a, 0); }, true},
         {"TR1-2", [](const Agg& a, bool) { return param(a, 2); }, true},
@@ -211,6 +216,14 @@ void write_cr_scen(const Dataset& d, const Segmentation& s, const Projection& p,
                 a.mat_sum = seg[i][0].mat_sum;
             }
         }
+        // ECB benchmark application (MN 2027 para 117): share of t0 exposure with benchmark parameters, projected
+        // years only (the starting point is always the institution's own).
+        if (p.benchmark.enabled)
+            for (std::size_t slot = 1; slot < kSlots; ++slot) {
+                seg[i][slot].bm_w = p.benchmark.exposure[i];
+                for (std::size_t g = 0; g < 2; ++g)
+                    seg[i][slot].bm_used[g] = p.benchmark.decisions[i][g].applied() ? p.benchmark.exposure[i] : 0.0;
+            }
         // LTV (static balance sheet, collateral values per scenario and year). Same slot layout.
         if (collateral)
             for (std::size_t slot = 0; slot < kSlots; ++slot) seg[i][slot].ltv = collateral->cells[i][slot];

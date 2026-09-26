@@ -9,6 +9,7 @@
 
 #include "sora/dataset.hpp"
 #include "sora/parameters.hpp"
+#include "sora/benchmark.hpp"
 #include "sora/scenario.hpp"
 
 namespace sora {
@@ -60,7 +61,7 @@ struct Projection {
     std::vector<std::array<ParamPath, 2>> params;
     // [segment]: where the starting point came from: derived | external | mixed
     std::vector<std::string> start_source;
-    // [segment][scenario][year 1..3 at index 0..2]: derived | external | mixed
+    // [segment][scenario][year 1..3 at index 0..2]: derived | external | mixed | benchmark (both groups benchmarked)
     std::vector<std::array<std::array<std::string, 3>, 2>> path_source;
     // [segment][scenario][year 0..3] exposure-weighted parameters, including exposure-level overrides
     std::vector<std::array<std::array<ParamAccum, 4>, 2>> accum;
@@ -68,6 +69,11 @@ struct Projection {
     std::vector<std::vector<SectorSlice>> sectors;
     std::size_t exposures_with_own_parameters = 0;
     std::vector<std::string> parameter_errors;
+    // ECB benchmark rule (scenario key benchmark_parameters; disabled: enabled = false and empty vectors).
+    BenchmarkResult benchmark;
+    const SegmentBenchmark* benchmark_of(std::size_t segment) const {
+        return benchmark.enabled && benchmark.apply[segment].any() ? &benchmark.apply[segment] : nullptr;
+    }
 };
 
 // Projects one exposure (reporting-currency amounts) and adds its contribution to `acc`.
@@ -78,16 +84,20 @@ void project_exposure(Stage stage, double gca, double allowance, const std::arra
 
 // Parameter paths of an exposure with exposure-level parameters: its own starting point (the segment's effective
 // starting point `start`, overlaid with the exposure's actual/0 values) projected with the segment's satellite,
-// then per year the segment overlay and the exposure overlay; index 4 repeats year 3. The single definition
+// then per year the segment overlay and the exposure overlay, and last the segment's ECB benchmark groups
+// (`benchmark`, if any); index 4 repeats year 3. The single definition
 // used by project() for provisions and by project_rea() for the calculator records.
 std::array<ParamPath, 2> exposure_param_paths(const Segmentation& s, const Segment& seg, const Params& start,
                                               const Satellite& sat, const MacroTable& macro, const ScenarioConfig& cfg,
-                                              const ExternalParameters& external, std::size_t exposure);
+                                              const ExternalParameters& external, std::size_t exposure,
+                                              const SegmentBenchmark* benchmark = nullptr);
 
 // `external` may be null (derived parameters only). `workers` threads project the segments in parallel
-// (0 = hardware concurrency); the results are bit-identical for any number of workers.
+// (0 = hardware concurrency); the results are bit-identical for any number of workers. With cfg.benchmark
+// enabled and `benchmarks` given, the ECB benchmark rule (benchmark.hpp) replaces projected parameters.
 Projection project(const Dataset& d, const Segmentation& s, const Calibration& cal,
                    const std::map<std::string, Satellite>& satellites, const MacroTable& macro,
-                   const ScenarioConfig& cfg, const ExternalParameters* external = nullptr, unsigned workers = 1);
+                   const ScenarioConfig& cfg, const ExternalParameters* external = nullptr, unsigned workers = 1,
+                   const BenchmarkTable* benchmarks = nullptr);
 
 }  // namespace sora

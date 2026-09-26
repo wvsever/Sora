@@ -34,6 +34,34 @@ T num(ryml::ConstNodeRef n) {
     return v;
 }
 
+// `benchmark_parameters` (ECB benchmark rule); defaults as in BenchmarkConfig.
+void load_benchmark_config(ryml::ConstNodeRef root, const fs::path& base_dir, ScenarioConfig& c) {
+    if (!root.has_child(ryml::to_csubstr("benchmark_parameters"))) return;
+    auto b = root["benchmark_parameters"];
+    auto& bc = c.benchmark;
+    bc.enabled = true;
+    if (!b.has_child(ryml::to_csubstr("file"))) throw Error("scenario: benchmark_parameters.file is required");
+    bc.file = str(b["file"]);
+    if (!bc.file.is_absolute()) bc.file = base_dir / bc.file;
+    if (b.has_child(ryml::to_csubstr("coverage_threshold"))) {
+        bc.coverage_threshold = num<double>(b["coverage_threshold"]);
+        if (!(bc.coverage_threshold >= 0.0 && bc.coverage_threshold <= 1.0))
+            throw Error("scenario: benchmark_parameters.coverage_threshold outside [0, 1]");
+    }
+    if (b.has_child(ryml::to_csubstr("model_level"))) {
+        const auto level = str(b["model_level"]);
+        if (level == "segment") bc.model_level = 0;
+        else if (level == "portfolio") bc.model_level = 1;
+        else throw Error("scenario: benchmark_parameters.model_level must be segment or portfolio");
+    }
+    if (b.has_child(ryml::to_csubstr("sovereign"))) bc.sovereign = str(b["sovereign"]) == "true";
+    if (b.has_child(ryml::to_csubstr("country_fallback"))) {
+        for (auto ch : b["country_fallback"].children()) bc.country_fallback.push_back(str(ch));
+    } else {
+        bc.country_fallback = c.country_fallback;
+    }
+}
+
 }  // namespace
 
 ScenarioConfig load_scenario(const fs::path& yaml, const fs::path& base_dir) {
@@ -99,6 +127,7 @@ ScenarioConfig load_scenario(const fs::path& yaml, const fs::path& base_dir) {
             set("unconditionally_cancellable", c.off_balance.ccf_unconditionally_cancellable);
         }
     }
+    load_benchmark_config(root, base_dir, c);
     return c;
 }
 

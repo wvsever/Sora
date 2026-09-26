@@ -168,7 +168,7 @@ def test_golden_results_are_reproducible(reference_sim, tmp_path):
     ref.run(reference_sim, REPO / "tests" / "scenarios" / "test_eba2025.yaml", tmp_path, REPO)
     golden = REPO / "tests" / "golden" / "20260630"
     for name in ("segments.csv", "parameters.csv", "projection.csv", "collateral.csv", "cr_sector.csv",
-                 "off_balance.csv", "cr_scen_off_bs.csv"):
+                 "off_balance.csv", "cr_scen_off_bs.csv", "benchmarks.csv"):
         assert (tmp_path / name).read_text() == (golden / name).read_text(), name
     a, b = json.loads((tmp_path / "summary.json").read_text()), json.loads((golden / "summary.json").read_text())
     a.pop("sim_mapping_release"), b.pop("sim_mapping_release")
@@ -249,3 +249,130 @@ def test_golden_off_balance_invariants():
         assert all(float(r[p]) <= float(r[n]) + 0.005 for p, n in zip(post, nom))   # CCF <= 1
     summary = json.loads((golden / "summary.json").read_text())["off_balance"]
     assert summary["items"] > 0 and summary["unmatched_items"] == 0
+
+
+# ----------------------------------------------------------------------------------------- ECB benchmarks
+
+BENCH_CFG = {"coverage_threshold": 0.10, "model_level": "portfolio", "sovereign": True, "country_fallback": ["EU"]}
+
+
+def bench_group(base):
+    return {(sc, t): {p: base for p in ref.BENCHMARK_GROUPS["pd_tr"]} for sc in ("baseline", "adverse") for t in (1, 2, 3)}
+
+
+def bench_case(covered):
+    """HH_HOUSE in BE (5), DE (45), FR (50) and GG in BE, DE (10 each); `covered`: segments whose PD/TR starting
+    point is calibrated on the segment itself (LGD/LR always is)."""
+    exp = {"LOANS|HH_HOUSE|BE": 5, "LOANS|HH_HOUSE|DE": 45, "LOANS|HH_HOUSE|FR": 50, "LOANS|GG|BE": 10, "LOANS|GG|DE": 10}
+    segments = sorted(exp)
+    stocks = {s: {"stage1": [v, 0.0], "stage2": [0.0, 0.0], "stage3": [0.0, 0.0], "poci": [0.0, 0.0]} for s, v in exp.items()}
+    sources = {s: {"stage1": s if s in covered else "LOANS|ALL|ALL", "stage2": s, "stage3": s, "lgd": s, "lrlt": s}
+               for s in segments}
+    bench = {("LOANS", "HH_HOUSE", "BE"): {"pd_tr": bench_group(0.1)}, ("LOANS", "HH_HOUSE", "EU"): {"pd_tr": bench_group(0.2)},
+             ("LOANS", "GG", "BE"): {"pd_tr": bench_group(0.3), "lgd_lr": {}}}
+    return segments, sources, stocks, {"HH_HOUSE": {}, "GG": {}}, bench
+
+
+def test_benchmark_rule_coverage_below_threshold():
+    """MN 2027 para 117: satellite models for less than 10% of the pivot asset class -> benchmark for all of it."""
+    segments, sources, stocks, sat, bench = bench_case({"LOANS|HH_HOUSE|BE", "LOANS|GG|BE", "LOANS|GG|DE"})
+    dec, pivots = ref.benchmark_decisions(segments, sources, stocks, sat, bench, BENCH_CFG)
+    assert [dec[s]["pd_tr"]["benchmark"] for s in ("LOANS|HH_HOUSE|BE", "LOANS|HH_HOUSE|DE", "LOANS|HH_HOUSE|FR")] == ["BE", "EU", "EU"]
+    assert {dec[s]["pd_tr"]["rule"] for s in segments if "HH_HOUSE" in s} == {"coverage"}
+    assert all(dec[s]["lgd_lr"]["rule"] == "none" for s in segments if "HH_HOUSE" in s)   # per group
+    assert approx(pivots["LOANS|HH_HOUSE"]["model"]["pd_tr"], 5) and approx(pivots["LOANS|HH_HOUSE"]["benchmark"]["pd_tr"], 100)
+
+
+def test_benchmark_rule_segments_without_model_and_sovereigns():
+    """Para 115: above the threshold only the segments without a model; para 146: sovereigns of a country with a
+    benchmark always take it (GG|DE has none: it keeps its model)."""
+    segments, sources, stocks, sat, bench = bench_case({"LOANS|HH_HOUSE|BE", "LOANS|HH_HOUSE|DE", "LOANS|GG|BE", "LOANS|GG|DE"})
+    dec, _ = ref.benchmark_decisions(segments, sources, stocks, sat, bench, BENCH_CFG)
+    assert dec["LOANS|HH_HOUSE|FR"]["pd_tr"] == {"model": False, "rule": "no_model", "benchmark": "EU"}
+    assert dec["LOANS|HH_HOUSE|DE"]["pd_tr"]["rule"] == "none"
+    assert dec["LOANS|GG|BE"]["pd_tr"] == {"model": True, "rule": "sovereign", "benchmark": "BE"}
+    assert dec["LOANS|GG|DE"]["pd_tr"]["rule"] == "none"
+    dec, _ = ref.benchmark_decisions(segments, sources, stocks, sat, bench, {**BENCH_CFG, "sovereign": False})
+    assert dec["LOANS|GG|BE"]["pd_tr"]["rule"] == "none"
+
+
+def test_benchmark_rule_unavailable_and_model_level():
+    segments, sources, stocks, sat, bench = bench_case(set())
+    dec, _ = ref.benchmark_decisions(segments, sources, stocks, sat, bench, BENCH_CFG)
+    assert dec["LOANS|GG|DE"]["pd_tr"] == {"model": False, "rule": "coverage", "benchmark": "unavailable"}
+    for s in segments:                                          # portfolio-level calibration is a model ...
+        sources[s]["stage1"] = "|".join(s.split("|")[:2]) + "|ALL"
+    dec, _ = ref.benchmark_decisions(segments, sources, stocks, sat, bench, BENCH_CFG)
+    assert dec["LOANS|HH_HOUSE|FR"]["pd_tr"]["rule"] == "none"
+    dec, _ = ref.benchmark_decisions(segments, sources, stocks, sat, bench, {**BENCH_CFG, "model_level": "segment"})
+    assert dec["LOANS|HH_HOUSE|FR"]["pd_tr"]["rule"] == "coverage"   # ... unless only segment-level counts
+    del sat["HH_HOUSE"]                                        # no satellite model: no coverage
+    dec, _ = ref.benchmark_decisions(segments, sources, stocks, sat, bench, BENCH_CFG)
+    assert dec["LOANS|HH_HOUSE|FR"]["pd_tr"]["rule"] == "coverage"
+
+
+def test_apply_benchmark_replaces_groups_without_adjustment():
+    P = flat(pd12m_s1=0.01, lgd_s1=0.4, tr3_1=0.05)
+    bench = {("LOANS", "CI", "DE"): {"pd_tr": bench_group(0.07)}}
+    ref.apply_benchmark(P, {"pd_tr": {"benchmark": "DE"}, "lgd_lr": {"benchmark": ""}}, bench, "LOANS|CI|DE", "adverse")
+    for t in (1, 2, 3, 4):
+        assert P[t]["pd12m_s1"] == 0.07 and P[t]["tr2_1"] == 0.07
+        assert P[t]["lgd_s1"] == 0.4 and P[t]["tr3_1"] == 0.05
+
+
+def test_load_benchmarks(tmp_path):
+    cfg = {"year_map": {1: 2027, 2: 2028, 3: 2029}}
+    head = "# SYNTHETIC\ninstrument,portfolio,country,scenario,year,parameter,value\n"
+    body = "".join(f"LOANS,CI,DE,{sc},{y},{p},0.01\n" for sc in ("baseline", "adverse") for y in (2026, 2027, 2028, 2029)
+                   for p in ref.BENCHMARK_GROUPS["lgd_lr"])
+    (tmp_path / "b.csv").write_text(head + body)
+    b = ref.load_benchmarks(tmp_path / "b.csv", cfg)
+    assert list(b) == [("LOANS", "CI", "DE")] and list(b[("LOANS", "CI", "DE")]) == ["lgd_lr"]
+    assert sorted(b[("LOANS", "CI", "DE")]["lgd_lr"]) == [(sc, t) for sc in ("adverse", "baseline") for t in (1, 2, 3)]
+    for bad in ("LOANS,CI,DE,baseline,2027,lgd_s1,0.1\n", "LOANS,CI,DE,baseline,2027,tr3_1,0.1\n",
+                "LOANS,CI,DE,baseline,2027,lgd_s1,1.5\n", body + "LOANS,CI,DE,baseline,2027,lgd_s1,0.1\n"):
+        (tmp_path / "x.csv").write_text(head + bad)
+        with pytest.raises(ValueError):
+            ref.load_benchmarks(tmp_path / "x.csv", cfg)
+
+
+def test_synthetic_benchmark_file_is_generated(tmp_path):
+    """tests/params/synthetic_ecb_benchmarks.csv is the deterministic output of its generator (SYNTHETIC values)."""
+    import subprocess
+    import sys
+    subprocess.run([sys.executable, str(REPO / "tools" / "synthetic_ecb_benchmarks.py"), "-o", str(tmp_path / "b.csv")], check=True)
+    committed = (REPO / "tests" / "params" / "synthetic_ecb_benchmarks.csv").read_text()
+    assert (tmp_path / "b.csv").read_text() == committed
+    assert committed.startswith("# SYNTHETIC")
+    b = ref.load_benchmarks(REPO / "tests" / "params" / "synthetic_ecb_benchmarks.csv", {"year_map": {1: 2025, 2: 2026, 3: 2027}})
+    assert ("LOANS", "CB", "EU") not in b and ("DEBT_SEC", "CI", "EU") not in b     # MN 2027 footnote 13
+    assert all(set(g) == set(ref.BENCHMARK_GROUPS) for g in b.values())
+
+
+def test_golden_benchmark_parameters_are_unadjusted():
+    """Benchmarked segments carry the file's values for years 1..3 exactly (para 115), their own starting point, and
+    source `benchmark`; the others keep `derived`."""
+    golden = REPO / "tests" / "golden" / "20260630"
+    cfg = {"year_map": {1: 2025, 2: 2026, 3: 2027}}
+    bench = ref.load_benchmarks(REPO / "tests" / "params" / "synthetic_ecb_benchmarks.csv", cfg)
+    dec = {r["segment"]: r for r in csv.DictReader(open(golden / "benchmarks.csv"))}
+    n = 0
+    for r in csv.DictReader(open(golden / "parameters.csv")):
+        d = dec[r["key"]]
+        if r["scenario"] == "actual":
+            assert r["source"] == "derived"
+            continue
+        i, p, _ = r["key"].split("|")
+        for g in ref.BENCHMARK_GROUPS:
+            key = d[f"{g}_benchmark"]
+            if key in ("", "unavailable"):
+                continue
+            n += 1
+            for k in ref.BENCHMARK_GROUPS[g]:
+                assert float(r[k]) == pytest.approx(bench[(i, p, key)][g][(r["scenario"], int(r["year"]))][k], abs=5e-10)
+        applied = [d[f"{g}_benchmark"] not in ("", "unavailable") for g in ref.BENCHMARK_GROUPS]
+        assert r["source"] == ("benchmark" if all(applied) else "mixed" if any(applied) else "derived")
+    assert n > 0
+    summary = json.loads((golden / "summary.json").read_text())["benchmark"]
+    assert summary["pivots"]["LOANS|CI"]["pd_tr_model_coverage"] == 0.0
+    assert summary["pivots"]["LOANS|CI"]["pd_tr_benchmark_share"] == 1.0

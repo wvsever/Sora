@@ -45,7 +45,9 @@ macro_path: scenarios/eba2027_macro.csv
 scenario: adverse                   # baseline | adverse
 starting_parameters: params/risk_parameters_20260630.csv
 satellite_models: models/satellites.csv
-benchmark_parameters: params/ecb_benchmarks.csv      # optional
+benchmark_parameters:                                # optional: ECB benchmark rule (09_risk_parameters.md)
+  file: params/ecb_benchmarks.csv
+  coverage_threshold: 0.10
 constraints:
   no_cure_from_s3: true
   no_s3_provision_release: true
@@ -233,6 +235,24 @@ on-balance exposures at portfolio level. Outputs `off_balance.csv` and `cr_scen_
 Open: the undrawn part of on-balance loans (`off_balance_amount` of `loan` rows, 13,619 amortised-cost loans in the
 reference SIM) and the drawn part of commitments (their GCA) are not yet projected; both need a decision on how FINREP F 09
 and CR_SCEN split a facility.
+
+## ECB benchmark parameters
+
+Implemented in `src/benchmark.cpp` (engine) and `tools/reference/sora_reference.py` (reference), enabled by the
+scenario key `benchmark_parameters`; the format, rule and outputs are specified in `09_risk_parameters.md` ("ECB
+benchmark parameters"). In the projection pipeline the rule sits between the parameter paths and the flow model:
+
+```text
+starting point (derived | customer)  ->  satellite projection  ->  customer projected overlays
+    ->  ECB benchmark (groups PD/TR, LGD/LR, years 1..3, unadjusted)  ->  Boxes 3-9
+```
+
+The decision per segment and group (MN 2027 paras 115-117 and 146: sovereign mandatory, pivot class coverage below
+10% -> whole class, otherwise segments without a model) is taken once, before the parallel projection. A benchmark
+replaces the group for the segment's path and for every exposure-level path in it (portfolio level, not rating class
+level), so off-balance items (which use the on-balance loan segment's path) and the REA records of the calculator take
+it too. Year 4 (beyond the horizon, flat) repeats year 3, and the final adverse year's 5/6-1/6 blend uses the
+benchmarked baseline year 3 where the baseline is benchmarked.
 
 ## Determinism
 
