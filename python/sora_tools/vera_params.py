@@ -18,10 +18,10 @@ Mapping (contract, "Sora mapping"):
 * ``declared_stage == stage3``, or ``poci`` with ``is_defaulted``: ``lgd_s3 = lgd_s3`` (same name on both
   sides).
 * ``ccf``, ``pd_reg``, ``lgd_reg`` pass through unchanged for every stage (same column name on both sides).
-* ``tr1_2``, ``tr2_1``, ``tr3_1``, ``tr3_2`` (segment-level stage transition rates) are never populated here:
-  Vera's per-exposure export carries no transition-rate column (``plans/09_risk_parameters.md``'s
-  ``sora calibrate`` estimates them from ``sim_stage_history`` instead). They stay empty, as the schema
-  allows.
+* ``tr1_2``, ``tr2_1``, ``tr3_1``, ``tr3_2`` pass through when Vera supplies them (optional columns). Vera
+  reads them off the same 12-month stage-transition matrix as ``pd12m_pit``, so ``pd12m_s1 + tr1_2`` and
+  ``pd12m_s2 + tr2_1`` are at most 1 by construction. Where Vera leaves them empty (a scorecard-priced PD),
+  Sora falls back to its own segment calibration for the transition rate.
 
 PAR-010 (``sora::check_parameters`` / ``schemas/sim/tables/sim_risk_parameter.yaml``'s ``RPA-002``/``RPA-003``)
 would reject the whole run on one out-of-range value with no results written at all (``src/main.cpp``:
@@ -58,6 +58,9 @@ VERA_COLUMNS: list[str] = [
 
 # Columns copied unchanged for every stage (same name and meaning in both formats).
 _PASSTHROUGH_FIELDS: tuple[str, ...] = ("ccf", "pd_reg", "lgd_reg")
+# Optional Vera columns (added after the first export contract): passed through when present, silently
+# absent otherwise, so an older risk_parameters.csv still converts.
+_OPTIONAL_PASSTHROUGH_FIELDS: tuple[str, ...] = ("tr1_2", "tr2_1", "tr3_1", "tr3_2")
 
 # sim_risk_parameter fields this converter can populate, in schema order (excludes tr1_2/tr2_1/tr3_1/tr3_2,
 # which no source here supplies, but they still take part in the PAR-010 outflow check below).
@@ -227,6 +230,12 @@ def convert_row(row: dict[str, str], stats: ConversionStats, scenario: str, year
         else:
             _bump(stats.empty_reasons, f"NO_{f.upper()}")
 
+    for f in _OPTIONAL_PASSTHROUGH_FIELDS:
+        if f in row:
+            v = _read_float(row, f, stats)
+            if v is not None:
+                out[f] = v
+
     # PAR-010 pre-check 1: individual [0, 1] range (RPA-002/003, sora::check_parameters).
     for f in _RANGE_FIELDS:
         v = out[f]
@@ -237,8 +246,7 @@ def convert_row(row: dict[str, str], stats: ConversionStats, scenario: str, year
             out[f] = ""
             _bump(stats.empty_reasons, f"PAR010_RANGE:{f}")
 
-    # PAR-010 pre-check 2: stage outflow sums <= 1 (RPA-002/003). tr1_2/tr2_1 are never populated by this
-    # converter today (see module docstring); this guards a future source that adds them.
+    # PAR-010 pre-check 2: stage outflow sums <= 1 (RPA-002/003) when Vera supplies both halves.
     for pd_field, tr_field in _OUTFLOW_PAIRS:
         pv, tv = out[pd_field], out[tr_field]
         if pv != "" and tv != "" and pv + tv > 1.0 + 1e-12:
