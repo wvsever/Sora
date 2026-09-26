@@ -78,6 +78,7 @@ Sora engine
 3. **Run.** `sora-tools map` executes the SQL with embedded DuckDB directly on the export folder (`read_parquet('export/contract_loan/**/*.parquet')`). No database connection is involved. DuckDB runs with external access disabled beyond the export directory.
 4. **Validate.** `sora-tools validate` checks the output against the schema: types, keys, referential integrity, constraints, and reconciliation totals (e.g. SIM gross carrying amount vs control totals exported with the data).
 5. **Release.** The mapping SQL, source dictionary version, validation report and export and SIM fingerprints are stored together as an auditable mapping release.
+   `mapping.yaml` may carry `status: draft | review | production` (default `draft`). Reconciliation controls (SIM totals vs source control totals) live in `reconciliation.yaml` of the mapping, so they are part of the release. An agent working through `sora-mcp` cannot run a production mapping (by status or by path) without a recorded human approval of that exact release (`plans/11_integrations.md`).
 
 Everything runs where the export is: normally on the customer's premises. If a customer chooses to send an export to us (e.g. anonymised onboarding samples), the same tooling runs unchanged. That route is a contractual decision, not a technical requirement.
 

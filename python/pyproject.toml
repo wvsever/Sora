@@ -14,10 +14,12 @@ dependencies = [
 
 [project.optional-dependencies]
 scenario = ["openpyxl>=3.1"]
+mcp = ["mcp>=1.2"]
 test = ["pytest>=8", "py7zr>=0.21", "jsonschema>=4.18", "openpyxl>=3.1"]
 
 [project.scripts]
 sora-tools = "sora_tools.cli:main"
+sora-mcp = "sora_tools.mcp_server:main"
 
 [tool.setuptools.packages.find]
 include = ["sora_tools*"]

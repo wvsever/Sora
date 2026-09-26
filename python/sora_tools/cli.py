@@ -99,6 +99,59 @@ def cmd_calculator_stub(args) -> int:
     return 0
 
 
+# -- results: explain / diff-runs (also sora-mcp tools) ------------------------------------------------------
+def cmd_explain(args) -> int:
+    from .explain import explain_result
+    from .results import ResultError
+    try:
+        r = explain_result(args.output, args.segment, args.scenario, args.year, top=args.top)
+    except ResultError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    print(json.dumps(r, indent=2) if args.json else r["narrative"])
+    return 0
+
+
+def cmd_diff_runs(args) -> int:
+    from .diff_runs import diff_runs, to_json
+    from .results import ResultError
+    try:
+        r = diff_runs(args.run_a, args.run_b, abs_tol=args.abs_tol, rel_tol=args.rel_tol, top=args.top,
+                      segment=args.segment, scenario=args.scenario, year=args.year)
+    except ResultError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    if args.report:
+        Path(args.report).write_text(to_json(r) + "\n")
+    print(to_json(r) if args.json else r["narrative"])
+    return 0 if r["identical"] or not args.fail_on_diff else 1
+
+
+def _register_results_commands(sub) -> None:
+    e = sub.add_parser("explain", help="explain a result: a segment's impairment, or an overview of a run")
+    e.add_argument("output", help="engine output directory (sora run -o)")
+    e.add_argument("--segment", help="segment key, e.g. 'LOANS|HH_HOUSE|DE' (default: overview)")
+    e.add_argument("--scenario", choices=["baseline", "adverse"])
+    e.add_argument("--year", type=int)
+    e.add_argument("--top", type=int, default=10, help="segments in the overview")
+    e.add_argument("--json", action="store_true", help="print the structured result instead of the narrative")
+    e.set_defaults(func=cmd_explain)
+
+    d = sub.add_parser("diff-runs", help="compare two engine output directories")
+    d.add_argument("run_a")
+    d.add_argument("run_b")
+    d.add_argument("--abs-tol", type=float, default=0.01, help="absolute tolerance (default 0.01)")
+    d.add_argument("--rel-tol", type=float, default=1e-9, help="relative tolerance (default 1e-9)")
+    d.add_argument("--top", type=int, default=10, help="top movers (default 10)")
+    d.add_argument("--segment")
+    d.add_argument("--scenario")
+    d.add_argument("--year", type=int)
+    d.add_argument("--json", action="store_true", help="print the structured result instead of the narrative")
+    d.add_argument("--report", help="write the structured result as JSON")
+    d.add_argument("--fail-on-diff", action="store_true", help="exit 1 if the runs differ")
+    d.set_defaults(func=cmd_diff_runs)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="sora-tools", description="Sora data tooling")
     p.add_argument("--schema", help="path to schemas/sim (default: auto-detect or $SORA_SIM_SCHEMA)")
@@ -159,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from .satellites import register as register_satellites
     register_satellites(sub)
+    _register_results_commands(sub)
 
     args = p.parse_args(argv)
     return args.func(args)

@@ -55,10 +55,16 @@ def discover_tables(export_dir: Path) -> dict[str, dict[str, str]]:
     return tables
 
 
-def profile_export(export_dir: Path | str, output: Path | str, max_codes: int = 30,
-                   list_codes: bool = True, types_file: str | None = None) -> dict[str, Any]:
+def profile_export(export_dir: Path | str, output: Path | str | None, max_codes: int = 30,
+                   list_codes: bool = True, types_file: str | None = None, tables: list[str] | None = None,
+                   sample_rows: int = 0) -> dict[str, Any]:
+    """Profile ``export_dir``. ``output`` None returns the dictionary without writing it.
+
+    ``tables`` limits the profile to these source tables. ``sample_rows`` > 0 adds that many raw rows per
+    table and the min/max per column: data values, so only on an explicit opt-in (``sora-mcp include_values``).
+    """
     export_dir = Path(export_dir).resolve()
-    con = sandboxed_connection([export_dir])
+    con = sandboxed_connection([export_dir], progress_bar=output is not None)
     types = json.loads((export_dir / types_file).read_text(encoding="utf-8")) if types_file else {}
     doc: dict[str, Any] = {
         "source": export_dir.name,
@@ -67,6 +73,8 @@ def profile_export(export_dir: Path | str, output: Path | str, max_codes: int = 
         "tables": {},
     }
     for name, t in discover_tables(export_dir).items():
+        if tables is not None and name not in tables:
+            continue
         glob = quote_str(str(export_dir / t["path"]))
         reader = (f"read_parquet({glob}, union_by_name = true, hive_partitioning = false)" if t["format"] == "parquet"
                   else f"read_csv({glob}, union_by_name = true, hive_partitioning = false, header = true)")
@@ -96,5 +104,16 @@ def profile_export(export_dir: Path | str, output: Path | str, max_codes: int = 
             cols[col] = c
         doc["tables"][name] = {"description": "", "path": t["path"], "format": t["format"], "files": files,
                                "rows": n, "columns": cols}
-    Path(output).write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=120))
+        if sample_rows > 0 and described:
+            mm = ", ".join(f"CAST(min({quote_ident(c)}) AS VARCHAR), CAST(max({quote_ident(c)}) AS VARCHAR)"
+                           for c, *_ in described)
+            ranges = con.execute(f"SELECT {mm} FROM t").fetchone()
+            for i, (col, *_) in enumerate(described):
+                cols[col]["min"], cols[col]["max"] = ranges[2 * i], ranges[2 * i + 1]
+            names = [c for c, *_ in described]
+            doc["tables"][name]["sample"] = [
+                dict(zip(names, (None if v is None else str(v) for v in row)))
+                for row in con.execute(f"SELECT * FROM t LIMIT {int(sample_rows)}").fetchall()]
+    if output is not None:
+        Path(output).write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=120))
     return doc

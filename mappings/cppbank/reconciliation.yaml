@@ -1,0 +1,36 @@
+# Reconciliation controls: SIM totals vs control totals of the source export
+# (sora-mcp `reconcile`, python/sora_tools/reconcile.py). Part of the mapping release.
+# `sim` sees the SIM tables, `source` the export as src.<table> plus the `manifest` view. Leading columns are
+# keys (default: all but the last), the rest are compared per key within `tolerance` (absolute, EUR).
+controls:
+  - id: REC-LOAN
+    description: Loans per entity - count and gross carrying amount (all measurement categories)
+    keys: 1
+    sim: |
+      SELECT entity_id, count(*) AS contracts, sum(gross_carrying_amount) AS gross_carrying_amount
+      FROM sim_exposure WHERE exposure_type = 'loan' GROUP BY 1
+    source: |
+      SELECT entity_id, count(*), sum(CAST(gross_carrying_amount AS DECIMAL(18,2)))
+      FROM src.contract_loan GROUP BY 1
+
+  - id: REC-ALLOWANCE
+    description: >-
+      Loss allowance per source contract table vs the impairment allowance sub-ledger (closing balance of the
+      reference month). Commitments differ by EUR 15,000 in the synthetic export (see INV-RC-001).
+    sim: |
+      SELECT CASE exposure_type WHEN 'loan' THEN 'contract_loan' WHEN 'finance_lease' THEN 'contract_lease'
+                                WHEN 'debt_security' THEN 'contract_security_position'
+                                ELSE 'contract_commitment' END AS contract_table,
+             sum(loss_allowance) AS loss_allowance
+      FROM sim_exposure GROUP BY 1
+    source: |
+      SELECT contract_table, sum(CAST(closing_balance AS DECIMAL(18,2)))
+      FROM src.impairment_allowance
+      WHERE accounting_period = strftime((SELECT reference_date FROM manifest), '%Y-%m')
+      GROUP BY 1
+
+  - id: REC-COUNTERPARTY
+    description: Counterparties
+    keys: 0
+    sim: SELECT count(*) AS counterparties FROM sim_counterparty
+    source: SELECT count(*) FROM src.counterparty
