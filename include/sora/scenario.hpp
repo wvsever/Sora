@@ -15,6 +15,16 @@
 
 namespace sora {
 
+// Off-balance-sheet projection (CR_SCEN_OFF_BS, off_balance.hpp). Enabled by the scenario key `off_balance`;
+// the measurement and intragroup scope are those of `scope`.
+struct OffBalanceConfig {
+    bool enabled = false;
+    std::vector<ExposureType> types;   // loan_commitment, financial_guarantee, other_commitment
+    // Regulatory CCF when no customer CCF is supplied (CRR Art. 111(2), Annex I buckets).
+    double ccf_loan_commitment = 0.4, ccf_financial_guarantee = 1.0, ccf_other_commitment = 0.5;
+    double ccf_unconditionally_cancellable = 0.1;   // loan and other commitments cancellable at any time
+};
+
 struct ScenarioConfig {
     std::string name;
     std::filesystem::path macro_path;
@@ -27,6 +37,7 @@ struct ScenarioConfig {
     CalibrationConfig calibration;
     bool no_cure_from_s3 = true;
     double blend_adverse = 5.0 / 6.0, blend_baseline = 1.0 / 6.0;
+    OffBalanceConfig off_balance;
 };
 
 // Relative paths in the YAML resolve against `base_dir` (the repository or working directory).

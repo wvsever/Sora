@@ -3,6 +3,7 @@
 
 #include <filesystem>
 
+#include "sora/off_balance.hpp"
 #include "sora/projection.hpp"
 #include "sora/rea.hpp"
 #include "sora/validation.hpp"
@@ -18,6 +19,7 @@ struct RunOutput {
     const ScenarioConfig& config;
     const Diagnostics& diagnostics;
     const ReaResult* rea = nullptr;   // IRB REA from the calculator (--calculator): rea.csv, summary "rea"
+    const OffBalanceResult* off_balance = nullptr;   // off_balance.csv, cr_scen_off_bs.csv, summary "off_balance"
 };
 
 void write_outputs(const RunOutput& run, const std::filesystem::path& dir);

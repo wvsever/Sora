@@ -31,6 +31,7 @@ add_library(sora_core
   src/output.cpp
   src/cr_scen.cpp
   src/collateral.cpp
+  src/off_balance.cpp
   src/validation.cpp
 )
 target_include_directories(sora_core PUBLIC include)

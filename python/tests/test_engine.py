@@ -231,3 +231,62 @@ def test_results_do_not_depend_on_workers(reference_sim, tmp_path):
     assert errors[1].returncode == errors[4].returncode == 1
     lines = {w: [x for x in r.stderr.splitlines() if "PAR-010" in x] for w, r in errors.items()}
     assert len(lines[1]) == 10 and lines[1] == lines[4]
+
+
+def test_off_balance_matches_golden_and_cr_scen_off_bs(base_run):
+    """off_balance.csv equals the golden file; CR_SCEN_OFF_BS (EUR million) adds up to it and to the summary."""
+    key = ("segment", "exposure_type", "scenario", "year")
+    g, a = read(GOLDEN / "off_balance.csv", *key), read(base_run / "off_balance.csv", *key)
+    assert g.keys() == a.keys()
+    for k in g:
+        for col in g[k]:
+            if col not in key:
+                assert abs(float(g[k][col]) - float(a[k][col])) <= 0.01, (k, col)
+    cr = {(r["Scenario"], r["Year"], r["RowNum"]): r for r in csv.DictReader(open(base_run / "cr_scen_off_bs.csv"))}
+    assert len(cr) == 7 * 22
+    num = lambda r, c: float(r[c])  # noqa: E731
+    for (scen, year, n), r in cr.items():
+        if n != "22":
+            continue
+        parts = [num(cr[(scen, year, k)], "Stock of provisions (Prov Stock)") for k in ("1", "8", "15")]
+        assert abs(num(r, "Stock of provisions (Prov Stock)") - sum(parts)) < 1e-6
+        assert abs(num(r, "Total nominal amount after CCF (total PostCCF)") -
+                   num(r, "Performing nominal amount after CCF (Perf PostCCF)") -
+                   num(r, "Non-performing nominal amount after CCF (PostCCF S3)") -
+                   num(r, "POCI nominal amount after CCF (PostCCF POCI)")) < 1e-6
+    totals = json.loads((base_run / "summary.json").read_text())["off_balance"]["totals"]
+    for label, scen, year in (("Actual", "actual", 0), ("Adverse", "adverse", 3)):
+        t = totals[f"{scen}/{year}"]
+        r = cr[(label, str(2026 + year), "22")]
+        assert abs(num(r, "Total nominal amount before CCF (total NomAmount)") * 1e6 -
+                   sum(t[c] for c in ("nom_s1", "nom_s2", "nom_s3_old", "nom_s3_new", "nom_poci"))) < 1
+        assert abs(num(r, "Stock of provisions (Prov Stock)") * 1e6 -
+                   sum(t[c] for c in ("prov_stock_s1", "prov_stock_s2", "prov_stock_s3", "prov_stock_poci"))) < 1
+
+
+def test_off_balance_customer_ccf(reference_sim, base_run, tmp_path):
+    """A customer CCF (segment hierarchy, then exposure row) replaces the regulatory fallback. On-balance results
+    and nominal amounts are unchanged; post-CCF amounts follow the CCF."""
+    import duckdb
+    eid, nominal = duckdb.sql(f"""
+        SELECT exposure_id, CAST(off_balance_amount AS DOUBLE)
+        FROM read_parquet('{reference_sim}/sim_exposure/**/*.parquet')
+        WHERE exposure_type = 'loan_commitment' AND stage = 'stage1' AND currency = 'EUR'
+          AND measurement_category = 'amortised_cost' AND NOT coalesce(is_intragroup, false)
+        ORDER BY off_balance_amount DESC, exposure_id LIMIT 1""").fetchone()
+    with open(tmp_path / "p.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["level", "key", "scenario", "year", *PARAMS, "ccf", "source"])
+        w.writerow(["segment", "ALL|ALL|ALL", "actual", 0, *[""] * len(PARAMS), "1.0", "external"])
+        w.writerow(["exposure", eid, "actual", 0, *[""] * len(PARAMS), "0.0", "external"])
+    r = run(reference_sim, tmp_path / "out", "--parameters", str(tmp_path / "p.csv"))
+    assert "OBS-003" in r.stderr
+    assert (tmp_path / "out" / "projection.csv").read_bytes() == (base_run / "projection.csv").read_bytes()
+    summary = json.loads((tmp_path / "out" / "summary.json").read_text())["off_balance"]
+    base = json.loads((base_run / "summary.json").read_text())["off_balance"]
+    assert summary["customer_ccf_items"] == summary["items"] == base["items"]
+    t, b = summary["totals"]["actual/0"], base["totals"]["actual/0"]
+    assert t["nom_s1"] == b["nom_s1"]
+    # CCF 1 everywhere except that exposure (0): post-CCF stage 1 = nominal stage 1 - its nominal.
+    assert abs(t["exp_s1"] - (t["nom_s1"] - nominal)) < 0.05
+    assert t["exp_s1"] > b["exp_s1"]

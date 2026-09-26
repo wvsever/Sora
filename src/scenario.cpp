@@ -76,6 +76,29 @@ ScenarioConfig load_scenario(const fs::path& yaml, const fs::path& base_dir) {
     c.blend_adverse = num<double>(blend[0]);
     c.blend_baseline = num<double>(blend[1]);
     if (c.year_map.size() != 3) throw Error("scenario: year_map must define projection years 1..3");
+
+    if (root.has_child(ryml::to_csubstr("off_balance"))) {
+        auto ob = root["off_balance"];
+        c.off_balance.enabled = true;
+        for (auto ch : ob["exposure_types"].children()) {
+            const auto t = parse_exposure_type(str(ch));
+            if (t != ExposureType::LoanCommitment && t != ExposureType::FinancialGuarantee && t != ExposureType::OtherCommitment)
+                throw Error("scenario: off_balance.exposure_types must be loan_commitment, financial_guarantee or other_commitment");
+            c.off_balance.types.push_back(t);
+        }
+        if (ob.has_child(ryml::to_csubstr("ccf_fallback"))) {
+            auto fb = ob["ccf_fallback"];
+            auto set = [&](const char* key, double& v) {
+                if (!fb.has_child(ryml::to_csubstr(key))) return;
+                v = num<double>(fb[ryml::to_csubstr(key)]);
+                if (!(v >= 0.0 && v <= 1.0)) throw Error(std::string("scenario: off_balance.ccf_fallback.") + key + " outside [0, 1]");
+            };
+            set("loan_commitment", c.off_balance.ccf_loan_commitment);
+            set("financial_guarantee", c.off_balance.ccf_financial_guarantee);
+            set("other_commitment", c.off_balance.ccf_other_commitment);
+            set("unconditionally_cancellable", c.off_balance.ccf_unconditionally_cancellable);
+        }
+    }
     return c;
 }
 

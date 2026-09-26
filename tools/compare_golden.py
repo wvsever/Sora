@@ -2,7 +2,7 @@
 """Run the C++ engine on the reference SIM and compare its output with the golden results.
 
 Tolerances: money per segment/scenario/year 1 cent or relative 1e-12 (whichever is larger); parameters and
-ratios (LTV) 1e-9.
+ratios (LTV) 1e-9. The EBA-layout CR_SCEN_OFF_BS (EUR million, 8 decimals) is compared to 2e-8 (2 cents).
 The reference SIM is produced on demand (extract test data + reference mapping) if --sim is not given.
 """
 
@@ -34,8 +34,9 @@ def rows(path: Path, key_cols: list[str]) -> dict:
         return {tuple(r[k] for k in key_cols): r for r in csv.DictReader(f)}
 
 
-def compare(name: str, golden: Path, actual: Path, keys: list[str], money: bool, ratio_prefix: str | None = None) -> list[str]:
-    """`money`: amounts at 1 cent, except columns starting with `ratio_prefix` (1e-9). Otherwise all 1e-9."""
+def compare(name: str, golden: Path, actual: Path, keys: list[str], money: bool, ratio_prefix: str | None = None,
+            abs_tol: float = 0.01) -> list[str]:
+    """`money`: amounts at `abs_tol` (1 cent), except columns starting with `ratio_prefix` (1e-9). Otherwise all 1e-9."""
     g, a = rows(golden / name, keys), rows(actual / name, keys)
     errors = []
     if set(g) != set(a):
@@ -51,7 +52,7 @@ def compare(name: str, golden: Path, actual: Path, keys: list[str], money: bool,
                     errors.append(f"{name} {k} {col}: {av!r} != {gv!r}")
                 continue
             is_money = money and not (ratio_prefix and col.startswith(ratio_prefix))
-            tol = max(0.01, 1e-12 * abs(gf)) if is_money else 1e-9
+            tol = max(abs_tol, 1e-12 * abs(gf)) if is_money else 1e-9
             diff = abs(af - gf)
             if diff > worst[0]:
                 worst = (diff, (k, col))
@@ -78,10 +79,19 @@ def main() -> int:
         errors += compare("parameters.csv", args.golden, out, ["key", "scenario", "year"], money=False)
         errors += compare("projection.csv", args.golden, out, ["segment", "scenario", "year"], money=True)
         errors += compare("collateral.csv", args.golden, out, ["segment", "scenario", "year"], money=True, ratio_prefix="ltv_")
+        if (args.golden / "off_balance.csv").exists():        # CR_SCEN_OFF_BS (scenario key off_balance)
+            errors += compare("off_balance.csv", args.golden, out, ["segment", "exposure_type", "scenario", "year"], money=True)
+            errors += compare("cr_scen_off_bs.csv", args.golden, out, ["RowNum", "Scenario", "Year"], money=True,
+                              abs_tol=2e-8)
         gs, es = json.loads((args.golden / "summary.json").read_text()), json.loads((out / "summary.json").read_text())
         for field in ("segments", "exposures"):
             if gs[field] != es[field]:
                 errors.append(f"summary {field}: engine {es[field]} vs golden {gs[field]}")
+        if "off_balance" in gs:
+            for field in ("items", "fallback_items", "unmatched_items", "customer_ccf_items"):
+                if gs["off_balance"][field] != es.get("off_balance", {}).get(field):
+                    errors.append(f"summary off_balance.{field}: engine {es.get('off_balance', {}).get(field)} vs golden "
+                                  f"{gs['off_balance'][field]}")
     for e in errors[:30]:
         print("  MISMATCH", e)
     print(f"{'FAILED' if errors else 'PASSED'}: {len(errors)} mismatches")

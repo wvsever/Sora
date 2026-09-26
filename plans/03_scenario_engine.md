@@ -144,6 +144,53 @@ Implemented in `src/collateral.cpp` (engine) and `tools/reference/sora_reference
 
 The reference dataset's allocated amounts are close to the exposure amounts, not to the collateral value, so LTVs are above 100% (DS-018 in `tests/data/DATASET_ISSUES.md`).
 
+## Off-balance-sheet exposures (CR_SCEN_OFF_BS)
+
+Implemented in `src/off_balance.cpp` (engine) and `tools/reference/sora_reference.py` (reference), following EBA 2027
+draft MN paras 78–82: nominal amounts and nominal amounts after CCF by stage and POCI, and provisions, for loan
+commitments, financial guarantees and other commitments given, projected "with the same logic and constraints" as
+on-balance exposures at portfolio level. Outputs `off_balance.csv` and `cr_scen_off_bs.csv`.
+
+1. **Scope.** Enabled by the scenario key `off_balance` (absent: nothing changes, so on-balance results do not depend
+   on it). Items are `sim_exposure` rows of `off_balance.exposure_types` (a subset of `loan_commitment`,
+   `financial_guarantee`, `other_commitment`) with an IFRS 9 stage, in the measurement and intragroup scope of
+   `scope`. Nominal = `off_balance_amount` (undrawn committed amount, guaranteed amount) at the reference-date FX rate.
+
+   ```yaml
+   off_balance:
+     exposure_types: [loan_commitment, financial_guarantee, other_commitment]
+     ccf_fallback: {loan_commitment: 0.4, financial_guarantee: 1.0, other_commitment: 0.5,
+                    unconditionally_cancellable: 0.1}
+   ```
+
+2. **Parameters.** An item takes the parameter path (starting point, satellite projection, customer segment and
+   exposure overlays) of the on-balance segment `LOANS|portfolio|bucket` of its counterparty: the on-balance portfolio
+   rules (a commitment has no CRE flag or household purpose, so NFC_*_OTHER and HH_OTHER) and the on-balance top-country
+   buckets. If that segment has no loans, the portfolio's `OTHER` bucket is used (OBS-001); if that is missing too,
+   the item is not projected (OBS-002, warning). Exposure-level customer parameters of the item apply as on-balance.
+3. **CCF.** Customer `ccf` (sim_risk_parameter or `--parameters`, `actual`/0; exposure row, then the segment
+   hierarchy, most specific first; OBS-003 counts them), else the scenario's regulatory fallback: CRR Art. 111(2)
+   buckets for Annex I items: financial guarantees (credit substitutes) 100%, loan commitments 40%, other commitments
+   (performance guarantees, documentary credits: medium risk) 50%, and 10% for loan and other commitments the
+   institution may cancel unconditionally at any time (`is_unconditionally_cancellable`; CRR3 10%, MN 2025 table on
+   Art. 495d). The CCF is static over the horizon (static balance sheet).
+4. **Stage flows and provisions.** Per item, with post-CCF amount `E = CCF × nominal`, the on-balance Boxes 3–9 apply
+   unchanged: `E` flows between stages with the segment's TR1-2, TR2-1, PD12M_S1/S2 (no cures from S3), S1/S2
+   provisions use the segment's PD × LGD and LRLT_S2, new S3 provisions LGD_S1/S2, the old S3 provision is
+   `max(E × LGD_S3, provision t0)` per item (no release), POCI and its provision are static, and the final adverse
+   year uses the 5/6–1/6 blend. The nominal amount follows the same stage flows (it carries no provision).
+5. **Starting provision.** `loss_allowance` of a facility covers its drawn and undrawn parts (SIM grain: one row per
+   facility). The off-balance provision is the undrawn share, `allowance × off_balance / (off_balance + GCA)`
+   (the whole allowance if both are 0). The drawn part of a commitment is on-balance and outside this module.
+6. **CR_SCEN_OFF_BS.** Groups (parameter segment × exposure type) aggregate to commitment type × counterparty sector
+   (CB, GG, CI, OFC, NFC, HH): per type a Sum row and six Pivot rows, then Total (22 rows), geography Total only (MN
+   para 79), for Actual and baseline/adverse years 1–3. Nominal before CCF is reported for projected years too
+   (MN para 81). EUR million.
+
+Open: the undrawn part of on-balance loans (`off_balance_amount` of `loan` rows, 13,619 amortised-cost loans in the
+reference SIM) and the drawn part of commitments (their GCA) are not yet projected; both need a decision on how FINREP F 09
+and CR_SCEN split a facility.
+
 ## Determinism
 
 The flow model is deterministic by construction.

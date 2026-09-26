@@ -34,6 +34,8 @@ build/release/sora inspect build/sim/20260630
 build/release/sora run build/sim/20260630 --scenario tests/scenarios/test_eba2025.yaml -o build/out
 #   -> segments.csv, parameters.csv, projection.csv, collateral.csv (LTV), cr_scen.csv (EBA CSV_CR_SCEN layout),
 #      summary.json, diagnostics.json
+#      with the scenario key off_balance: off_balance.csv (commitments and guarantees given, nominal and post-CCF)
+#      and cr_scen_off_bs.csv (EBA CSV_CR_SCEN_OFF_BS layout)
 #   add --parameters <file> to use customer risk parameters (plans/09_risk_parameters.md)
 
 # IRB REA through a regulatory calculator (here the stub): adds rea.csv and summary.json "rea"
@@ -76,7 +78,7 @@ It maps Vera's per-exposure PD/LGD (`pd12m_pit`, `lgd_ifrs9`, `lgd_s3`, `lrlt`) 
 `declared_stage`, passes `ccf`/`pd_reg`/`lgd_reg` through unchanged, and never fabricates a value: anything
 it cannot place is left empty and counted, never defaulted or clamped. See
 `python/sora_tools/vera_params.py` and `plans/09_risk_parameters.md`.
-
+
 
 ### Windows
 

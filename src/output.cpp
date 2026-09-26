@@ -126,6 +126,7 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
         write_cr_scen(d, s, *run.projection, dir / "cr_scen.csv", &coll);
     }
     if (run.rea) write_rea_csv(s, *run.rea, dir / "rea.csv");
+    if (run.off_balance) write_off_balance(d, s, *run.off_balance, dir);
 
     {
         auto f = open(dir / "summary.json");
@@ -154,6 +155,10 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
         if (run.rea) {
             f << ",\n  \"rea\": ";
             write_rea_summary(f, *run.rea);
+        }
+        if (run.off_balance) {
+            f << ",\n  \"off_balance\": ";
+            write_off_balance_summary(f, *run.off_balance);
         }
         f << "\n}\n";
     }

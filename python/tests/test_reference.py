@@ -131,7 +131,8 @@ def test_golden_results_are_reproducible(reference_sim, tmp_path):
     --out tests/golden/20260630"""
     ref.run(reference_sim, REPO / "tests" / "scenarios" / "test_eba2025.yaml", tmp_path, REPO)
     golden = REPO / "tests" / "golden" / "20260630"
-    for name in ("segments.csv", "parameters.csv", "projection.csv", "collateral.csv"):
+    for name in ("segments.csv", "parameters.csv", "projection.csv", "collateral.csv", "off_balance.csv",
+                 "cr_scen_off_bs.csv"):
         assert (tmp_path / name).read_text() == (golden / name).read_text(), name
     a, b = json.loads((tmp_path / "summary.json").read_text()), json.loads((golden / "summary.json").read_text())
     a.pop("sim_mapping_release"), b.pop("sim_mapping_release")
@@ -159,3 +160,56 @@ def test_golden_invariants():
     for r in csv.DictReader(open(golden / "parameters.csv")):
         assert float(r["pd12m_s1"]) + float(r["tr1_2"]) <= 1 + 1e-9
         assert float(r["pd12m_s2"]) + float(r["tr2_1"]) <= 1 + 1e-9
+
+
+def test_off_balance_ccf_precedence():
+    """Customer CCF: exposure row, then the segment hierarchy; else the regulatory fallback (CRR Art. 111(2))."""
+    fb = ref.DEFAULT_CCF
+    item = {"exposure_id": "CM-1", "exposure_type": "loan_commitment", "cancellable": False}
+    seg = "LOANS|NFC_SME_OTHER|BE"
+    assert ref.item_ccf(item, seg, fb, {}, {}) == (0.4, False)
+    assert ref.item_ccf({**item, "cancellable": True}, seg, fb, {}, {}) == (0.1, False)
+    assert ref.item_ccf({**item, "exposure_type": "other_commitment"}, seg, fb, {}, {}) == (0.5, False)
+    assert ref.item_ccf({**item, "exposure_type": "financial_guarantee", "cancellable": True}, seg, fb, {}, {}) == (1.0, False)
+    assert ref.item_ccf(item, seg, fb, {}, {"LOANS|ALL|ALL": 0.7}) == (0.7, True)
+    assert ref.item_ccf(item, seg, fb, {}, {"LOANS|ALL|ALL": 0.7, "LOANS|NFC_SME_OTHER|ALL": 0.6}) == (0.6, True)
+    assert ref.item_ccf(item, seg, fb, {"CM-1": 0.2}, {"LOANS|NFC_SME_OTHER|ALL": 0.6}) == (0.2, True)
+
+
+def test_cr_scen_off_bs_layout(tmp_path):
+    """22 rows per scenario and year; Sum rows add up the six sectors, Total the three commitment types."""
+    rows = []
+    for (seg, etype, v) in (("LOANS|HH_OTHER|BE", "loan_commitment", 1e6), ("LOANS|NFC_SME_OTHER|DE", "loan_commitment", 2e6),
+                            ("LOANS|CI|OTHER", "financial_guarantee", 4e6)):
+        for scen, year, _ in ref.OFF_BS_SLOTS:
+            r = dict.fromkeys(ref.OFF_BALANCE_FIELDS, 0.0)
+            r.update(segment=seg, exposure_type=etype, scenario=scen, year=year, nom_s1=v, exp_s1=v / 2, prov_stock_s1=v / 100)
+            rows.append(r)
+    ref.write_cr_scen_off_bs(tmp_path / "o.csv", rows, 2026)
+    out = list(csv.DictReader(open(tmp_path / "o.csv")))
+    assert len(out) == 7 * 22
+    first = {r["RowNum"]: r for r in out[:22]}
+    tot = "Total nominal amount before CCF (total NomAmount)"
+    assert float(first["1"][tot]) == 3.0 and first["1"]["Asset classes"] == "Loan commitments given"
+    assert float(first["7"][tot]) == 1.0 and first["7"]["Asset class 2"] == "Households"
+    assert float(first["6"][tot]) == 2.0 and float(first["11"][tot]) == 4.0        # NFC loan commitments, CI guarantees
+    assert float(first["22"][tot]) == 7.0 and float(first["22"]["Total nominal amount after CCF (total PostCCF)"]) == 3.5
+    assert float(first["22"]["Stock of provisions (Prov Stock)"]) == 0.07
+    assert [r["Year"] for r in out[::22]] == ["2026", "2027", "2028", "2029", "2027", "2028", "2029"]
+
+
+def test_golden_off_balance_invariants():
+    golden = REPO / "tests" / "golden" / "20260630"
+    rows = list(csv.DictReader(open(golden / "off_balance.csv")))
+    start = {(r["segment"], r["exposure_type"]): r for r in rows if r["scenario"] == "actual"}
+    nom = ("nom_s1", "nom_s2", "nom_s3_old", "nom_s3_new", "nom_poci")
+    post = ("exp_s1", "exp_s2", "exp_s3_old", "exp_s3_new", "exp_poci")
+    for r in rows:
+        s = start[(r["segment"], r["exposure_type"])]
+        for cols in (nom, post):                                            # static balance sheet
+            assert abs(sum(float(r[c]) for c in cols) - sum(float(s[c]) for c in cols)) < 0.05
+        assert float(r["prov_old_s3"]) >= float(s["prov_stock_s3"]) - 0.005   # no S3 release
+        assert float(r["exp_poci"]) == float(s["exp_poci"])                 # POCI static
+        assert all(float(r[p]) <= float(r[n]) + 0.005 for p, n in zip(post, nom))   # CCF <= 1
+    summary = json.loads((golden / "summary.json").read_text())["off_balance"]
+    assert summary["items"] > 0 and summary["unmatched_items"] == 0

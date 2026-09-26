@@ -33,6 +33,13 @@ Method (see plans/03_scenario_engine.md and plans/09_risk_parameters.md):
    for the macro key); other collateral is unchanged. Allocated amounts are converted at the reference-date FX
    rate; a NULL amount gets the market value pro rata to the GCA of the in-scope exposures the collateral is
    allocated to. LTV per t0 stage = t0 GCA of exposures with real-estate collateral / their collateral value.
+5. Off-balance items (scenario key `off_balance`, CR_SCEN_OFF_BS). Staged commitments of the configured exposure
+   types (same measurement and intragroup scope), nominal = off_balance_amount. Each item takes the parameter path of
+   the on-balance segment LOANS|portfolio|bucket of its counterparty (the portfolio's OTHER bucket if that segment
+   does not exist). CCF: customer `ccf` (sim_risk_parameter, actual/0, exposure row then segment hierarchy), else the
+   scenario's regulatory fallback (CRR Art. 111(2)). Post-CCF amount = CCF x nominal is projected with Boxes 3-9
+   exactly as on-balance exposures (starting provision = undrawn share of the facility's allowance, old S3 floor
+   per item); the nominal amount follows the same stage flows.
 """
 
 from __future__ import annotations
@@ -118,15 +125,19 @@ def load_exposures(con, cfg, manifest) -> list[dict]:
     cur = con.execute(sql)
     cols = [d[0] for d in cur.description]
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-    # Country buckets: top N by exposure (ties by country code), others OTHER.
-    by_country = defaultdict(float)
-    for r in rows:
-        by_country[r["country"]] += r["gca"]
-    top = sorted(by_country, key=lambda c: (-by_country[c], c))[: cfg["segmentation"]["top_countries"]]
+    top = top_countries(rows, cfg)
     for r in rows:
         r["bucket"] = r["country"] if r["country"] in top else "OTHER"
         r["segment"] = f"{r['instrument']}|{r['portfolio']}|{r['bucket']}"
     return rows
+
+
+def top_countries(rows, cfg) -> list[str]:
+    """Country buckets: top N by on-balance exposure (ties by country code); the others are OTHER."""
+    by_country = defaultdict(float)
+    for r in rows:
+        by_country[r["country"]] += r["gca"]
+    return sorted(by_country, key=lambda c: (-by_country[c], c))[: cfg["segmentation"]["top_countries"]]
 
 
 def parents(segment: str) -> list[str]:
@@ -433,6 +444,227 @@ def write_collateral(path: Path, ltv: dict):
                 w.writerow([s, sc, t, *(f"{x:.2f}" for x in v), *ratios])
 
 
+# ----------------------------------------------------------------------------------------- off-balance (CR_SCEN_OFF_BS)
+
+OFF_BALANCE_TYPES = ("loan_commitment", "financial_guarantee", "other_commitment")
+OFF_BALANCE_LABELS = {"loan_commitment": "Loan commitments given", "financial_guarantee": "Financial guarantees given",
+                      "other_commitment": "Other Commitments given"}
+OFF_BALANCE_SECTORS = (("CB", "Central banks"), ("GG", "General governments"), ("CI", "Credit institutions"),
+                       ("OFC", "Other financial corporations"), ("NFC", "Non-financial corporations"),
+                       ("HH", "Households"))
+# Regulatory fallback (CRR Art. 111(2) and Annex I buckets). `unconditionally_cancellable` applies to loan and
+# other commitments that the institution may cancel at any time (CRR3 10%, MN 2025 Table on Art. 495d).
+DEFAULT_CCF = {"loan_commitment": 0.4, "financial_guarantee": 1.0, "other_commitment": 0.5,
+               "unconditionally_cancellable": 0.1}
+NOMINAL = ("nom_s1", "nom_s2", "nom_s3_old", "nom_s3_new", "nom_poci")
+POST_CCF = ("exp_s1", "exp_s2", "exp_s3_old", "exp_s3_new", "exp_poci")
+OFF_BALANCE_FIELDS = (*NOMINAL, *POST_CCF, "flow_s1_s2", "flow_s2_s1", "flow_s1_s3", "flow_s2_s3",
+                      "prov_s1_s1", "prov_s2_s1", "prov_s1_s2", "prov_s2_s2", "prov_cum_s1_s3", "prov_cum_s2_s3",
+                      "prov_old_s3", "prov_stock_s1", "prov_stock_s2", "prov_stock_s3", "prov_stock_poci", "impairment")
+
+OFF_BALANCE_SQL = """
+WITH fx AS (
+    SELECT currency, CAST(rate_to_reporting AS DOUBLE) AS r FROM sim_fx_rate WHERE rate_date = DATE '{ref}'
+    UNION SELECT '{ccy}', 1.0
+)
+SELECT e.exposure_id, e.exposure_type,
+    CASE c.eba_sector
+        WHEN 'central_bank' THEN 'CB'
+        WHEN 'general_government' THEN 'GG'
+        WHEN 'credit_institution' THEN 'CI'
+        WHEN 'other_financial' THEN 'OFC'
+        WHEN 'non_financial_corporation' THEN
+            'NFC_' || CASE WHEN coalesce(c.is_sme, false) THEN 'SME' ELSE 'LARGE' END
+                   || CASE WHEN coalesce(e.is_cre, false) THEN '_CRE' ELSE '_OTHER' END
+        WHEN 'household' THEN
+            CASE WHEN e.household_purpose = 'house_purchase' THEN 'HH_HOUSE'
+                 WHEN e.household_purpose = 'consumption' THEN 'HH_CONS'
+                 ELSE 'HH_OTHER' END
+    END AS portfolio,
+    coalesce(e.country_of_risk, c.country_of_residence) AS country, e.stage,
+    CAST(coalesce(e.off_balance_amount, 0) AS DOUBLE) * fx.r AS nominal,
+    CAST(coalesce(e.gross_carrying_amount, 0) AS DOUBLE) AS drawn,
+    CAST(coalesce(e.off_balance_amount, 0) AS DOUBLE) AS undrawn,
+    CAST(coalesce(e.loss_allowance, 0) AS DOUBLE) * fx.r AS allowance,
+    coalesce(e.is_unconditionally_cancellable, false) AS cancellable
+FROM sim_exposure e
+JOIN sim_counterparty c USING (counterparty_id)
+JOIN fx ON fx.currency = e.currency
+WHERE e.measurement_category IN ({mc}) AND e.exposure_type IN ({et})
+  AND e.stage IN ('stage1', 'stage2', 'stage3', 'poci')
+  AND NOT ({excl} AND coalesce(e.is_intragroup, false))
+ORDER BY e.exposure_id
+"""
+
+
+def customer_ccf(sim: Path) -> tuple[dict, dict]:
+    """CCFs (scenario actual, year 0) from sim_risk_parameter, if the SIM has that table with a `ccf` column:
+    ({exposure_id: ccf}, {segment level key: ccf})."""
+    d = sim / "sim_risk_parameter"
+    if any(d.glob("**/*.parquet")):
+        src = f"read_parquet('{d}/**/*.parquet', hive_partitioning = false, union_by_name = true)"
+    elif any(d.glob("**/*.csv")):
+        src = f"read_csv('{d}/**/*.csv', header = true, all_varchar = true, hive_partitioning = false, union_by_name = true)"
+    else:
+        return {}, {}
+    con = duckdb.connect()
+    if "ccf" not in [r[0] for r in con.execute(f"DESCRIBE SELECT * FROM {src}").fetchall()]:
+        return {}, {}
+    by_exposure, by_level = {}, {}
+    for level, key, ccf in con.execute(f"""
+            SELECT CAST(level AS VARCHAR), CAST(key AS VARCHAR), CAST(ccf AS DOUBLE) FROM {src}
+            WHERE CAST(scenario AS VARCHAR) = 'actual' AND CAST(year AS BIGINT) = 0 AND ccf IS NOT NULL""").fetchall():
+        if not 0.0 <= ccf <= 1.0:
+            raise ValueError(f"ccf outside [0, 1] for {level} {key}")
+        (by_exposure if level == "exposure" else by_level)[key] = ccf
+    return by_exposure, by_level
+
+
+def item_ccf(item, segment, fallback, ccf_exposure, ccf_level) -> tuple[float, bool]:
+    """(CCF, from customer parameters): exposure row, then the segment hierarchy, else the regulatory fallback."""
+    if item["exposure_id"] in ccf_exposure:
+        return ccf_exposure[item["exposure_id"]], True
+    for k in parents(segment):
+        if k in ccf_level:
+            return ccf_level[k], True
+    if item["cancellable"] and item["exposure_type"] != "financial_guarantee":
+        return float(fallback["unconditionally_cancellable"]), False
+    return float(fallback[item["exposure_type"]]), False
+
+
+def project_off_balance(con, sim, cfg, manifest, top, segments, projected) -> tuple[list[dict], dict]:
+    """Off-balance items (EBA 2027 draft MN paras 78-82). Each item is projected with the parameters of the
+    on-balance loan segment of its counterparty (same portfolio rules and country bucket), with the same stage flow
+    and provision logic: the post-CCF amount (CCF x nominal) carries the flows and provisions, and the nominal
+    amount follows the same stage flows. Returns rows per segment, exposure type, scenario and year (including
+    the starting point as actual/0), and run statistics."""
+    ob = cfg["off_balance"]
+    types = ob["exposure_types"]
+    if any(t not in OFF_BALANCE_TYPES for t in types):
+        raise ValueError(f"off_balance.exposure_types must be among {OFF_BALANCE_TYPES}")
+    fallback = {**DEFAULT_CCF, **(ob.get("ccf_fallback") or {})}
+    if any(not 0.0 <= float(v) <= 1.0 for v in fallback.values()):
+        raise ValueError("off_balance.ccf_fallback values must be in [0, 1]")
+    q = lambda xs: ", ".join(f"'{x}'" for x in xs)  # noqa: E731
+    cur = con.execute(OFF_BALANCE_SQL.format(ref=manifest["reference_date"], ccy=manifest["reporting_currency"],
+                                             mc=q(cfg["scope"]["measurement_categories"]), et=q(types),
+                                             excl="true" if cfg["scope"]["exclude_intragroup"] else "false"))
+    cols = [d[0] for d in cur.description]
+    ccf_exposure, ccf_level = customer_ccf(sim)
+    known = set(segments)
+    groups: dict = {}
+    stats = {"items": 0, "fallback_items": 0, "unmatched_items": 0, "customer_ccf_items": 0}
+    for item in (dict(zip(cols, r)) for r in cur.fetchall()):
+        segment = f"LOANS|{item['portfolio']}|{item['country'] if item['country'] in top else 'OTHER'}"
+        if segment not in known:                 # no on-balance loans of that portfolio and country: its OTHER bucket
+            segment = f"LOANS|{item['portfolio']}|OTHER"
+            if segment not in known:             # no on-balance loan segment to take parameters from
+                stats["unmatched_items"] += 1
+                continue
+            stats["fallback_items"] += 1
+        ccf, customer = item_ccf(item, segment, fallback, ccf_exposure, ccf_level)
+        stats["items"] += 1
+        stats["customer_ccf_items"] += customer
+        g = groups.setdefault((segment, item["exposure_type"]), {
+            "post": {st: [0.0, 0.0] for st in (*STAGES, "poci")}, "nom": {st: [0.0, 0.0] for st in (*STAGES, "poci")},
+            "post_s3": [], "nom_s3": []})
+        st = item["stage"]
+        # The allowance of a facility covers its drawn and undrawn parts: the undrawn share is the off-balance
+        # provision (the drawn part is on-balance).
+        base = item["undrawn"] + item["drawn"]
+        allowance = item["allowance"] * (item["undrawn"] / base) if base > 0 else item["allowance"]
+        g["post"][st][0] += ccf * item["nominal"]
+        g["post"][st][1] += allowance
+        g["nom"][st][0] += item["nominal"]
+        if st == "stage3":
+            g["post_s3"].append((ccf * item["nominal"], allowance))
+            g["nom_s3"].append((item["nominal"], 0.0))
+    rows = []
+    for segment, etype in sorted(groups):
+        g = groups[(segment, etype)]
+        post, nom = g["post"], g["nom"]
+        start = dict.fromkeys(OFF_BALANCE_FIELDS, 0.0)
+        start.update(nom_s1=nom["stage1"][0], nom_s2=nom["stage2"][0], nom_s3_old=nom["stage3"][0], nom_poci=nom["poci"][0],
+                     exp_s1=post["stage1"][0], exp_s2=post["stage2"][0], exp_s3_old=post["stage3"][0],
+                     exp_poci=post["poci"][0], prov_old_s3=post["stage3"][1], prov_stock_s1=post["stage1"][1],
+                     prov_stock_s2=post["stage2"][1], prov_stock_s3=post["stage3"][1], prov_stock_poci=post["poci"][1])
+        rows.append({"segment": segment, "exposure_type": etype, "scenario": "actual", "year": 0, **start})
+        post_rows = project_segment(post, projected[segment], cfg, g["post_s3"])
+        nom_rows = project_segment(nom, projected[segment], cfg, g["nom_s3"])
+        for pr, nr in zip(post_rows, nom_rows):
+            rows.append({"segment": segment, "exposure_type": etype, "scenario": pr["scenario"], "year": pr["year"],
+                         **{n: nr[e] for n, e in zip(NOMINAL, POST_CCF)},
+                         **{k: pr[k] for k in OFF_BALANCE_FIELDS if k not in NOMINAL}})
+    return rows, stats
+
+
+def write_off_balance(path: Path, rows: list[dict]):
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(["segment", "exposure_type", "scenario", "year", *OFF_BALANCE_FIELDS])
+        for r in rows:
+            w.writerow([r["segment"], r["exposure_type"], r["scenario"], r["year"], *(f"{r[k]:.2f}" for k in OFF_BALANCE_FIELDS)])
+
+
+OFF_BS_COLUMNS = (
+    ("Total nominal amount before CCF (total NomAmount)", NOMINAL),
+    ("Performing nominal amount before CCF (Perf NomAmount)", ("nom_s1", "nom_s2")),
+    ("of which: stage 1 (NomAmount S1)", ("nom_s1",)),
+    ("of which: stage 2 (NomAmount S2)", ("nom_s2",)),
+    ("Non-performing nominal amount before CCF (NomAmount S3)", ("nom_s3_old", "nom_s3_new")),
+    ("POCI nominal amount before CCF (NomAmount POCI)", ("nom_poci",)),
+    ("Total nominal amount after CCF (total PostCCF)", POST_CCF),
+    ("Performing nominal amount after CCF (Perf PostCCF)", ("exp_s1", "exp_s2")),
+    ("of which: stage 1 (PostCCF S1)", ("exp_s1",)),
+    ("of which: stage 2 (PostCCF S2)", ("exp_s2",)),
+    ("Non-performing nominal amount after CCF (PostCCF S3)", ("exp_s3_old", "exp_s3_new")),
+    ("POCI nominal amount after CCF (PostCCF POCI)", ("exp_poci",)),
+    ("Stock of provisions (Prov Stock)", ("prov_stock_s1", "prov_stock_s2", "prov_stock_s3", "prov_stock_poci")),
+    ("of which: performing assets (Prov Stock Perf)", ("prov_stock_s1", "prov_stock_s2")),
+    ("of which: stage 1 (Prov Stock S1)", ("prov_stock_s1",)),
+    ("of which: stage 2 (Prov Stock S2)", ("prov_stock_s2",)),
+    ("of which: non-performing assets (Prov Stock S3)", ("prov_stock_s3",)),
+    ("of which: POCI (Prov Stock POCI)", ("prov_stock_poci",)),
+)
+OFF_BS_SLOTS = (("actual", 0, "Actual"), ("baseline", 1, "Baseline"), ("baseline", 2, "Baseline"),
+                ("baseline", 3, "Baseline"), ("adverse", 1, "Adverse"), ("adverse", 2, "Adverse"), ("adverse", 3, "Adverse"))
+
+
+def off_balance_sector(portfolio: str) -> str:
+    return "NFC" if portfolio.startswith("NFC") else "HH" if portfolio.startswith("HH") else portfolio
+
+
+def write_cr_scen_off_bs(path: Path, rows: list[dict], ref_year: int):
+    """EBA CSV_CR_SCEN_OFF_BS layout (2027 draft templates): 22 rows per scenario and year (per commitment type a
+    Sum row and six counterparty-sector rows, then Total), Total geography only, amounts in EUR million."""
+    cells = defaultdict(lambda: dict.fromkeys(OFF_BALANCE_FIELDS, 0.0))     # (scenario, year, type, sector) -> sums
+    for r in rows:
+        c = cells[(r["scenario"], r["year"], r["exposure_type"], off_balance_sector(r["segment"].split("|")[1]))]
+        for k in OFF_BALANCE_FIELDS:
+            c[k] += r[k]
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(["RowNum", "Pivot", "Geographical breakdown", "Scenario", "Year", "Portfolio", "Asset class 1",
+                    "Asset class 2", "Asset classes", *(h for h, _ in OFF_BS_COLUMNS)])
+        for scen, year, label in OFF_BS_SLOTS:
+            def emit(num, pivot, ac1, ac2, name, keys):
+                v = dict.fromkeys(OFF_BALANCE_FIELDS, 0.0)
+                for t, sector in keys:
+                    for k, x in cells.get((scen, year, t, sector), {}).items():
+                        v[k] += x
+                w.writerow([num, pivot, "Total", label, ref_year + year, "Off-balance sheet", ac1, ac2, name,
+                            *(f"{sum(v[k] for k in fs) / 1e6:.8f}" for _, fs in OFF_BS_COLUMNS)])
+
+            num = 0
+            for t in OFF_BALANCE_TYPES:
+                num += 1
+                emit(num, "Sum", OFF_BALANCE_LABELS[t], "", OFF_BALANCE_LABELS[t], [(t, c) for c, _ in OFF_BALANCE_SECTORS])
+                for code, name in OFF_BALANCE_SECTORS:
+                    num += 1
+                    emit(num, "Pivot", OFF_BALANCE_LABELS[t], name, name, [(t, code)])
+            emit(num + 1, "Sum", "Total", "", "Total", [(t, c) for t in OFF_BALANCE_TYPES for c, _ in OFF_BALANCE_SECTORS])
+
+
 # ----------------------------------------------------------------------------------------- main
 
 def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
@@ -515,6 +747,19 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
                                             ("prov_s3", "stage3", 1), ("prov_poci", "poci", 1))},
         "totals": {f"{sc}/{y}": {k: round(v, 2) for k, v in d.items()} for (sc, y), d in sorted(totals.items())},
     }
+
+    if cfg.get("off_balance"):                     # CR_SCEN_OFF_BS (optional; on-balance results are unaffected)
+        ob_rows, stats = project_off_balance(con, sim, cfg, manifest, top_countries(exposures, cfg), segments, projected)
+        write_off_balance(out / "off_balance.csv", ob_rows)
+        write_cr_scen_off_bs(out / "cr_scen_off_bs.csv", ob_rows, int(manifest["reference_date"][:4]))
+        ob_totals = defaultdict(lambda: dict.fromkeys(OFF_BALANCE_FIELDS, 0.0))
+        for r in ob_rows:
+            for k in OFF_BALANCE_FIELDS:
+                ob_totals[(r["scenario"], r["year"])][k] += r[k]
+        summary["off_balance"] = {
+            "exposure_types": list(cfg["off_balance"]["exposure_types"]), **stats,
+            "totals": {f"{sc}/{y}": {k: round(v, 2) for k, v in d.items()} for (sc, y), d in sorted(ob_totals.items())},
+        }
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     return summary
 

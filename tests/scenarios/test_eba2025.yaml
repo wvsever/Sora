@@ -12,6 +12,13 @@ scope:
   measurement_categories: [amortised_cost]
   exposure_types: [loan, finance_lease, debt_security]
   exclude_intragroup: true
+off_balance:                                # CR_SCEN_OFF_BS; measurement and intragroup scope as above
+  exposure_types: [loan_commitment, financial_guarantee, other_commitment]
+  ccf_fallback:                             # used when no customer CCF: CRR Art. 111(2) buckets (Annex I)
+    loan_commitment: 0.4
+    financial_guarantee: 1.0
+    other_commitment: 0.5
+    unconditionally_cancellable: 0.1        # loan/other commitments cancellable at any time (CRR3, Art. 495d)
 segmentation:
   top_countries: 10
 calibration:

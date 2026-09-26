@@ -195,6 +195,17 @@ int main(int argc, char** argv) {
                 return 1;
             }
         }
+        std::optional<OffBalanceResult> off_balance;   // CR_SCEN_OFF_BS (scenario key off_balance)
+        if (run && cfg.off_balance.enabled) {
+            Timer t("off-balance");
+            off_balance = project_off_balance(duck, d, seg, proj, sats, macro, cfg, ext.empty() ? nullptr : &ext, ext_source, a.workers);
+            if (off_balance->fallback_items)
+                diag.findings.push_back({"OBS-001", "info", "off-balance items without an on-balance loan segment of their country: parameters of the portfolio's OTHER bucket", off_balance->fallback_items});
+            if (off_balance->unmatched_items)
+                diag.findings.push_back({"OBS-002", "warning", "off-balance items without an on-balance loan segment of their portfolio: not projected", off_balance->unmatched_items});
+            if (off_balance->customer_ccf_items)
+                diag.findings.push_back({"OBS-003", "info", "off-balance items with a customer CCF", off_balance->customer_ccf_items});
+        }
         std::optional<ReaResult> rea;
         if (run && !a.calculator.url.empty()) {
             Timer t("calculator (IRB REA)");
@@ -206,7 +217,8 @@ int main(int argc, char** argv) {
                 return 1;
             }
         }
-        { Timer t("write outputs"); write_outputs({d, seg, cal, run ? &proj : nullptr, macro, cfg, diag, rea ? &*rea : nullptr}, a.out); }
+        { Timer t("write outputs"); write_outputs({d, seg, cal, run ? &proj : nullptr, macro, cfg, diag, rea ? &*rea : nullptr,
+                                  off_balance ? &*off_balance : nullptr}, a.out); }
         print_findings(diag);
         std::fprintf(stderr, "  %zu exposures, %zu segments -> %s (peak RSS %.1f MB)\n", seg.in_scope,
                      seg.segments.size(), a.out.string().c_str(), peak_rss_mb());
