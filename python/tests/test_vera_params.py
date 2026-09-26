@@ -196,3 +196,42 @@ def test_convert_row_is_deterministic_given_same_input():
     a = convert_row(row, stats_a, "actual", 0)
     b = convert_row(dict(row), stats_b, "actual", 0)
     assert a == b
+
+
+def _write_vera_csv_with_tr(path: Path, rows: list[dict[str, str]]) -> None:
+    cols = VERA_COLUMNS + ["tr1_2", "tr2_1", "tr3_1", "tr3_2"]
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=cols)
+        w.writeheader()
+        for r in rows:
+            w.writerow({c: r.get(c, "") for c in cols})
+
+
+def test_transition_rates_pass_through_when_vera_supplies_them(tmp_path):
+    src = tmp_path / "risk_parameters.csv"
+    _write_vera_csv_with_tr(src, [_base_row(declared_stage="stage2", pd12m_pit="0.09", tr1_2="0.03", tr2_1="0.20")])
+    out = tmp_path / "sim_risk_parameter.csv"
+    convert(src, out)
+    r = _read_out(out)[0]
+    assert r["pd12m_s2"] == "0.090000000"
+    assert r["tr1_2"] == "0.030000000" and r["tr2_1"] == "0.200000000"
+    assert r["tr3_1"] == "" and r["tr3_2"] == ""
+
+
+def test_an_export_without_transition_columns_still_converts(tmp_path):
+    src = tmp_path / "risk_parameters.csv"
+    _write_vera_csv(src, [_base_row(declared_stage="stage2", pd12m_pit="0.09")])
+    out = tmp_path / "sim_risk_parameter.csv"
+    convert(src, out)
+    r = _read_out(out)[0]
+    assert r["pd12m_s2"] == "0.090000000" and r["tr2_1"] == ""
+
+
+def test_supplied_pd_plus_transition_above_one_is_dropped_not_clamped(tmp_path):
+    src = tmp_path / "risk_parameters.csv"
+    _write_vera_csv_with_tr(src, [_base_row(declared_stage="stage2", pd12m_pit="0.7", tr2_1="0.4", lgd_ifrs9="0.2")])
+    out = tmp_path / "sim_risk_parameter.csv"
+    stats = convert(src, out)
+    r = _read_out(out)[0]
+    assert r["pd12m_s2"] == "" and r["tr2_1"] == ""
+    assert r["lgd_s2"] == "0.200000000"
