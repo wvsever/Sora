@@ -170,7 +170,7 @@ std::string csv(const std::string& s) {
 }  // namespace
 
 void write_cr_scen(const Dataset& d, const Segmentation& s, const Projection& p, const fs::path& file,
-                   const CollateralResult* collateral) {
+                   const CollateralResult* collateral, const PriorYear* prior) {
     const auto nseg = s.segments.size();
     constexpr std::size_t kSlots = 7;   // 0 = actual, 1..3 baseline, 4..6 adverse
     std::vector<std::array<Agg, kSlots>> seg(nseg);
@@ -242,28 +242,54 @@ void write_cr_scen(const Dataset& d, const Segmentation& s, const Projection& p,
     const char* scen_name[kSlots] = {"Actual", "Baseline", "Baseline", "Baseline", "Adverse", "Adverse", "Adverse"};
     const int year_off[kSlots] = {0, 1, 2, 3, 1, 2, 3};
     char buf[64];
+    // One template row. `known` (prior-year rows): exposure / provision cells are written only if known.
+    auto emit = [&](const Row& row, const std::string& geo, const char* scen, int year, const Agg& a, bool actual,
+                    const std::pair<bool, bool>* known) {
+        f << row.num << ',' << row.pivot << ',' << geo << ',' << scen << ',' << year << ',' << csv(row.portfolio) << ','
+          << csv(row.ac1) << ',' << csv(row.ac2) << ',' << csv(row.label);
+        for (const auto& c : columns()) {
+            Value v = c.get(a, actual);
+            if (known && v && !prior_cell_known(c.header, c.percent, known->first, known->second)) v.reset();
+            f << ',';
+            if (!v) continue;
+            if (c.percent) std::snprintf(buf, sizeof buf, "%.7f", *v * 100.0);
+            else if (std::string_view(c.header).find("Maturity") != std::string_view::npos) std::snprintf(buf, sizeof buf, "%.4f", *v);
+            else std::snprintf(buf, sizeof buf, "%.8f", *v / 1e6);
+            f << buf;
+        }
+        f << '\n';
+    };
+    auto in_row = [&](const Row& row, const std::string& geo, std::size_t i) {
+        const auto& sg = s.segments[i];
+        const bool geo_ok = geo == "Total" || (geo == "Other" ? sg.bucket == "OTHER" : sg.bucket == geo);
+        return geo_ok && row.match(sg.instrument, sg.portfolio);
+    };
+
+    // Prior-year Actual rows (stocks at the prior year-end in the t0 portfolios), before the starting point.
+    if (prior) {
+        std::vector<PriorStock> ps(nseg);
+        for (std::size_t i = 0; i < d.exposures.size(); ++i)
+            if (s.segment_of[i] >= 0) ps[static_cast<std::size_t>(s.segment_of[i])].add(*prior, i);
+        for (const auto& geo : geos) {
+            for (const auto& row : rows()) {
+                PriorStock st;
+                for (std::size_t i = 0; i < nseg; ++i)
+                    if (in_row(row, geo, i)) st.add(ps[i]);
+                Agg a;
+                a.exp_s1 = st.exp[0]; a.exp_s2 = st.exp[1]; a.exp_s3_old = st.exp[2]; a.exp_poci = st.exp[3];
+                a.prov_s1 = st.prov[0]; a.prov_s2 = st.prov[1]; a.prov_s3 = st.prov[2]; a.prov_poci = st.prov[3];
+                const std::pair<bool, bool> known{st.exposures_known(prior->available), st.provisions_known(prior->available)};
+                emit(row, geo, "Actual", prior->year, a, true, &known);
+            }
+        }
+    }
     for (std::size_t slot = 0; slot < kSlots; ++slot) {
         for (const auto& geo : geos) {
             for (const auto& row : rows()) {
                 Agg a;
-                for (std::size_t i = 0; i < nseg; ++i) {
-                    const auto& sg = s.segments[i];
-                    const bool geo_ok = geo == "Total" || (geo == "Other" ? sg.bucket == "OTHER" : sg.bucket == geo);
-                    if (geo_ok && row.match(sg.instrument, sg.portfolio)) a.add(seg[i][slot]);
-                }
-                f << row.num << ',' << row.pivot << ',' << geo << ',' << scen_name[slot] << ','
-                  << (ref_year + year_off[slot]) << ',' << csv(row.portfolio) << ',' << csv(row.ac1) << ','
-                  << csv(row.ac2) << ',' << csv(row.label);
-                for (const auto& c : columns()) {
-                    const Value v = c.get(a, slot == 0);
-                    f << ',';
-                    if (!v) continue;
-                    if (c.percent) std::snprintf(buf, sizeof buf, "%.7f", *v * 100.0);
-                    else if (std::string_view(c.header).find("Maturity") != std::string_view::npos) std::snprintf(buf, sizeof buf, "%.4f", *v);
-                    else std::snprintf(buf, sizeof buf, "%.8f", *v / 1e6);
-                    f << buf;
-                }
-                f << '\n';
+                for (std::size_t i = 0; i < nseg; ++i)
+                    if (in_row(row, geo, i)) a.add(seg[i][slot]);
+                emit(row, geo, scen_name[slot], ref_year + year_off[slot], a, slot == 0, nullptr);
             }
         }
     }

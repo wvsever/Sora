@@ -194,6 +194,73 @@ follows), MN 2027 draft section 2.3.8.
    the sectors add up to TOTAL (`python/tests/test_engine.py`). The golden test compares every cell with the reference
    to 1 cent (EUR million) and 1e-9 (ratios).
 
+## Prior-year Actual rows (CR_SCEN, CR_SECTOR)
+
+Implemented in `src/prior_year.cpp` (engine: `prior_year.csv`, the first rows of `cr_scen.csv` and `cr_sector.csv`,
+summary `prior_year`, diagnostics PRY-000..006) and `tools/reference/sora_reference.py` (reference, golden
+`tests/golden/20260630/prior_year.csv` and the `cr_sector.csv` prior-year rows).
+
+**What the templates require** (EBA 2027 draft; 2025 final in brackets):
+
+| Source | Requirement | Sora |
+|---|---|---|
+| MN para 71, Table 2 (2025: para 112, Table 6) | Historical values in CSV_CR_SCEN for the end of 2025 and of 2026 (the year before the starting point and the starting point), "according to the portfolios applicable on 31 December 2026"; historically observed amounts under the accounting standard, provisions net of releases incl. overlays. Table 2: Exp S1, Exp S2, Exp S3, Exp POCI, Prov Stock and its S1, S2, S3, POCI parts | Prior-year rows with these stocks, each exposure in its t0 segment (portfolio and country bucket) and NACE sector |
+| MN para 71 | Overlays stand-alone only for 2026 | Blank (as for t0: the SIM has no overlays) |
+| MN para 73, Table 3 | Starting-point parameters (TRs, LGDs, LRLT S2) for 2026 only | Parameters blank in the prior-year rows |
+| MN para 74 | Exposure and provision flows are not reported in the starting point | Flows blank. The 2025 methodology (para 112-113, Table 6) asked for historically observed within-year flows, Prov SX-S3 and Prov old S3 for both historical years; the 2027 draft dropped them. The draft template still leaves the 2026 flow cells white (contradicting para 74); Sora follows the MN |
+| TG para 31 | Fewer columns for the historical values of 2025 and 2026 (MN Tables 2 and 3) | As above |
+| Draft templates | CSV_CR_SCEN and CSV_CR_SECTOR have `Actual 2025` and `Actual 2026` rows; in `Actual 2025` only Exp S1/S2/S3 (existing and cumulative new)/POCI and Prov Stock S1/S2/S3/POCI are input cells, totals and coverage ratios are formulas, everything else is grey. CSV_CR_SCEN_OFF_BS has `Actual 2026` only | Same cells (all S3 is existing S3, as at t0; coverage ratios computed); ECB benchmark and sectoral-model shares 0 as for t0. No prior-year rows off-balance |
+| MN para 96, TG paras 43, 46 | CR_SECTOR: CR_SCEN definitions, historical and projected information per NACE section | The same stocks by sector; TOTAL = CR_SCEN rows 6 + 13 |
+
+**Which year is the prior year.** The starting point is labelled with the reference date's year (`Actual 2026` for
+30 June 2026) and projection year t with `ref_year + t`. The prior-year rows are the stocks at **31 December of the year
+before the reference date's year**, labelled with that year (`Actual 2025` = 31 Dec 2025). Reasons: the template's
+historical row is a year-end stock (MN para 71, "the end of 2025"), the one supervisors reconcile with year-end FINREP;
+for the EBA's own starting point (31 December) this is exactly the prior year-end (t0 − 12 months), so a real
+submission is unaffected; and the reference data support it (at 31 Dec 2025 every loan has an amount and there are FX
+rates, at 30 June 2025 only 6,202 of 30,431 loans have an amount and there are no FX rates). With a mid-year reference
+date the two Actual rows are only six months apart, so their difference is not an annual change. The scenario key
+`prior_year_end: YYYY-MM-DD` sets another month end in an earlier calendar year (e.g. `2025-06-30` for t0 − 12 months);
+the rows carry its year.
+
+**Method** (per in-scope t0 exposure with a `sim_stage_history` row at the date; exposures without one were not on the
+balance sheet then):
+
+1. *Stage*: the history stage at that date (not the t0 stage).
+2. *Exposure*: `gross_carrying_amount`, else `principal_outstanding` (optional SIM column added for this, a proxy
+   without accrued interest; PRY-002), converted at the date's `sim_fx_rate`.
+3. *Provision*: `loss_allowance` at the date's FX rate. A facility whose undrawn part is projected off-balance
+   (`include_loan_undrawn`, `commitment_drawn_on_balance`) keeps the drawn share, as at t0 (Off-balance-sheet exposures,
+   item 7): `allowance × amount / (amount + undrawn)` with the history's `off_balance_amount`, else the t0 share
+   `GCA / (GCA + undrawn)` (PRY-005; the reference SIM has no undrawn history for loans).
+4. *Nothing is estimated*: an exposure without an amount (PRY-003) blanks the exposure cells and coverage ratios of every
+   row it belongs to (its provision is known and stays); one without an FX rate at the date (PRY-004) also blanks the
+   provision cells. Without history rows at the date (PRY-001) all prior-year cells are blank.
+5. *Not attributable*: history rows of exposures that are not in `sim_exposure` (derecognised before t0) have no t0
+   portfolio and are only counted (PRY-006, with their allowance); those out of the t0 scope (other measurement, type,
+   intragroup, commitments without a drawn part) are not in CR_SCEN's scope.
+
+**Outputs.** `prior_year.csv`: per t0 segment the date, contracts, `missing_amount`, `missing_fx` and the stocks
+`exp_*`/`prov_*` (EUR, blank as in item 4). `summary.json` `prior_year`: date, template year, counts (history rows,
+exposures, amounts from GCA / principal, missing, allowance splits, out of scope, not in `sim_exposure`) and stock totals
+(`null` unless every exposure is known). `cr_scen.csv` / `cr_sector.csv`: the prior-year rows come first (geographies and
+rows as for t0). The per-exposure work is serial and the results are bit-identical for any `--workers N`.
+
+**Reference data (CPPBank, 31 Dec 2025).** 41,190 in-scope t0 exposures have a history row: all 38,552 loans have an
+amount (11,234 from the ledger, 27,318 from the principal proxy: the mapping takes the quarterly
+`contract_rate_principal_history` snapshot of 30 Dec 2025, and the original principal for 80 loans first drawn on
+31 Dec 2025; DS-046); debt securities, finance leases and the drawn parts of commitments have no history amounts, so
+the rows containing them (all debt securities, CI, GG, OFC, NFC and HH "other" loans, the totals) have blank exposure
+cells. House purchase, consumption and CRE loans are complete. Provisions are complete; their S3 and POCI stocks are
+about three times t0's because every write-off of the 60-month history happens in June 2026 (DS-047). Applied at
+30 June 2026 the method reproduces `segments.csv` to the cent for the complete portfolios (`python/tests`).
+
+**Not derivable / not implemented.** Exposure amounts of debt securities, finance leases and drawn commitments at the
+prior year-end (not in the export); derecognised exposures (not in `sim_exposure`, no counterparty: 962 expired
+commitments and 61 matured leases in the reference data, all with zero allowance); historically observed flows and
+old/new S3 provisions (not required by the 2027 draft; derivable from the stage history per exposure if a later
+template asks again); LTV and maturity at the prior year-end (grey in the template).
+
 ## Sectoral (GVA) satellites
 
 Implemented in `src/scenario.cpp`, `src/projection.cpp` (engine) and `tools/reference/sora_reference.py` (reference),

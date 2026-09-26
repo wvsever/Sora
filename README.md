@@ -33,7 +33,9 @@ ctest --test-dir build/release --output-on-failure          # unit tests + golde
 build/release/sora inspect build/sim/20260630
 build/release/sora run build/sim/20260630 --scenario tests/scenarios/test_eba2025.yaml -o build/out
 #   -> segments.csv, parameters.csv, projection.csv, collateral.csv (LTV), cr_scen.csv (EBA CSV_CR_SCEN layout),
-#      cr_sector.csv (EBA CSV_CR_SECTOR: NFC by NACE section), summary.json, diagnostics.json
+#      cr_sector.csv (EBA CSV_CR_SECTOR: NFC by NACE section), summary.json, diagnostics.json;
+#      CR_SCEN and CR_SECTOR start with the prior-year Actual rows (stocks at 31 Dec of the year before the
+#      reference date's year from sim_stage_history, prior_year.csv; scenario key prior_year_end; blank where not derivable)
 #      with the scenario key off_balance: off_balance.csv (commitments and guarantees given, nominal and post-CCF)
 #      and cr_scen_off_bs.csv (EBA CSV_CR_SCEN_OFF_BS layout); off_balance.include_loan_undrawn adds the undrawn
 #      part of loans (loan commitments given), off_balance.commitment_drawn_on_balance puts the drawn part of

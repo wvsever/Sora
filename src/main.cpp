@@ -245,6 +245,26 @@ int main(int argc, char** argv) {
             if (off_balance->commitment_drawn_exposures)
                 diag.findings.push_back({"OBS-005", "info", "drawn parts of commitments projected on-balance (loans and advances)", off_balance->commitment_drawn_exposures});
         }
+        // Prior-year Actual rows of CR_SCEN / CR_SECTOR: stocks at the prior year-end from the stage history.
+        std::optional<PriorYear> prior;
+        if (run) {
+            Timer t("prior year-end");
+            prior = load_prior_year(duck, d, seg, cfg.scope, prior_year_end(d.manifest.reference_date, cfg.prior_year_end));
+            if (!prior->available)
+                diag.findings.push_back({"PRY-001", "warning", "no stage history at the prior year-end " + prior->date + ": prior-year rows blank", 0});
+            else
+                diag.findings.push_back({"PRY-000", "info", "exposures in scope with stage history at the prior year-end " + prior->date, prior->exposures});
+            if (prior->amount_principal)
+                diag.findings.push_back({"PRY-002", "info", "prior year-end exposure from principal_outstanding (no gross carrying amount)", prior->amount_principal});
+            if (prior->missing_amount)
+                diag.findings.push_back({"PRY-003", "warning", "exposures without an amount at the prior year-end: exposure cells of their rows blank", prior->missing_amount});
+            if (prior->missing_fx)
+                diag.findings.push_back({"PRY-004", "warning", "exposures without an FX rate at the prior year-end: exposure and provision cells of their rows blank", prior->missing_fx});
+            if (prior->allowance_split_t0_share)
+                diag.findings.push_back({"PRY-005", "info", "facilities without undrawn history: prior-year allowance split with the t0 drawn share", prior->allowance_split_t0_share});
+            if (prior->not_in_sim_exposure)
+                diag.findings.push_back({"PRY-006", "info", "stage history rows at the prior year-end of exposures not in sim_exposure (derecognised): no t0 portfolio, not reported", prior->not_in_sim_exposure});
+        }
         std::optional<ReaResult> rea;
         if (run && !a.calculator.url.empty()) {
             Timer t("calculator (IRB REA)");
@@ -257,7 +277,7 @@ int main(int argc, char** argv) {
             }
         }
         { Timer t("write outputs"); write_outputs({d, seg, cal, run ? &proj : nullptr, macro, cfg, diag, rea ? &*rea : nullptr,
-                                  off_balance ? &*off_balance : nullptr}, a.out); }
+                                  off_balance ? &*off_balance : nullptr, prior ? &*prior : nullptr}, a.out); }
         print_findings(diag);
         std::fprintf(stderr, "  %zu exposures, %zu segments -> %s (peak RSS %.1f MB)\n", seg.in_scope,
                      seg.segments.size(), a.out.string().c_str(), peak_rss_mb());

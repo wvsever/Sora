@@ -11,10 +11,13 @@
 
 #include <filesystem>
 
+#include "sora/prior_year.hpp"
 #include "sora/projection.hpp"
 
 namespace sora {
 
-void write_cr_sector(const Dataset& d, const Segmentation& s, const Projection& p, const std::filesystem::path& file);
+// With `prior`, the prior-year Actual rows (stocks at the prior year-end, prior_year.hpp) come first.
+void write_cr_sector(const Dataset& d, const Segmentation& s, const Projection& p, const std::filesystem::path& file,
+                     const PriorYear* prior = nullptr);
 
 }  // namespace sora

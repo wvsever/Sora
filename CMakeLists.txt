@@ -35,6 +35,7 @@ add_library(sora_core
   src/off_balance.cpp
   src/benchmark.cpp
   src/validation.cpp
+  src/prior_year.cpp
 )
 target_include_directories(sora_core PUBLIC include)
 target_link_libraries(sora_core PUBLIC sora::duckdb PRIVATE sora::ryml)
