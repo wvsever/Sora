@@ -11,7 +11,7 @@ grain: >-
   product. Do not also report the undrawn part as a separate row.
 primary_key: [exposure_id]
 partition_by: [entity_id]
-required_by: [core, credit]
+required_by: [core, credit, nii]
 columns:
   exposure_id:
     type: key
@@ -141,8 +141,19 @@ columns:
   next_repricing_date:
     type: date
     required: false
-    description: Next date the rate resets (floating) or is renegotiated (fixed with a reset). NULL if fixed to maturity.
+    description: >-
+      Next date the rate resets (floating) or is renegotiated (fixed with a reset; for `mixed`, the end of the
+      initial fixed period). NULL if fixed to maturity. For floating contracts with a NULL value the NII module
+      rolls `repricing_frequency_months` forward from `origination_date`.
     example: "2026-09-30"
+  repricing_frequency_months:
+    type: integer
+    required: false
+    description: >-
+      Reset frequency of the reference rate of floating (and mixed, after the fixed period) contracts in months,
+      normally the index tenor (3 for EURIBOR_3M). Used by the NII module (EBA MN 2025 para 358(b)).
+    range: [1, null]
+    example: "3"
   amortisation_type:
     type: string
     required: false
@@ -248,6 +259,10 @@ checks:
     severity: warning
     description: Stage 3 exposures are credit-impaired.
     sql: "stage <> 'stage3' OR is_credit_impaired IS NULL OR is_credit_impaired"
+  - id: EXP-009
+    severity: warning
+    description: Floating-rate on-balance exposures state their reset frequency (NII module).
+    sql: "coalesce(interest_rate_type, 'fixed') <> 'floating' OR exposure_type NOT IN ('loan','debt_security','finance_lease') OR repricing_frequency_months IS NOT NULL"
 table_checks:
   - id: EXP-101
     severity: error

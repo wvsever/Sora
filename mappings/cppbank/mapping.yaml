@@ -17,6 +17,8 @@ sources:
   tables:
     entity: { path: reference/entity.csv }
     fx_rate: { path: reference/fx_rate.csv }
+    risk_free_curve: { path: reference/risk_free_curve.csv }
+    credit_spread_curve: { path: reference/credit_spread_curve.csv }
     counterparty:
     counterparty_rating:
     contract_loan:
@@ -32,6 +34,8 @@ sources:
     contract_default_cure_event:
     contract_event:
     contract_recovery_cashflow:
+    contract_deposit:
+    contract_debt_issued:
 
 # Execution order: later SQL files may reference earlier SIM tables.
 tables:
@@ -46,3 +50,6 @@ tables:
   - sim_stage_history
   - sim_credit_event
   - sim_recovery_flow
+  - sim_deposit
+  - sim_debt_issued
+  - sim_rate_curve

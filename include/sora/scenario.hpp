@@ -51,6 +51,13 @@ struct SectorSatelliteConfig {
     std::vector<std::string> gva_fallback{"EU"};
 };
 
+// Net interest income under the static balance sheet (scenario key `nii`; nii.hpp, plans/13_nii.md).
+struct NiiConfig {
+    bool enabled = false;
+    std::string own_rating;          // S&P rating of the bank for the Box 23 idiosyncratic shock; empty = no shock
+    int new_business_months = 12;    // new business: positions originated in these months before the reference date
+};
+
 struct ScenarioConfig {
     std::string name;
     std::filesystem::path macro_path;
@@ -66,7 +73,12 @@ struct ScenarioConfig {
     OffBalanceConfig off_balance;
     BenchmarkConfig benchmark;
     SectorSatelliteConfig sector_satellites;
+    NiiConfig nii;
 };
+
+// EBA MN 2025 Box 23: shock to the idiosyncratic funding component under the adverse scenario (bps) for an S&P
+// rating of the bank (AAA .. CC-); nullopt for anything else.
+std::optional<int> idiosyncratic_shock_bps(const std::string& rating);
 
 // Relative paths in the YAML resolve against `base_dir` (the repository or working directory).
 ScenarioConfig load_scenario(const std::filesystem::path& yaml, const std::filesystem::path& base_dir);

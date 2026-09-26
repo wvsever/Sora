@@ -1,0 +1,86 @@
+name: sim_rate_curve
+description: >-
+  Interest rate curves at the reference date: the risk-free (reference) curve per currency, and credit spread
+  curves per currency, issuer sector, rating band and seniority. The NII module splits every rate into its
+  reference-rate and margin components against the risk-free curve (EBA MN 2025 paras 351, 380-381); the credit
+  spread curves are kept for the funding spread module. Optional: without a risk-free curve for a currency, the
+  NII module uses the macro scenario's starting-point swap curve of that currency.
+grain: One row per curve and tenor.
+primary_key: [curve_id, tenor_months]
+required_by: [nii]
+columns:
+  curve_id:
+    type: key
+    required: true
+    description: Curve identifier. One curve per curve type, currency and (for spreads) sector, rating band and seniority.
+    example: RF-EUR
+  curve_type:
+    type: enum
+    enum: curve_type
+    required: true
+    description: Risk-free curve or credit spread curve.
+    example: risk_free
+  currency:
+    type: currency
+    required: true
+    description: Currency of the curve.
+    example: EUR
+  tenor_months:
+    type: integer
+    required: true
+    description: Tenor of the point in months (3 = 3 months, 120 = 10 years). The engine interpolates linearly between tenors and holds the shortest and longest tenor flat beyond the curve (MN 2025 para 374).
+    range: [1, null]
+    example: "12"
+  rate:
+    type: rate
+    required: true
+    description: >-
+      Risk-free curves: the zero or par swap rate at the tenor (money-market rates up to 1 year, swap rates
+      against 6-month money-market rates beyond, MN 2025 para 351). Credit spread curves: the spread over the
+      risk-free rate at the tenor. Per annum, decimal fraction; may be negative.
+    example: "0.025397208"
+  sector:
+    type: string
+    required: false
+    description: Issuer sector of a credit spread curve (NULL for risk-free curves).
+    allowed: [sovereign, financial, corporate]
+    example: financial
+  rating_band:
+    type: string
+    required: false
+    description: Rating band of a credit spread curve (NULL for risk-free curves).
+    allowed: [investment_grade, high_yield]
+    example: investment_grade
+  seniority:
+    type: string
+    required: false
+    description: Seniority of a credit spread curve (NULL for risk-free curves).
+    allowed: [senior, non_senior]
+    example: senior
+checks:
+  - id: CRV-001
+    severity: error
+    description: Risk-free curves have no sector, rating band or seniority; credit spread curves have all three.
+    sql: "(curve_type = 'risk_free') = (sector IS NULL AND rating_band IS NULL AND seniority IS NULL) AND (curve_type = 'risk_free' OR (sector IS NOT NULL AND rating_band IS NOT NULL AND seniority IS NOT NULL))"
+table_checks:
+  - id: CRV-101
+    severity: error
+    description: A curve id has one curve type, currency, sector, rating band and seniority.
+    violations_sql: |
+      SELECT curve_id FROM sim_rate_curve GROUP BY curve_id
+      HAVING count(DISTINCT (curve_type, currency, coalesce(sector, ''), coalesce(rating_band, ''), coalesce(seniority, ''))) > 1
+  - id: CRV-102
+    severity: error
+    description: At most one risk-free curve per currency.
+    violations_sql: |
+      SELECT currency FROM sim_rate_curve WHERE curve_type = 'risk_free' GROUP BY currency HAVING count(DISTINCT curve_id) > 1
+  - id: CRV-103
+    severity: warning
+    description: Every currency of deposits, debt issued and on-balance exposures has a risk-free curve (else the NII module uses the scenario's starting-point swap curve).
+    violations_sql: |
+      SELECT DISTINCT currency FROM (
+          SELECT currency FROM sim_deposit
+          UNION SELECT currency FROM sim_debt_issued
+          UNION SELECT currency FROM sim_exposure WHERE exposure_type IN ('loan', 'debt_security', 'finance_lease'))
+      WHERE currency NOT IN (SELECT currency FROM sim_rate_curve WHERE curve_type = 'risk_free')
+        AND EXISTS (SELECT 1 FROM sim_rate_curve)

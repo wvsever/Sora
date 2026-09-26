@@ -4,7 +4,7 @@
 Every business key (columns of SIM type `key`: exposure_id, counterparty_id, collateral_id, guarantee_id,
 group_id and the foreign keys to them) gets a replica suffix `~<r>`, so referential integrity holds within
 each replica. Replica 0 keeps the original keys, so a 1x "scaled" copy equals the source. Entity ids stay
-unchanged (the replicas are more business in the same legal entities). `sim_entity` and `sim_fx_rate` are
+unchanged (the replicas are more business in the same legal entities). `sim_entity`, `sim_fx_rate` and `sim_rate_curve` are
 copied unchanged. `sim_risk_parameter` rows at level `exposure` are replicated with the suffixed key;
 segment-level rows are kept once. LEIs are kept for replica 0 only (NULL for the others) so they stay unique.
 
@@ -29,7 +29,7 @@ import yaml
 
 REPO = Path(__file__).resolve().parent.parent
 SCHEMA_DIR = REPO / "schemas" / "sim" / "tables"
-UNCHANGED = {"sim_entity", "sim_fx_rate"}
+UNCHANGED = {"sim_entity", "sim_fx_rate", "sim_rate_curve"}   # dimensions and market data
 ENTITY_KEYS = {"entity_id", "parent_entity_id"}
 SUFFIX = "~"
 

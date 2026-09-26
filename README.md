@@ -42,6 +42,8 @@ build/release/sora run build/sim/20260630 --scenario tests/scenarios/test_eba202
 #      10% rule per pivot asset class, sovereigns) and benchmark parameters in parameters.csv (source benchmark)
 #      with the scenario key sector_satellites: NFC exposures projected with sectoral (GVA) satellites by NACE sector,
 #      sector_parameters.csv, CR_SECTOR columns 1-2 (share of exposure with sectoral models)
+#      with the scenario key nii: net interest income under the static balance sheet (EBA MN ch. 4, plans/13_nii.md),
+#      nii.csv (by CSV_NII_CALC row, currency, rate type, performing status) and summary.json "nii" (Box 22 cap)
 #   add --parameters <file> to use customer risk parameters (plans/09_risk_parameters.md)
 
 # IRB REA through a regulatory calculator (here the stub): adds rea.csv and summary.json "rea"
@@ -131,14 +133,14 @@ A scenario may combine multiple shocks and apply them by country, sector, portfo
 
 ## Reference methodology
 
-The primary target is the EBA EU-wide stress test credit-risk methodology: the 2025 final and 2027 draft methodological notes in `docs/`. The engine projects IFRS 9 stage flows and provisions over a 3-year horizon, under baseline and adverse macro scenarios, from 12-month point-in-time starting-point parameters per portfolio segment. See `plans/03_scenario_engine.md` and `plans/09_risk_parameters.md`.
+The primary target is the EBA EU-wide stress test credit-risk methodology: the 2025 final and 2027 draft methodological notes in `docs/`. The engine projects IFRS 9 stage flows and provisions over a 3-year horizon, under baseline and adverse macro scenarios, from 12-month point-in-time starting-point parameters per portfolio segment. See `plans/03_scenario_engine.md` and `plans/09_risk_parameters.md`. Net interest income follows the MN NII chapter (reference-rate and margin projections, pass-through constraints, static balance sheet): `plans/13_nii.md`.
 
 ## Inputs
 
 | Input | Location | Notes |
 |---|---|---|
 | Bank data in the Sora Input Model (SIM) | Customer, mapped with SQL | Documented schema in `schemas/sim/`. The reference source is `tests/data/20260630.7z`, mapped by `mappings/cppbank/`. See `plans/10_input_model_and_mapping.md`. |
-| Macro scenario | `docs/` (ESRB/ECB xlsx) | Converted to a normalised CSV by `tools/scenario_import` |
+| Macro scenario | `docs/` (ESRB/ECB xlsx) | Converted to a normalised CSV by `tools/scenario_import` (GDP, unemployment, property prices, sectoral GVA, swap curves and long-term rates for NII) |
 | Starting-point PD / TR / LGD / LR | Customer model output, or `sora calibrate` | Not present in the dataset itself. For the CPPBank demo it is derived by `baselcalculator` ("Vera") from the same book and converted with `sora-tools vera-params` (`tools/New-SoraDataset.ps1`). See `plans/09_risk_parameters.md`. |
 | Satellite models | Customer | Macro → parameter sensitivities per segment (synthetic in tests: `tests/params/synthetic_satellites.csv`); for NFCs optionally per NACE sector on the ESRB real GVA paths (scenario key `sector_satellites`, synthetic: `tests/params/synthetic_sector_satellites.csv`). See `plans/03_scenario_engine.md`. |
 | ECB benchmark parameters | Customer (received from ECB, confidential) | Loaded in Sora's benchmark format with the scenario key `benchmark_parameters` and applied by the EBA rule (10% model coverage per pivot asset class, sovereigns mandatory, no adjustment). Synthetic in tests: `tests/params/synthetic_ecb_benchmarks.csv`. See `plans/09_risk_parameters.md`. |
@@ -266,7 +268,8 @@ sora/
     ├── 09_risk_parameters.md
     ├── 10_input_model_and_mapping.md
     ├── 11_integrations.md
-    └── 12_technology_stack.md
+    ├── 12_technology_stack.md
+    └── 13_nii.md
 ```
 
 ## Non-goals

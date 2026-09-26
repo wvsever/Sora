@@ -245,6 +245,23 @@ int main(int argc, char** argv) {
             if (off_balance->commitment_drawn_exposures)
                 diag.findings.push_back({"OBS-005", "info", "drawn parts of commitments projected on-balance (loans and advances)", off_balance->commitment_drawn_exposures});
         }
+        std::optional<nii::NiiResult> nii_result;   // net interest income (scenario key nii)
+        if (run && cfg.nii.enabled) {
+            Timer t("nii");
+            nii_result = project_nii(duck, d, seg, proj, macro, cfg, a.workers);
+            const auto& n = *nii_result;
+            diag.findings.push_back({"NII-000", "info", "NII positions: assets, deposits and debt securities issued",
+                                     n.assets + n.deposits + n.debt_issued});
+            if (n.missing_rate) diag.findings.push_back({"NII-001", "warning", "NII positions without an interest rate: 0 assumed", n.missing_rate});
+            if (n.floating_without_frequency)
+                diag.findings.push_back({"NII-002", "warning", "floating NII positions without a reset frequency: monthly resets assumed", n.floating_without_frequency});
+            if (n.term_fallback)
+                diag.findings.push_back({"NII-003", "warning", "NII positions without a positive original term: replaced every 365 days", n.term_fallback});
+            if (n.new_business_fallback_cells)
+                diag.findings.push_back({"NII-004", "info", "NII portfolios without new business: new business margin = stock margin (MN para 409)", n.new_business_fallback_cells});
+            if (n.own_rating.empty())
+                diag.findings.push_back({"NII-005", "warning", "nii.own_rating not set: no idiosyncratic funding shock (Box 23)", 0});
+        }
         std::optional<ReaResult> rea;
         if (run && !a.calculator.url.empty()) {
             Timer t("calculator (IRB REA)");
@@ -257,7 +274,7 @@ int main(int argc, char** argv) {
             }
         }
         { Timer t("write outputs"); write_outputs({d, seg, cal, run ? &proj : nullptr, macro, cfg, diag, rea ? &*rea : nullptr,
-                                  off_balance ? &*off_balance : nullptr}, a.out); }
+                                  off_balance ? &*off_balance : nullptr, nii_result ? &*nii_result : nullptr}, a.out); }
         print_findings(diag);
         std::fprintf(stderr, "  %zu exposures, %zu segments -> %s (peak RSS %.1f MB)\n", seg.in_scope,
                      seg.segments.size(), a.out.string().c_str(), peak_rss_mb());

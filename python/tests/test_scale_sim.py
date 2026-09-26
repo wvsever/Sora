@@ -30,9 +30,9 @@ def count(sim: Path, table: str, where: str = "") -> int:
 
 def test_row_counts_and_manifest(reference_sim, scaled):
     for table in ("sim_exposure", "sim_counterparty", "sim_stage_history", "sim_collateral", "sim_collateral_allocation",
-                  "sim_guarantee", "sim_rating", "sim_credit_event", "sim_recovery_flow"):
+                  "sim_guarantee", "sim_rating", "sim_credit_event", "sim_recovery_flow", "sim_deposit", "sim_debt_issued"):
         assert count(scaled, table) == 3 * count(reference_sim, table), table
-    for table in ("sim_entity", "sim_fx_rate"):
+    for table in ("sim_entity", "sim_fx_rate", "sim_rate_curve"):
         assert count(scaled, table) == count(reference_sim, table), table
     manifest = json.loads((scaled / "sim_manifest.json").read_text())
     assert manifest["scale"]["factor"] == 3
@@ -51,7 +51,7 @@ def test_keys_are_suffixed_and_replica_zero_is_unchanged(reference_sim, scaled):
 
 
 def test_referential_integrity(scaled):
-    report = validate(scaled, modules=["core", "credit"], samples=0)
+    report = validate(scaled, modules=["core", "credit", "nii"], samples=0)
     assert report.ok, report.to_text()
     src = lambda t: f"read_parquet('{scaled}/{t}/**/*.parquet')"  # noqa: E731
     orphans = duckdb.sql(f"""SELECT count(*) FROM {src('sim_stage_history')} h

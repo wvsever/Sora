@@ -13,7 +13,7 @@ sora-tools schema ddl                          # CREATE TABLE statements
 python tools/extract_testdata.py               # -> build/testdata/20260630
 sora-tools profile build/testdata/20260630 --types-file _csv_column_types.json -o dictionary.yaml
 sora-tools map mappings/cppbank --export build/testdata/20260630 -o build/sim/20260630 --validate
-sora-tools validate build/sim/20260630 --modules core credit calibration
+sora-tools validate build/sim/20260630 --modules core credit calibration nii
 
 sora-tools scenario-import <macro.xlsx> <gva.xlsx> -o scenarios/eba2025_macro.csv
 sora-tools calculator-stub --mode formula --port 8080

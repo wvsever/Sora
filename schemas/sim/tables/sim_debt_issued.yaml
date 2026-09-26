@@ -1,0 +1,121 @@
+name: sim_debt_issued
+description: >-
+  Debt securities issued by the institution at the reference date: covered bonds, asset-backed securities,
+  certificates of deposit and commercial paper, senior and subordinated bonds, and Additional Tier 1
+  instruments. Used by the net interest income (NII) module for interest expense and repricing (EBA MN 2025
+  section 4). Own holdings of the institution's securities (buy-backs, retained issues) are excluded or
+  netted from the amounts.
+grain: One row per issued instrument (ISIN or tranche) and issuing entity.
+primary_key: [debt_id]
+partition_by: [entity_id]
+required_by: [nii]
+columns:
+  debt_id:
+    type: key
+    required: true
+    description: Instrument identifier, unique across the dataset (ISIN or internal id).
+    example: DBT-000001
+  entity_id:
+    type: key
+    required: true
+    description: Issuing legal entity. Its country is the 'location of the activity' in the EBA NII templates (MN 2025 para 401).
+    example: BANK-CPP-001
+  instrument_type:
+    type: enum
+    enum: debt_instrument_type
+    required: true
+    description: Kind of instrument. Drives the EBA NII liability type; `additional_tier1` is excluded from NII (MN 2025 para 398).
+    example: senior_unsecured
+  currency:
+    type: currency
+    required: true
+    description: Currency of the instrument and of the amounts on this row.
+    example: EUR
+  carrying_amount:
+    type: amount
+    required: true
+    description: >-
+      Carrying amount of the liability at the reference date (amortised cost including accrued interest, or
+      fair value under the fair value option), net of own holdings. The NII volume (MN 2025 para 355).
+    example: "500000000.00"
+  nominal_amount:
+    type: amount
+    required: false
+    description: Outstanding nominal (face) amount, net of own holdings.
+    example: "500000000.00"
+  accrued_interest:
+    type: amount
+    required: false
+    description: Accrued interest included in `carrying_amount`. Informational.
+    example: "1250000.00"
+  issue_date:
+    type: date
+    required: false
+    description: Issue date. Together with `maturity_date` it defines the original maturity used when the instrument is replaced (MN 2025 para 368).
+    example: "2024-05-07"
+  maturity_date:
+    type: date
+    required: false
+    description: Contractual final maturity. NULL for perpetual instruments.
+    example: "2029-05-05"
+  first_call_date:
+    type: date
+    required: false
+    description: >-
+      First date the issuer may call the instrument. Informational: the NII projection uses the contractual
+      maturity (no behavioural assumptions, MN 2025 para 369).
+    example: "2028-05-05"
+  interest_rate_type:
+    type: enum
+    enum: interest_rate_type
+    required: false
+    description: "`floating` if the coupon is referenced to an interest rate index, otherwise `fixed`."
+    example: fixed
+  current_interest_rate:
+    type: rate
+    required: false
+    description: Coupon (or effective interest) rate at the reference date, per annum. NULL = 0 in the NII projection (reported as a warning).
+    example: "0.037200000"
+  reference_rate:
+    type: string
+    required: false
+    description: Reference rate index of floating-rate instruments (`EURIBOR_3M`, `SOFR_3M`, ...).
+    example: EURIBOR_3M
+  interest_spread:
+    type: rate
+    required: false
+    description: Contractual spread over the reference rate of floating-rate instruments. Informational.
+    example: "0.012000000"
+  next_repricing_date:
+    type: date
+    required: false
+    description: Next coupon reset date of floating-rate instruments. When NULL, the engine rolls `repricing_frequency_months` forward from `issue_date`.
+    example: "2026-08-05"
+  repricing_frequency_months:
+    type: integer
+    required: false
+    description: Coupon reset frequency of floating-rate instruments in months (the index tenor).
+    range: [1, null]
+    example: "3"
+  is_subordinated:
+    type: boolean
+    required: false
+    description: Subordinated to senior unsecured creditors. Informational.
+    example: "false"
+foreign_keys:
+  - columns: [entity_id]
+    references: sim_entity
+    ref_columns: [entity_id]
+checks:
+  - id: DBT-001
+    severity: error
+    description: Amounts are not negative.
+    sql: "carrying_amount >= 0 AND coalesce(nominal_amount, 0) >= 0 AND coalesce(accrued_interest, 0) >= 0"
+  - id: DBT-002
+    severity: warning
+    description: Maturity is not before the issue date.
+    sql: "maturity_date IS NULL OR issue_date IS NULL OR maturity_date >= issue_date"
+  - id: DBT-003
+    severity: warning
+    description: Floating-rate instruments state their reset frequency.
+    sql: "coalesce(interest_rate_type, 'fixed') <> 'floating' OR repricing_frequency_months IS NOT NULL"

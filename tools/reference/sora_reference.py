@@ -61,15 +61,24 @@ Method (see plans/03_scenario_engine.md and plans/09_risk_parameters.md):
    (the benchmark wins); a segment whose exposures all have a sectoral model counts as modelled for the benchmark rule.
    Segments are projected as the sum of their parts with the same path (projection.csv, CR_SECTOR); off-balance items
    take the path of their counterparty's sector.
+9. Net interest income (scenario key `nii`, EBA MN 2025 section 4, plans/13_nii.md). Position by position (assets
+   from sim_exposure except held for trading, deposits, debt issued except AT1; intragroup excluded), static balance
+   sheet: EIR = reference rate (bank risk-free curve at the position's tenor) + margin; floating positions reset the
+   reference rate (+ scenario swap change) on their reset dates; maturing positions are replaced with the same original
+   term at the scenario reference rate plus the new business margin of their cell and the Box 23-24 margin path; sight
+   deposits reprice every year with the MN pass-through (household EIR >= 0); NPE earn the t0 EIR net of provisions.
+   nii.csv by CSV_NII_CALC row, currency, rate type and status; summary "nii" with the adverse Box 22 cap.
 """
 
 from __future__ import annotations
 
 import argparse
+import calendar
 import csv
 import json
 import math
 from collections import defaultdict
+from datetime import date
 from pathlib import Path
 
 import duckdb
@@ -1332,7 +1341,456 @@ def write_cr_sector(path: Path, cells: dict, top: list[str], ref_year: int):
                                 CR_SECTOR_LABELS[key], CR_SECTOR_LABELS[key], *values])
 
 
-# ----------------------------------------------------------------------------------------- main
+# ----------------------------------------------------------------------------------------- NII (EBA MN section 4)
+
+# Net interest income under the static balance sheet (scenario key `nii`, plans/13_nii.md). Position by position:
+# every performing position keeps its effective interest rate (EIR) split into a reference-rate component (the
+# risk-free rate of its currency and tenor, sim_rate_curve) and a margin (EIR - reference rate). Floating positions
+# reset the reference rate on their reset dates, fixed positions keep their rate until maturity; at maturity a
+# position is replaced by the same instrument (same original term) at the scenario reference rate plus the new
+# business margin of its portfolio moved by the margin path (Boxes 23-24). Sight deposits reprice immediately
+# (para 393/397, 2027 draft para 397). Non-performing assets earn their EIR on the exposure net of provisions
+# (para 407). The adverse group NII is capped (Box 22) with the NPE provision increase of the credit projection.
+#
+# Template rows of CSV_NII_CALC (2025 templates, fixed-rate block, RowNum 1-35): row -> (side, label, lambda/gamma).
+NII_ROWS = {
+    1: ("asset", "Loans and advances - Central banks", 0.0),
+    2: ("asset", "Loans and advances - General governments", 1.0),
+    3: ("asset", "Loans and advances - Credit Institutions and other financial corporations", 0.5),
+    4: ("asset", "Loans and advances - Non-financial corporations", 0.15),
+    5: ("asset", "Loans and advances - Households - Residential mortgage loans", 0.15),
+    6: ("asset", "Loans and advances - Households - Credit for consumption and Other", 0.15),
+    7: ("asset", "Debt securities - Central banks", 0.0),
+    8: ("asset", "Debt securities - General governments", 1.0),
+    9: ("asset", "Debt securities - Credit Institutions and other financial corporations", 0.5),
+    10: ("asset", "Debt securities - Non-financial corporations", 0.15),
+    11: ("asset", "Other assets", 0.5),
+    22: ("liability", "Deposits (excl. repo) - Central banks", 0.0),
+    23: ("liability", "Deposits (excl. repo) - General governments - sight", 0.2),
+    24: ("liability", "Deposits (excl. repo) - Credit Institutions and other financial corporations - sight", 1.0),
+    26: ("liability", "Deposits (excl. repo) - Non-financial corporations Other - sight", 0.2),
+    28: ("liability", "Deposits (excl. repo) - Households Other - sight", 0.1),
+    29: ("liability", "Deposits (excl. repo) - General governments / Non-financial Corporations / Households - term", 0.5),
+    30: ("liability", "Deposits (excl. repo) - Credit Institutions and other financial corporations - term", 1.0),
+    32: ("liability", "Debt securities issued - Certificates of deposits", 0.2),
+    33: ("liability", "Debt securities issued - Asset-backed securities and Covered bonds", 0.75),
+    34: ("liability", "Debt securities issued - Other debt securities and Hybrid contract", 1.0),
+}
+# Box 23: shock to the idiosyncratic component under the adverse scenario by the bank's S&P rating (bps).
+IDIOSYNCRATIC_BPS = {"AAA": 25, "AA+": 30, "AA": 35, "AA-": 40, "A+": 45, "A": 50, "A-": 60, "BBB+": 70, "BBB": 80,
+                     "BBB-": 95, "BB+": 110, "BB": 125, "BB-": 145, "B+": 175, "B": 175, "B-": 175, "CCC+": 225,
+                     "CCC": 225, "CCC-": 225, "CC+": 225, "CC": 225, "CC-": 225}
+SIGHT_DEPOSIT_TYPES = ("current", "savings", "call")
+EPOCH = date(1970, 1, 1).toordinal()
+DAYS_PER_YEAR = 365.25                      # original term in days -> tenor in years
+
+
+def to_day(d) -> int | None:
+    return None if d is None else d.toordinal() - EPOCH
+
+
+def add_months(day: int, months: int) -> int:
+    """Calendar month arithmetic on days since 1970-01-01, clamped to the month end (Jan 31 + 1 = Feb 28/29)."""
+    d = date.fromordinal(day + EPOCH)
+    m = d.year * 12 + d.month - 1 + months
+    y, mo = divmod(m, 12)
+    last = calendar.monthrange(y, mo + 1)[1]
+    return date(y, mo + 1, min(d.day, last)).toordinal() - EPOCH
+
+
+def interp(points, t: float) -> float:
+    """Linear interpolation in the tenor (years) over sorted (tenor, rate) points, flat beyond both ends (para 374)."""
+    if t <= points[0][0]:
+        return points[0][1]
+    for i in range(len(points) - 1):
+        if t < points[i + 1][0]:
+            t0, r0 = points[i]
+            t1, r1 = points[i + 1]
+            return r0 + (r1 - r0) * (t - t0) / (t1 - t0)
+    return points[-1][1]
+
+
+def tenor_months(label: str) -> int:
+    """Scenario tenor label (1M, 3M, 1Y, 10Y) -> months."""
+    return int(label[:-1]) * (12 if label[-1] == "Y" else 1)
+
+
+def load_swap_curves(path: Path) -> dict:
+    """{(currency key, scenario, year): [(tenor years, rate)]} from the scenario's swap_rate rows (percent -> fraction)."""
+    raw = defaultdict(list)
+    with open(path) as f:
+        for r in csv.DictReader(f):
+            if r["variable"] == "swap_rate" and r["tenor"]:
+                raw[(r["key"], r["scenario"], int(r["year"]))].append((tenor_months(r["tenor"]), float(r["value"])))
+    return {k: [(m / 12.0, v / 100.0) for m, v in sorted(pts)] for k, pts in raw.items()}
+
+
+def nii_config(cfg) -> dict | None:
+    if "nii" not in cfg:                          # an empty `nii:` enables the module with the defaults
+        return None
+    n = dict(cfg["nii"] or {})
+    rating = n.get("own_rating")
+    if rating is not None and rating not in IDIOSYNCRATIC_BPS:
+        raise ValueError(f"nii.own_rating {rating!r} is not an S&P rating of MN Box 23")
+    return {"own_rating": rating, "new_business_months": int(n.get("new_business_months", 12))}
+
+
+NII_ASSET_SQL = """
+WITH fx AS (
+    SELECT currency, CAST(rate_to_reporting AS DOUBLE) AS r FROM sim_fx_rate WHERE rate_date = DATE '{ref}'
+    UNION SELECT '{ccy}', 1.0
+)
+SELECT e.exposure_id, e.exposure_type, c.eba_sector, e.household_purpose, c.country_of_residence AS country,
+       e.currency, fx.r AS fx, e.stage,
+       CAST(e.gross_carrying_amount AS DOUBLE) AS amount, CAST(coalesce(e.loss_allowance, 0) AS DOUBLE) AS allowance,
+       CAST(e.current_interest_rate AS DOUBLE) AS rate, e.interest_rate_type, e.origination_date, e.maturity_date,
+       e.next_repricing_date, e.repricing_frequency_months
+FROM sim_exposure e JOIN sim_counterparty c USING (counterparty_id) JOIN fx ON fx.currency = e.currency
+WHERE e.exposure_type IN ('loan', 'debt_security', 'finance_lease') AND e.measurement_category <> 'held_for_trading'
+  AND e.gross_carrying_amount > 0 AND NOT coalesce(e.is_intragroup, false)
+ORDER BY e.exposure_id
+"""
+
+NII_DEPOSIT_SQL = """
+WITH fx AS (
+    SELECT currency, CAST(rate_to_reporting AS DOUBLE) AS r FROM sim_fx_rate WHERE rate_date = DATE '{ref}'
+    UNION SELECT '{ccy}', 1.0
+)
+SELECT d.deposit_id, d.deposit_type, c.eba_sector, n.country, d.currency, fx.r AS fx, CAST(d.amount AS DOUBLE) AS amount,
+       CAST(d.current_interest_rate AS DOUBLE) AS rate, d.interest_rate_type, d.origination_date, d.maturity_date,
+       d.next_repricing_date, d.repricing_frequency_months
+FROM sim_deposit d JOIN sim_counterparty c USING (counterparty_id) JOIN sim_entity n USING (entity_id)
+JOIN fx ON fx.currency = d.currency
+WHERE d.amount > 0 AND NOT coalesce(d.is_intragroup, false)
+ORDER BY d.deposit_id
+"""
+
+NII_DEBT_SQL = """
+WITH fx AS (
+    SELECT currency, CAST(rate_to_reporting AS DOUBLE) AS r FROM sim_fx_rate WHERE rate_date = DATE '{ref}'
+    UNION SELECT '{ccy}', 1.0
+)
+SELECT d.debt_id, d.instrument_type, n.country, d.currency, fx.r AS fx, CAST(d.carrying_amount AS DOUBLE) AS amount,
+       CAST(d.current_interest_rate AS DOUBLE) AS rate, d.interest_rate_type, d.issue_date, d.maturity_date,
+       d.next_repricing_date, d.repricing_frequency_months
+FROM sim_debt_issued d JOIN sim_entity n USING (entity_id) JOIN fx ON fx.currency = d.currency
+WHERE d.carrying_amount > 0 AND d.instrument_type <> 'additional_tier1'
+ORDER BY d.debt_id
+"""
+
+
+def asset_row(exposure_type, sector, purpose) -> int:
+    securities = exposure_type == "debt_security"
+    if sector == "household":
+        if securities:
+            return 11
+        return 5 if purpose == "house_purchase" else 6
+    base = {"central_bank": 1, "general_government": 2, "credit_institution": 3, "other_financial": 3,
+            "non_financial_corporation": 4}[sector]
+    return base + 6 if securities else base
+
+
+def deposit_row(sector, sight) -> int:
+    if sector == "central_bank":
+        return 22
+    if sight:
+        return {"general_government": 23, "credit_institution": 24, "other_financial": 24,
+                "non_financial_corporation": 26, "household": 28}[sector]
+    return 30 if sector in ("credit_institution", "other_financial") else 29
+
+
+def nii_positions(con, sim: Path, cfg, ncfg, manifest, horizon_end: int, stats) -> list[dict]:
+    """In-scope positions in a fixed order: assets by exposure_id, deposits by deposit_id, debt issued by debt_id."""
+    ref, ccy = manifest["reference_date"], manifest["reporting_currency"]
+    positions = []
+
+    def base(side, row, currency, fx, amount, rate, rate_type, orig, mat, nrd, freq, country, **extra):
+        if rate is None:
+            stats["missing_rate"] += 1
+            rate = 0.0
+        floating = rate_type == "floating" or (rate_type == "mixed" and nrd is not None and to_day(nrd) < horizon_end)
+        if floating and (freq is None or freq <= 0):
+            stats["floating_without_frequency"] += 1
+            freq = 1
+        p = {"side": side, "row": row, "currency": currency, "volume": amount * fx, "eir": rate,
+             "floating": floating, "freq": int(freq) if floating else None, "origination": to_day(orig),
+             "maturity": to_day(mat), "next_reset": to_day(nrd), "country": country, "sight": False,
+             "status": "performing"}
+        p.update(extra)
+        positions.append(p)
+        return p
+
+    for r in con.execute(NII_ASSET_SQL.format(ref=ref, ccy=ccy)).fetchall():
+        (_, etype, sector, purpose, country, currency, fx, stage, amount, allowance, rate, rtype, orig, mat, nrd,
+         freq) = r
+        p = base("asset", asset_row(etype, sector, purpose), currency, fx, amount, rate, rtype, orig, mat, nrd, freq,
+                 country)
+        if stage in ("stage3", "poci"):
+            p["status"] = "non_performing"
+            p["provisions"] = allowance * fx
+            p["net_volume"] = max(p["volume"] - p["provisions"], 0.0)
+    for r in con.execute(NII_DEPOSIT_SQL.format(ref=ref, ccy=ccy)).fetchall():
+        (_, dtype, sector, country, currency, fx, amount, rate, rtype, orig, mat, nrd, freq) = r
+        sight = dtype in SIGHT_DEPOSIT_TYPES
+        p = base("liability", deposit_row(sector, sight), currency, fx, amount, rate, rtype, orig, mat, nrd, freq,
+                 country)
+        if sight:
+            p.update(sight=True, beta=0.5 if sector == "household" else 0.75 if sector == "non_financial_corporation"
+                     else 1.0, floor_zero=sector == "household")
+    for r in con.execute(NII_DEBT_SQL.format(ref=ref, ccy=ccy)).fetchall():
+        (_, itype, country, currency, fx, amount, rate, rtype, orig, mat, nrd, freq) = r
+        row = 32 if itype == "certificate_of_deposit" else 33 if itype in ("covered_bond", "asset_backed") else 34
+        base("liability", row, currency, fx, amount, rate, rtype, orig, mat, nrd, freq, country)
+    return positions
+
+
+def run_nii(con, sim: Path, cfg, ncfg, manifest, repo: Path, credit_totals: dict, npe_provisions_t0: float) -> tuple:
+    """NII per position and year; returns (nii.csv rows, summary block)."""
+    for t in ("sim_deposit", "sim_debt_issued", "sim_rate_curve", "sim_entity"):
+        if any((sim / t).glob("**/*.parquet")):
+            con.execute(f"CREATE OR REPLACE VIEW {t} AS SELECT * FROM read_parquet('{sim}/{t}/**/*.parquet', "
+                        "hive_partitioning=false)")
+        elif t == "sim_rate_curve":
+            con.execute("CREATE OR REPLACE TABLE sim_rate_curve (curve_type VARCHAR, currency VARCHAR, "
+                        "tenor_months BIGINT, rate DECIMAL(18,9))")
+        else:
+            raise FileNotFoundError(f"nii: SIM table {t} is missing")
+    ref_day = to_day(date.fromisoformat(manifest["reference_date"]))
+    bounds = [add_months(ref_day, 12 * y) for y in range(4)]          # D0..D3: projection years [D(y-1), D(y))
+    hist, year_map = cfg["history_year"], cfg["year_map"]
+    swaps = load_swap_curves(repo / cfg["macro_path"])
+    macro = load_macro(repo / cfg["macro_path"])
+    bank = defaultdict(list)
+    for c, m, v in con.execute("SELECT currency, tenor_months, CAST(rate AS DOUBLE) FROM sim_rate_curve "
+                               "WHERE curve_type = 'risk_free' ORDER BY currency, tenor_months").fetchall():
+        bank[c].append((m / 12.0, v))
+    idio = IDIOSYNCRATIC_BPS[ncfg["own_rating"]] / 10000.0 if ncfg["own_rating"] else 0.0
+    stats = defaultdict(int)
+    positions = nii_positions(con, sim, cfg, ncfg, manifest, bounds[3], stats)
+
+    def swap_key(currency):
+        return currency if (currency, "starting_point", hist) in swaps else "RoW"
+
+    def rf0(currency, t):
+        if currency in bank:
+            return interp(bank[currency], t)
+        return interp(swaps[(swap_key(currency), "starting_point", hist)], t)
+
+    def delta(currency, t, scen, y):
+        k = swap_key(currency)
+        return interp(swaps[(k, scen, year_map[y])], t) - interp(swaps[(k, "starting_point", hist)], t)
+
+    def country_key(country):
+        for k in (country, *cfg["country_fallback"]):
+            if ("long_term_rate", k, "baseline", year_map[1]) in macro:
+                return k
+        raise KeyError(f"no long_term_rate for {country}")
+
+    def sov_spread(k, currency, scen, year):
+        return macro[("long_term_rate", k, scen, year)] / 100.0 - interp(swaps[(swap_key(currency), scen, year)], 10.0)
+
+    # Tenor, starting-point split, margin-path shocks and replacement term of every position.
+    nb_start = add_months(ref_day, -ncfg["new_business_months"])
+    nb = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0])      # cell -> [new business V, V*m, all V, all V*m]
+    for p in positions:
+        p["term"] = None                                # original term in days: the replacement term (para 368)
+        if not p["sight"] and p["maturity"] is not None:
+            term = p["maturity"] - (p["origination"] if p["origination"] is not None else ref_day)
+            if term <= 0:
+                stats["term_fallback"] += 1
+                term = 365
+            p["term"] = term
+        if p["sight"]:
+            p["tenor"] = 1 / 12.0                       # 1M reference rate (para 392)
+        elif p["floating"]:
+            p["tenor"] = p["freq"] / 12.0               # the index tenor (para 380)
+        else:                                           # the original maturity; open-ended: 1M
+            p["tenor"] = p["term"] / DAYS_PER_YEAR if p["term"] is not None else 1 / 12.0
+        p["rate_type"] = "floating" if p["floating"] else "fixed"
+        if p["status"] != "performing":
+            continue
+        p["ref0"] = rf0(p["currency"], p["tenor"])
+        p["margin0"] = p["eir"] - p["ref0"]
+        ck = country_key(p["country"])
+        side, _, factor = NII_ROWS[p["row"]]
+        p["shock"] = {}
+        for scen in ("baseline", "adverse"):
+            for y in (1, 2, 3):
+                ds = sov_spread(ck, p["currency"], scen, year_map[y]) - sov_spread(ck, p["currency"], "starting_point", hist)
+                p["shock"][(scen, y)] = factor * (max(ds, 0.0) if side == "asset"
+                                                  else max(ds, idio if scen == "adverse" else 0.0))
+        if not p["sight"]:
+            cell = nb[(p["row"], p["currency"], p["rate_type"])]
+            if p["origination"] is not None and nb_start <= p["origination"] <= ref_day:
+                cell[0] += p["volume"]
+                cell[1] += p["volume"] * p["margin0"]
+            cell[2] += p["volume"]
+            cell[3] += p["volume"] * p["margin0"]
+    margin_nb = {}
+    for k, (w, wm, aw, awm) in nb.items():
+        if w > 0:
+            margin_nb[k] = wm / w
+        else:
+            stats["new_business_fallback_cells"] += 1
+            margin_nb[k] = awm / aw if aw > 0 else 0.0
+
+    # Projection: per position, scenario and year the reference-rate and margin interest.
+    cells = defaultdict(lambda: {"positions": 0, "volume": 0.0, "provisions": 0.0, "net_volume": 0.0,
+                                 "interest": 0.0, "interest_reference": 0.0, "interest_margin": 0.0})
+    income = defaultdict(float)
+    expense = defaultdict(float)
+
+    def add(p, scen, y, interest, i_ref=None, i_mar=None):
+        c = cells[(scen, y, p["row"], p["currency"], p["rate_type"], p["status"])]
+        c["positions"] += 1
+        c["volume"] += p["volume"]
+        if p["status"] != "performing":
+            c["provisions"] += p["provisions"]
+            c["net_volume"] += p["net_volume"]
+        else:
+            c["interest_reference"] += i_ref
+            c["interest_margin"] += i_mar
+        c["interest"] += interest
+        if p["side"] == "asset":
+            income[(scen, y)] += interest
+        else:
+            expense[(scen, y)] += interest
+
+    for p in positions:
+        V = p["volume"]
+        if p["status"] != "performing":                  # NPE: EIR on the net exposure, not split (paras 378, 407)
+            interest = p["net_volume"] * p["eir"]
+            for scen, years in (("actual", (0,)), ("baseline", (1, 2, 3)), ("adverse", (1, 2, 3))):
+                for y in years:
+                    add(p, scen, y, interest)
+            continue
+        i_ref, i_mar = V * p["ref0"], V * p["margin0"]
+        add(p, "actual", 0, i_ref + i_mar, i_ref, i_mar)
+        cell_margin = margin_nb.get((p["row"], p["currency"], p["rate_type"]))
+        for scen in ("baseline", "adverse"):
+            if p["sight"]:                              # reprice immediately every year (1M reference rate)
+                for y in (1, 2, 3):
+                    margin = p["margin0"] + p["shock"][(scen, y)]
+                    ref_rate = p["ref0"] + p["beta"] * delta(p["currency"], p["tenor"], scen, y)
+                    if p["floor_zero"]:
+                        ref_rate = max(ref_rate, -margin)
+                    i_ref, i_mar = V * ref_rate, V * margin
+                    add(p, scen, y, i_ref + i_mar, i_ref, i_mar)
+                continue
+            ref_rate, margin = p["ref0"], p["margin0"]
+            # A position past its maturity at the reference date is replaced at once (first day of year 1).
+            next_mat = max(p["maturity"], ref_day) if p["term"] is not None else None
+            anchor = k = next_reset = None
+            if p["floating"]:
+                freq = p["freq"]
+                if p["next_reset"] is not None and p["next_reset"] > ref_day:
+                    anchor, k = p["next_reset"], 0
+                else:
+                    start = p["next_reset"] if p["next_reset"] is not None else p["origination"]
+                    if start is None:
+                        anchor, k = ref_day, 1
+                    else:
+                        anchor, k = start, 1
+                        while add_months(anchor, k * freq) <= ref_day:
+                            k += 1
+                next_reset = add_months(anchor, k * freq)
+            for y in (1, 2, 3):
+                prev, end = bounds[y - 1], bounds[y]
+                acc_r = acc_m = 0.0
+                while True:
+                    e = min(x for x in (next_mat, next_reset, end) if x is not None)
+                    if e >= end:
+                        break
+                    acc_r += ref_rate * (e - prev)
+                    acc_m += margin * (e - prev)
+                    prev = e
+                    ref_rate = p["ref0"] + delta(p["currency"], p["tenor"], scen, y)
+                    if next_mat is not None and e == next_mat:     # replacement (maturity before a same-day reset)
+                        margin = cell_margin + p["shock"][(scen, y)]
+                        next_mat = e + p["term"]
+                        if p["floating"]:
+                            anchor, k = e, 1
+                            next_reset = add_months(anchor, freq)
+                    else:                                          # reset of a floating reference rate
+                        k += 1
+                        next_reset = add_months(anchor, k * freq)
+                acc_r += ref_rate * (end - prev)
+                acc_m += margin * (end - prev)
+                days = end - bounds[y - 1]
+                i_ref, i_mar = V * (acc_r / days), V * (acc_m / days)
+                add(p, scen, y, i_ref + i_mar, i_ref, i_mar)
+
+    # nii.csv: per scenario, year and CSV_NII_CALC row, currency, rate type and performing status.
+    scen_order = {"actual": 0, "baseline": 1, "adverse": 2}
+    rows = []
+    for key in sorted(cells, key=lambda k: (scen_order[k[0]], *k[1:])):
+        scen, y, row, currency, rate_type, status = key
+        c = cells[key]
+        perf = status == "performing"
+        base_volume = c["volume"] if perf else c["net_volume"]
+        mnb = margin_nb.get((row, currency, rate_type)) if perf and scen == "actual" else None
+        rows.append({"scenario": scen, "year": y, "template_row": row, "side": NII_ROWS[row][0],
+                     "nii_type": NII_ROWS[row][1], "currency": currency, "rate_type": rate_type, "status": status,
+                     "positions": c["positions"], "volume": f"{c['volume']:.2f}",
+                     "provisions": "" if perf else f"{c['provisions']:.2f}", "interest": f"{c['interest']:.2f}",
+                     "interest_reference": f"{c['interest_reference']:.2f}" if perf else "",
+                     "interest_margin": f"{c['interest_margin']:.2f}" if perf else "",
+                     "eir": f"{(c['interest'] / base_volume if base_volume > 0 else 0.0):.9f}",
+                     "margin_new_business": "" if mnb is None else f"{mnb:.9f}"})
+
+    # summary.json "nii", with the Box 22 cap on the adverse NII (paras 404-405).
+    vol_pe = vol_npe = prov_npe = 0.0
+    for p in positions:
+        if p["side"] == "asset":
+            if p["status"] == "performing":
+                vol_pe += p["volume"]
+            else:
+                vol_npe += p["volume"]
+                prov_npe += p["provisions"]
+    nii0 = income[("actual", 0)] - expense[("actual", 0)]
+    totals = {}
+    for scen in ("baseline", "adverse"):
+        for y in (1, 2, 3):
+            nii = income[(scen, y)] - expense[(scen, y)]
+            t = {"interest_income": round(income[(scen, y)], 2), "interest_expense": round(expense[(scen, y)], 2),
+                 "nii": round(nii, 2)}
+            if scen == "adverse":
+                ct = credit_totals[("adverse", y)]
+                dprov = (ct["prov_stock_s3"] + ct["prov_stock_poci"]) - npe_provisions_t0
+                cap = min(nii0, nii0 - nii0 * dprov / (vol_pe + (vol_npe - prov_npe)))
+                t.update(npe_provision_increase=round(dprov, 2), nii_cap=round(cap, 2),
+                         nii_capped=round(min(nii, cap), 2))
+            totals[f"{scen}/{y}"] = t
+    summary = {
+        "own_rating": ncfg["own_rating"], "idiosyncratic_shock": idio,
+        "new_business_months": ncfg["new_business_months"],
+        "positions": {"assets": sum(p["side"] == "asset" for p in positions),
+                      "non_performing": sum(p["status"] != "performing" for p in positions),
+                      "deposits": sum(22 <= p["row"] <= 30 for p in positions),
+                      "sight_deposits": sum(p["sight"] for p in positions),
+                      "debt_issued": sum(p["row"] in (32, 33, 34) for p in positions)},
+        "fallbacks": {k: stats[k] for k in ("missing_rate", "floating_without_frequency", "term_fallback",
+                                            "new_business_fallback_cells")},
+        "starting_point": {"interest_income": round(income[("actual", 0)], 2),
+                           "interest_expense": round(expense[("actual", 0)], 2), "nii": round(nii0, 2),
+                           "volume_performing": round(vol_pe, 2), "volume_non_performing": round(vol_npe, 2),
+                           "provisions_non_performing": round(prov_npe, 2),
+                           "npe_provisions_credit": round(npe_provisions_t0, 2)},
+        "totals": totals,
+    }
+    return rows, summary
+
+
+NII_COLUMNS = ["scenario", "year", "template_row", "side", "nii_type", "currency", "rate_type", "status", "positions",
+               "volume", "provisions", "interest", "interest_reference", "interest_margin", "eir",
+               "margin_new_business"]
+
+
+def write_nii(path: Path, rows: list[dict]):
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=NII_COLUMNS, lineterminator="\n")
+        w.writeheader()
+        w.writerows(rows)
 
 def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
     cfg = yaml.safe_load(scenario_path.read_text())
@@ -1501,6 +1959,11 @@ def run(sim: Path, scenario_path: Path, out: Path, repo: Path) -> dict:
             "exposure_types": list(cfg["off_balance"]["exposure_types"]), **stats,
             "totals": {f"{sc}/{y}": {k: round(v, 2) for k, v in d.items()} for (sc, y), d in sorted(ob_totals.items())},
         }
+    ncfg = nii_config(cfg)
+    if ncfg:                                       # NII (optional; credit results are unaffected)
+        npe_prov0 = sum(seg_stock[s]["stage3"][1] + seg_stock[s]["poci"][1] for s in segments)
+        nii_rows, summary["nii"] = run_nii(con, sim, cfg, ncfg, manifest, repo, totals, npe_prov0)
+        write_nii(out / "nii.csv", nii_rows)
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     return summary
 

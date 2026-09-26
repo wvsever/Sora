@@ -25,6 +25,7 @@ MODULE_TABLES = {
     "credit": {"sim_rating", "sim_collateral", "sim_collateral_allocation", "sim_guarantee"},
     "parameters": {"sim_risk_parameter"},
     "calibration": {"sim_stage_history", "sim_credit_event", "sim_recovery_flow"},
+    "nii": {"sim_deposit", "sim_debt_issued", "sim_rate_curve"},
 }
 REQUIRED_TABLES = MODULE_TABLES["core"]
 

@@ -34,3 +34,25 @@ controls:
     keys: 0
     sim: SELECT count(*) AS counterparties FROM sim_counterparty
     source: SELECT count(*) FROM src.counterparty
+
+  - id: REC-DEPOSIT
+    description: >-
+      Deposits per entity - count and principal outstanding. Forward-starting renewals of term deposits (origination
+      after the reference date) are not on the balance sheet yet and are not mapped.
+    keys: 1
+    sim: |
+      SELECT entity_id, count(*) AS deposits, sum(amount) AS amount FROM sim_deposit GROUP BY 1
+    source: |
+      SELECT entity_id, count(*), sum(CAST(principal_outstanding AS DECIMAL(18,2)))
+      FROM src.contract_deposit WHERE CAST(origination_date AS DATE) <= (SELECT reference_date FROM manifest) GROUP BY 1
+
+  - id: REC-DEBT-ISSUED
+    description: >-
+      Debt securities issued per entity - count and nominal net of retained amounts (issued by the reference date).
+    keys: 1
+    sim: |
+      SELECT entity_id, count(*) AS instruments, sum(nominal_amount) AS nominal_amount FROM sim_debt_issued GROUP BY 1
+    source: |
+      SELECT entity_id, count(*),
+             sum(greatest(CAST(nominal_amount AS DECIMAL(18,2)) - coalesce(CAST(retained_amount AS DECIMAL(18,2)), 0), 0))
+      FROM src.contract_debt_issued WHERE CAST(issue_date AS DATE) <= (SELECT reference_date FROM manifest) GROUP BY 1

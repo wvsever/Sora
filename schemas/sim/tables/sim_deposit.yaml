@@ -1,0 +1,161 @@
+name: sim_deposit
+description: >-
+  Deposits received at the reference date: current, savings, call, notice and term deposits from customers,
+  other banks and central banks. Used by the net interest income (NII) module for interest expense and
+  repricing (EBA MN 2025 section 4), and later by the funding module for deposit outflows. Repos and debt
+  securities issued are not deposits (debt securities issued are in `sim_debt_issued`).
+grain: One row per deposit contract (account).
+primary_key: [deposit_id]
+partition_by: [entity_id]
+required_by: [nii]
+columns:
+  deposit_id:
+    type: key
+    required: true
+    description: Deposit contract or account identifier, unique across the dataset and stable over time.
+    example: DEP-000001
+  entity_id:
+    type: key
+    required: true
+    description: >-
+      Legal entity that has recognised the deposit. Its country is the 'location of the activity' of the
+      liability in the EBA NII templates (MN 2025 para 401).
+    example: BANK-CPP-001
+  counterparty_id:
+    type: key
+    required: true
+    description: Depositor. Its `eba_sector` drives the EBA NII liability type (households, NFCs, credit institutions, ...).
+    example: CPTY-000001
+  deposit_type:
+    type: enum
+    enum: deposit_type
+    required: true
+    description: >-
+      Kind of deposit. `current`, `savings` and `call` are sight deposits: they reprice immediately in the
+      NII projection (MN 2025 para 369). A deposit is a sight deposit if it is legally redeemable at demand,
+      whatever its FINREP classification (MN para 363 footnote 57).
+    example: term
+    reg_ref: FINREP F 08.01 (current accounts / overnight deposits, deposits with agreed maturity, deposits redeemable at notice); EBA MN 2025 paras 363, 366.
+  product_code:
+    type: string
+    required: false
+    description: Institution's product code. Informational.
+    example: DEPOSIT_TERM_12M
+  currency:
+    type: currency
+    required: true
+    description: Currency of the deposit and of the amounts on this row.
+    example: EUR
+  amount:
+    type: amount
+    required: true
+    description: Principal outstanding (balance) of the deposit at the reference date, excluding accrued interest.
+    example: "25000.00"
+    pitfalls: Report overdrawn current accounts as loans in `sim_exposure`, not as negative deposits.
+  accrued_interest:
+    type: amount
+    required: false
+    description: Accrued interest not yet paid. Informational.
+    example: "12.50"
+  origination_date:
+    type: date
+    required: false
+    description: >-
+      Date the deposit was placed or last renewed (for term deposits, the start of the current term). Together
+      with `maturity_date` it defines the original term used when the deposit is replaced (MN 2025 para 369).
+    example: "2026-01-15"
+  maturity_date:
+    type: date
+    required: false
+    description: Agreed maturity of a term deposit. NULL for sight and notice deposits.
+    example: "2027-01-15"
+  notice_period_days:
+    type: integer
+    required: false
+    description: Notice period in days for notice deposits. NULL or 0 if none.
+    range: [0, null]
+    example: "90"
+  interest_rate_type:
+    type: enum
+    enum: interest_rate_type
+    required: false
+    description: >-
+      `floating` if the remuneration is contractually referenced to an interest rate index (MN 2025 para 379),
+      otherwise `fixed` (administered rates of sight deposits are fixed).
+    example: fixed
+  current_interest_rate:
+    type: rate
+    required: false
+    description: Rate paid at the reference date, per annum. NULL = 0 in the NII projection (reported as a warning).
+    example: "0.025000000"
+  reference_rate:
+    type: string
+    required: false
+    description: Reference rate index of floating deposits (`EURIBOR_3M`, `ESTR`, ...).
+    example: EURIBOR_3M
+  interest_spread:
+    type: rate
+    required: false
+    description: Contractual spread over the reference rate of floating deposits. Informational.
+    example: "-0.005000000"
+  next_repricing_date:
+    type: date
+    required: false
+    description: >-
+      Next date the rate of a floating deposit resets. When NULL, the engine rolls `repricing_frequency_months`
+      forward from `origination_date`.
+    example: "2026-09-30"
+  repricing_frequency_months:
+    type: integer
+    required: false
+    description: Reset frequency of the reference rate of floating deposits in months (the index tenor, e.g. 3 for EURIBOR_3M).
+    range: [1, null]
+    example: "3"
+  is_intragroup:
+    type: boolean
+    required: false
+    description: Deposit from another entity of the consolidation scope. Excluded from the NII projection (MN 2025 para 403).
+    example: "false"
+  dgs_covered_amount:
+    type: amount
+    required: false
+    description: Part of the deposit covered by a deposit guarantee scheme (Directive 2014/49/EU). For the funding module (deposit outflows).
+    example: "25000.00"
+  is_operational:
+    type: boolean
+    required: false
+    description: Held in an operational relationship (clearing, custody, cash management; LCR Art. 27). For the funding module.
+    example: "false"
+  is_transactional:
+    type: boolean
+    required: false
+    description: Held in a transactional account (salary credited, regular payments; LCR Art. 24(2)). For the funding module.
+    example: "true"
+foreign_keys:
+  - columns: [entity_id]
+    references: sim_entity
+    ref_columns: [entity_id]
+  - columns: [counterparty_id]
+    references: sim_counterparty
+    ref_columns: [counterparty_id]
+checks:
+  - id: DEP-001
+    severity: error
+    description: Amounts are not negative.
+    sql: "amount >= 0 AND coalesce(accrued_interest, 0) >= 0 AND coalesce(dgs_covered_amount, 0) >= 0"
+  - id: DEP-002
+    severity: warning
+    description: Term deposits have a maturity date; other deposit types have none.
+    sql: "(deposit_type = 'term') = (maturity_date IS NOT NULL)"
+  - id: DEP-003
+    severity: warning
+    description: Maturity is not before origination.
+    sql: "maturity_date IS NULL OR origination_date IS NULL OR maturity_date >= origination_date"
+  - id: DEP-004
+    severity: warning
+    description: Floating-rate deposits state their reset frequency.
+    sql: "coalesce(interest_rate_type, 'fixed') <> 'floating' OR repricing_frequency_months IS NOT NULL"
+  - id: DEP-005
+    severity: warning
+    description: The DGS-covered amount does not exceed the deposit.
+    sql: "dgs_covered_amount IS NULL OR dgs_covered_amount <= amount + coalesce(accrued_interest, 0) + 0.01"

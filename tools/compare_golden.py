@@ -8,7 +8,8 @@ cr_scen_off_bs.csv (EUR million, 8 decimals) is compared to 2e-8 (2 cents). benc
 exposure to 1 cent, the model flags, rules and benchmark keys exactly; summary.json "benchmark": counts exactly,
 pivot exposures to 1 cent and coverage shares to 1e-9. sector_parameters.csv (sectoral satellites): parameters to
 1e-9, keys, GVA keys and group sources exactly; summary.json "sector_satellites": counts exactly, exposures to 1 cent
-and shares to 1e-9.
+and shares to 1e-9. nii.csv (net interest income): amounts to 1 cent (or relative 1e-12), EIR and new business margins
+to 1e-9, position counts exactly; summary.json "nii": counts and settings exactly, amounts to 1 cent.
 The reference SIM is produced on demand (extract test data + reference mapping) if --sim is not given.
 """
 
@@ -50,6 +51,26 @@ def template_tolerance(col: str, golden: float) -> float:
     if template_percent(col):
         return 1e-7 + 1e-7 + 1e-12
     return max(0.01, 1e-12 * abs(golden) * 1e6) / 1e6 + 1e-8 + 1e-12
+
+
+def nii_tolerance(col: str, golden: float) -> float:
+    """nii.csv: rates (EIR, new business margin) to 1e-9, counts exactly, amounts to 1 cent or relative 1e-12."""
+    if col in ("eir", "margin_new_business"):
+        return 1e-9
+    return 0.0 if col == "positions" else max(0.01, 1e-12 * abs(golden))
+
+
+def compare_json(path: str, golden, actual) -> list[str]:
+    """Summary blocks: numbers to 1 cent (they are amounts or rates printed with at least 2 decimals), else exactly."""
+    if isinstance(golden, dict):
+        if not isinstance(actual, dict) or set(golden) != set(actual):
+            return [f"summary {path}: keys differ"]
+        return [e for k in golden for e in compare_json(f"{path}.{k}", golden[k], actual[k])]
+    if isinstance(golden, (int, float)) and not isinstance(golden, bool):
+        ok = isinstance(actual, (int, float)) and abs(actual - golden) <= (0 if isinstance(golden, int) else 0.01)
+    else:
+        ok = golden == actual
+    return [] if ok else [f"summary {path}: engine {actual} vs golden {golden}"]
 
 
 def compare(name: str, golden: Path, actual: Path, keys: list[str], money: bool, ratio_prefix: str | None = None,
@@ -109,6 +130,9 @@ def main() -> int:
         if (args.golden / "sector_parameters.csv").exists():  # sectoral satellites (scenario key sector_satellites)
             errors += compare("sector_parameters.csv", args.golden, out, ["segment", "sector", "scenario", "year"],
                               money=False)
+        if (args.golden / "nii.csv").exists():                # net interest income (scenario key nii)
+            errors += compare("nii.csv", args.golden, out, ["scenario", "year", "template_row", "currency", "rate_type",
+                                                             "status"], money=True, tolerance=nii_tolerance)
         gs, es = json.loads((args.golden / "summary.json").read_text()), json.loads((out / "summary.json").read_text())
         for field in ("segments", "exposures"):
             if gs[field] != es[field]:
@@ -140,6 +164,8 @@ def main() -> int:
                         errors.append(f"summary sector_satellites.{field}: engine {ev.get(field)} vs golden {v}")
                 elif ev.get(field) != v:
                     errors.append(f"summary sector_satellites.{field}: engine {ev.get(field)} vs golden {v}")
+        if "nii" in gs:
+            errors += compare_json("nii", gs["nii"], es.get("nii"))
     for e in errors[:30]:
         print("  MISMATCH", e)
     print(f"{'FAILED' if errors else 'PASSED'}: {len(errors)} mismatches")

@@ -18,7 +18,8 @@ Expected outputs for the C++ engine, produced by the independent reference imple
 | `cr_scen_off_bs.csv` | The same in the EBA CSV_CR_SCEN_OFF_BS layout (2027 draft templates): 22 rows per scenario and year (per commitment type a Sum row and six counterparty-sector rows, then Total), EUR million |
 | `benchmarks.csv` | ECB benchmark rule (scenario key `benchmark_parameters`, synthetic benchmarks `tests/params/synthetic_ecb_benchmarks.csv`) per segment: t0 exposure, model coverage per group (PD/TR, LGD/LR), the rule that applies (`none`, `sovereign`, `coverage`, `no_model`) and the benchmark key used, `unavailable` or empty (`plans/09_risk_parameters.md`, ECB benchmark parameters) |
 | `sector_parameters.csv` | Sectoral (GVA) satellites (scenario key `sector_satellites`, synthetic coefficients `tests/params/synthetic_sector_satellites.csv`): per NFC segment and NACE sector with coefficients, the GVA sector and key (`gva_relative` = 1: GDP of the country plus the sector's EU GVA deviation, non-EU countries), the ten parameters per scenario and year 1..3, and the source of each group (`sectoral`, `portfolio`, `benchmark`) (`plans/03_scenario_engine.md`, Sectoral (GVA) satellites) |
-| `summary.json` | Totals (`off_balance`: item counts and off-balance totals per scenario and year; `benchmark`: segment counts, model coverage and benchmark share per pivot asset class; `sector_satellites`: sectors per group, NFC exposure and the share projected with sectoral models) |
+| `nii.csv` | Net interest income (scenario key `nii`, `plans/13_nii.md`) per scenario (actual year 0 = annualised starting point, baseline and adverse 1..3), CSV_NII_CALC row, currency, rate type and performing status: positions, volume, NPE provisions, interest with its reference-rate and margin parts, EIR, new business margin (starting point) |
+| `summary.json` | Totals (`off_balance`: item counts and off-balance totals per scenario and year; `benchmark`: segment counts, model coverage and benchmark share per pivot asset class; `sector_satellites`: sectors per group, NFC exposure and the share projected with sectoral models; `nii`: positions, fallbacks, starting point, interest income, expense and NII per scenario and year, adverse Box 22 cap) |
 
 The results are **synthetic**. Since the dataset was regenerated with realistic stage transitions (DS-016 fixed,
 see `tests/data/DATASET_ISSUES.md`), the magnitudes are plausible, but they still exist to check that the engine
@@ -41,7 +42,9 @@ Engine tolerance: money is compared per segment, scenario and year to 1 cent, or
 its units (EUR million, percent), plus one unit in the last printed decimal. `cr_scen_off_bs.csv` (EUR million,
 8 decimals) is compared to 2e-8. `benchmarks.csv`: exposure to 1 cent, flags, rules and keys exactly; the summary's
 `benchmark` counts exactly and its coverage shares to 1e-9. `sector_parameters.csv`: parameters to 1e-9, keys and
-sources exactly; the summary's `sector_satellites` counts exactly, exposures to 1 cent and shares to 1e-9.
+sources exactly; the summary's `sector_satellites` counts exactly, exposures to 1 cent and shares to 1e-9. `nii.csv`:
+amounts to 1 cent, EIR and new business margins to 1e-9, position counts exactly (the engine output is byte-identical);
+the summary's `nii` counts exactly and amounts to 1 cent.
 
 Facilities (the test scenario sets `off_balance.include_loan_undrawn` and `commitment_drawn_on_balance`,
 `plans/03_scenario_engine.md`, Off-balance-sheet exposures, item 7): the drawn part (GCA) of 6,455 staged commitments
@@ -117,4 +120,18 @@ paths: off-balance year-3 provisions +0.93m (adverse), +0.00m (baseline). `proje
 projected rows, and columns 1-2 now filled), `off_balance.csv`, `cr_scen_off_bs.csv` and `summary.json` change;
 `sector_parameters.csv` is new (5,700 rows: 50 NFC segments x 19 sectors x 6); `segments.csv`, `parameters.csv` (the
 segment paths stay the portfolio model's), `collateral.csv` and `benchmarks.csv` do not. With the key removed from the
+scenario the engine reproduces the previous golden files exactly.
+
+NII results (scenario key `nii`, `own_rating: A`, `new_business_months: 12`; `plans/13_nii.md`). The mapping adds
+`sim_deposit` (86,047 deposits; 6,496 forward-starting renewals not mapped, DS-046), `sim_debt_issued` (1,123
+instruments, retained amounts netted, DS-047), `sim_rate_curve` (14 risk-free and 168 credit spread curves) and
+`sim_exposure.repricing_frequency_months`. In scope: 47,423 assets (4,125 NPE), 85,692 deposits (30,754 sight), 990 debt
+securities issued (AT1 and fully retained excluded). Starting point: performing assets EUR 30.70bn at 3.61%, NPE 0.23bn
+gross (0.14bn provisions), liabilities 28.03bn at 3.14%; NII 236.9m. Baseline NII 228.9m / 224.7m / 226.5m, adverse
+149.8m / 110.6m / 127.1m (years 1-3); the Box 22 cap (235.9m-236.7m) does not bind. 85 of the portfolio cells have no
+new business in the last 12 months and use their stock margin (NII-004).
+
+Golden change log (NII, 2026-09-26): `nii.csv` is new and `summary.json` gains the `nii` block; `sim_mapping_release`
+changes with the mapping. All credit files (`segments.csv` ... `sector_parameters.csv`) and the rest of `summary.json`
+are byte-identical: the new SIM column and tables are not read by the credit modules. With the key removed from the
 scenario the engine reproduces the previous golden files exactly.

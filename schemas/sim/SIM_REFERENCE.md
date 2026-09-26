@@ -2,7 +2,8 @@
 
 The Sora Input Model (SIM) is the canonical input of the Sora stress engine. It describes a bank's
 credit portfolio at one reference date: counterparties, credit exposures, collateral, guarantees,
-and the history needed to calibrate stress parameters.
+and the history needed to calibrate stress parameters; and, for the net interest income (NII) module,
+its interest-bearing liabilities (deposits, debt issued) and the interest rate curves.
 
 Customers produce SIM tables from their own systems with mapping SQL, usually run by
 `sora-tools map` on exported source files. Sora never reads customer source layouts directly.
@@ -47,6 +48,9 @@ Customers produce SIM tables from their own systems with mapping SQL, usually ru
 - [`sim_recovery_flow`](#sim_recovery_flow): Cash flows after default (recoveries and workout costs) and write-offs.
 - [`sim_fx_rate`](#sim_fx_rate): Exchange rates to the reporting currency.
 - [`sim_risk_parameter`](#sim_risk_parameter): Credit risk parameters supplied by the institution (IFRS 9 / IRB models, satellite models, benchmarks) or produced by `sora calibrate`.
+- [`sim_deposit`](#sim_deposit): Deposits received at the reference date: current, savings, call, notice and term deposits from customers, other banks and central banks.
+- [`sim_debt_issued`](#sim_debt_issued): Debt securities issued by the institution at the reference date: covered bonds, asset-backed securities, certificates of deposit and commercial paper, senior and subordinated bonds, and Additional Tier 1 instruments.
+- [`sim_rate_curve`](#sim_rate_curve): Interest rate curves at the reference date: the risk-free (reference) curve per currency, and credit spread curves per currency, issuer sector, rating band and seniority.
 
 ### sim_entity
 
@@ -124,7 +128,7 @@ Credit exposures at the reference date: loans and advances, debt securities, fin
 - **Grain:** One row per contract (facility). A facility with drawn and undrawn parts is one row: the drawn part in `gross_carrying_amount` and the undrawn part in `off_balance_amount`, with `exposure_type` describing the product. Do not also report the undrawn part as a separate row.
 - **Primary key:** `exposure_id`
 - **Partitioned by:** `entity_id`
-- **Required by modules:** core, credit
+- **Required by modules:** core, credit, nii
 - **Foreign key:** (entity_id) → `sim_entity`
 - **Foreign key:** (counterparty_id) → `sim_counterparty`
 
@@ -151,7 +155,8 @@ Credit exposures at the reference date: loans and advances, debt securities, fin
 | `current_interest_rate` | rate (DECIMAL(18,9)) |  | Contractual rate applicable at the reference date, per annum. | `0.038000000` |
 | `reference_rate` | string (VARCHAR) |  | Reference rate index for floating contracts (`EURIBOR_3M`, `ESTR`, ...). | `EURIBOR_3M` |
 | `interest_spread` | rate (DECIMAL(18,9)) |  | Spread over the reference rate for floating contracts. | `0.015000000` |
-| `next_repricing_date` | date (DATE) |  | Next date the rate resets (floating) or is renegotiated (fixed with a reset). NULL if fixed to maturity. | `2026-09-30` |
+| `next_repricing_date` | date (DATE) |  | Next date the rate resets (floating) or is renegotiated (fixed with a reset; for `mixed`, the end of the initial fixed period). NULL if fixed to maturity. For floating contracts with a NULL value the NII module rolls `repricing_frequency_months` forward from `origination_date`. | `2026-09-30` |
+| `repricing_frequency_months` | integer (BIGINT) |  | Reset frequency of the reference rate of floating (and mixed, after the fixed period) contracts in months, normally the index tenor (3 for EURIBOR_3M). Used by the NII module (EBA MN 2025 para 358(b)). | `3` |
 | `amortisation_type` | string (VARCHAR) |  | Repayment profile (annuity, linear, bullet, interest_only, custom). | `annuity` |
 | `days_past_due` | integer (BIGINT) |  | Days past due of the oldest material past-due amount at the reference date (CRR Art. 178 counting). 0 if not past due. | `0` |
 | `is_defaulted` | boolean (BOOLEAN) |  | In default per CRR Art. 178 at the reference date. | `false` |
@@ -175,6 +180,7 @@ Checks:
 - `EXP-006` (warning): Maturity is not before origination.
 - `EXP-007` (warning): Loss allowance does not exceed the exposure.
 - `EXP-008` (warning): Stage 3 exposures are credit-impaired.
+- `EXP-009` (warning): Floating-rate on-balance exposures state their reset frequency (NII module).
 - `EXP-101` (error): Household loans have a household purpose.
 - `EXP-102` (warning): NFC loans state whether they are CRE.
 
@@ -385,6 +391,111 @@ Checks:
 - `RPA-002` (error): Stage 1 outflows do not exceed 100%.
 - `RPA-003` (error): Stage 2 outflows do not exceed 100%.
 
+### sim_deposit
+
+Deposits received at the reference date: current, savings, call, notice and term deposits from customers, other banks and central banks. Used by the net interest income (NII) module for interest expense and repricing (EBA MN 2025 section 4), and later by the funding module for deposit outflows. Repos and debt securities issued are not deposits (debt securities issued are in `sim_debt_issued`).
+
+- **Grain:** One row per deposit contract (account).
+- **Primary key:** `deposit_id`
+- **Partitioned by:** `entity_id`
+- **Required by modules:** nii
+- **Foreign key:** (entity_id) → `sim_entity`
+- **Foreign key:** (counterparty_id) → `sim_counterparty`
+
+| Column | Type | Req. | Description | Example |
+|---|---|---|---|---|
+| `deposit_id` | key (VARCHAR) | yes | Deposit contract or account identifier, unique across the dataset and stable over time. | `DEP-000001` |
+| `entity_id` | key (VARCHAR) | yes | Legal entity that has recognised the deposit. Its country is the 'location of the activity' of the liability in the EBA NII templates (MN 2025 para 401). | `BANK-CPP-001` |
+| `counterparty_id` | key (VARCHAR) | yes | Depositor. Its `eba_sector` drives the EBA NII liability type (households, NFCs, credit institutions, ...). | `CPTY-000001` |
+| `deposit_type` | enum `deposit_type` | yes | Kind of deposit. `current`, `savings` and `call` are sight deposits: they reprice immediately in the NII projection (MN 2025 para 369). A deposit is a sight deposit if it is legally redeemable at demand, whatever its FINREP classification (MN para 363 footnote 57). *Ref: FINREP F 08.01 (current accounts / overnight deposits, deposits with agreed maturity, deposits redeemable at notice); EBA MN 2025 paras 363, 366.* | `term` |
+| `product_code` | string (VARCHAR) |  | Institution's product code. Informational. | `DEPOSIT_TERM_12M` |
+| `currency` | currency (VARCHAR) | yes | Currency of the deposit and of the amounts on this row. | `EUR` |
+| `amount` | amount (DECIMAL(18,2)) | yes | Principal outstanding (balance) of the deposit at the reference date, excluding accrued interest. **Pitfall:** Report overdrawn current accounts as loans in `sim_exposure`, not as negative deposits. | `25000.00` |
+| `accrued_interest` | amount (DECIMAL(18,2)) |  | Accrued interest not yet paid. Informational. | `12.50` |
+| `origination_date` | date (DATE) |  | Date the deposit was placed or last renewed (for term deposits, the start of the current term). Together with `maturity_date` it defines the original term used when the deposit is replaced (MN 2025 para 369). | `2026-01-15` |
+| `maturity_date` | date (DATE) |  | Agreed maturity of a term deposit. NULL for sight and notice deposits. | `2027-01-15` |
+| `notice_period_days` | integer (BIGINT) |  | Notice period in days for notice deposits. NULL or 0 if none. | `90` |
+| `interest_rate_type` | enum `interest_rate_type` |  | `floating` if the remuneration is contractually referenced to an interest rate index (MN 2025 para 379), otherwise `fixed` (administered rates of sight deposits are fixed). | `fixed` |
+| `current_interest_rate` | rate (DECIMAL(18,9)) |  | Rate paid at the reference date, per annum. NULL = 0 in the NII projection (reported as a warning). | `0.025000000` |
+| `reference_rate` | string (VARCHAR) |  | Reference rate index of floating deposits (`EURIBOR_3M`, `ESTR`, ...). | `EURIBOR_3M` |
+| `interest_spread` | rate (DECIMAL(18,9)) |  | Contractual spread over the reference rate of floating deposits. Informational. | `-0.005000000` |
+| `next_repricing_date` | date (DATE) |  | Next date the rate of a floating deposit resets. When NULL, the engine rolls `repricing_frequency_months` forward from `origination_date`. | `2026-09-30` |
+| `repricing_frequency_months` | integer (BIGINT) |  | Reset frequency of the reference rate of floating deposits in months (the index tenor, e.g. 3 for EURIBOR_3M). | `3` |
+| `is_intragroup` | boolean (BOOLEAN) |  | Deposit from another entity of the consolidation scope. Excluded from the NII projection (MN 2025 para 403). | `false` |
+| `dgs_covered_amount` | amount (DECIMAL(18,2)) |  | Part of the deposit covered by a deposit guarantee scheme (Directive 2014/49/EU). For the funding module (deposit outflows). | `25000.00` |
+| `is_operational` | boolean (BOOLEAN) |  | Held in an operational relationship (clearing, custody, cash management; LCR Art. 27). For the funding module. | `false` |
+| `is_transactional` | boolean (BOOLEAN) |  | Held in a transactional account (salary credited, regular payments; LCR Art. 24(2)). For the funding module. | `true` |
+
+Checks:
+
+- `DEP-001` (error): Amounts are not negative.
+- `DEP-002` (warning): Term deposits have a maturity date; other deposit types have none.
+- `DEP-003` (warning): Maturity is not before origination.
+- `DEP-004` (warning): Floating-rate deposits state their reset frequency.
+- `DEP-005` (warning): The DGS-covered amount does not exceed the deposit.
+
+### sim_debt_issued
+
+Debt securities issued by the institution at the reference date: covered bonds, asset-backed securities, certificates of deposit and commercial paper, senior and subordinated bonds, and Additional Tier 1 instruments. Used by the net interest income (NII) module for interest expense and repricing (EBA MN 2025 section 4). Own holdings of the institution's securities (buy-backs, retained issues) are excluded or netted from the amounts.
+
+- **Grain:** One row per issued instrument (ISIN or tranche) and issuing entity.
+- **Primary key:** `debt_id`
+- **Partitioned by:** `entity_id`
+- **Required by modules:** nii
+- **Foreign key:** (entity_id) → `sim_entity`
+
+| Column | Type | Req. | Description | Example |
+|---|---|---|---|---|
+| `debt_id` | key (VARCHAR) | yes | Instrument identifier, unique across the dataset (ISIN or internal id). | `DBT-000001` |
+| `entity_id` | key (VARCHAR) | yes | Issuing legal entity. Its country is the 'location of the activity' in the EBA NII templates (MN 2025 para 401). | `BANK-CPP-001` |
+| `instrument_type` | enum `debt_instrument_type` | yes | Kind of instrument. Drives the EBA NII liability type; `additional_tier1` is excluded from NII (MN 2025 para 398). | `senior_unsecured` |
+| `currency` | currency (VARCHAR) | yes | Currency of the instrument and of the amounts on this row. | `EUR` |
+| `carrying_amount` | amount (DECIMAL(18,2)) | yes | Carrying amount of the liability at the reference date (amortised cost including accrued interest, or fair value under the fair value option), net of own holdings. The NII volume (MN 2025 para 355). | `500000000.00` |
+| `nominal_amount` | amount (DECIMAL(18,2)) |  | Outstanding nominal (face) amount, net of own holdings. | `500000000.00` |
+| `accrued_interest` | amount (DECIMAL(18,2)) |  | Accrued interest included in `carrying_amount`. Informational. | `1250000.00` |
+| `issue_date` | date (DATE) |  | Issue date. Together with `maturity_date` it defines the original maturity used when the instrument is replaced (MN 2025 para 368). | `2024-05-07` |
+| `maturity_date` | date (DATE) |  | Contractual final maturity. NULL for perpetual instruments. | `2029-05-05` |
+| `first_call_date` | date (DATE) |  | First date the issuer may call the instrument. Informational: the NII projection uses the contractual maturity (no behavioural assumptions, MN 2025 para 369). | `2028-05-05` |
+| `interest_rate_type` | enum `interest_rate_type` |  | `floating` if the coupon is referenced to an interest rate index, otherwise `fixed`. | `fixed` |
+| `current_interest_rate` | rate (DECIMAL(18,9)) |  | Coupon (or effective interest) rate at the reference date, per annum. NULL = 0 in the NII projection (reported as a warning). | `0.037200000` |
+| `reference_rate` | string (VARCHAR) |  | Reference rate index of floating-rate instruments (`EURIBOR_3M`, `SOFR_3M`, ...). | `EURIBOR_3M` |
+| `interest_spread` | rate (DECIMAL(18,9)) |  | Contractual spread over the reference rate of floating-rate instruments. Informational. | `0.012000000` |
+| `next_repricing_date` | date (DATE) |  | Next coupon reset date of floating-rate instruments. When NULL, the engine rolls `repricing_frequency_months` forward from `issue_date`. | `2026-08-05` |
+| `repricing_frequency_months` | integer (BIGINT) |  | Coupon reset frequency of floating-rate instruments in months (the index tenor). | `3` |
+| `is_subordinated` | boolean (BOOLEAN) |  | Subordinated to senior unsecured creditors. Informational. | `false` |
+
+Checks:
+
+- `DBT-001` (error): Amounts are not negative.
+- `DBT-002` (warning): Maturity is not before the issue date.
+- `DBT-003` (warning): Floating-rate instruments state their reset frequency.
+
+### sim_rate_curve
+
+Interest rate curves at the reference date: the risk-free (reference) curve per currency, and credit spread curves per currency, issuer sector, rating band and seniority. The NII module splits every rate into its reference-rate and margin components against the risk-free curve (EBA MN 2025 paras 351, 380-381); the credit spread curves are kept for the funding spread module. Optional: without a risk-free curve for a currency, the NII module uses the macro scenario's starting-point swap curve of that currency.
+
+- **Grain:** One row per curve and tenor.
+- **Primary key:** `curve_id`, `tenor_months`
+- **Required by modules:** nii
+
+| Column | Type | Req. | Description | Example |
+|---|---|---|---|---|
+| `curve_id` | key (VARCHAR) | yes | Curve identifier. One curve per curve type, currency and (for spreads) sector, rating band and seniority. | `RF-EUR` |
+| `curve_type` | enum `curve_type` | yes | Risk-free curve or credit spread curve. | `risk_free` |
+| `currency` | currency (VARCHAR) | yes | Currency of the curve. | `EUR` |
+| `tenor_months` | integer (BIGINT) | yes | Tenor of the point in months (3 = 3 months, 120 = 10 years). The engine interpolates linearly between tenors and holds the shortest and longest tenor flat beyond the curve (MN 2025 para 374). | `12` |
+| `rate` | rate (DECIMAL(18,9)) | yes | Risk-free curves: the zero or par swap rate at the tenor (money-market rates up to 1 year, swap rates against 6-month money-market rates beyond, MN 2025 para 351). Credit spread curves: the spread over the risk-free rate at the tenor. Per annum, decimal fraction; may be negative. | `0.025397208` |
+| `sector` | string (VARCHAR) |  | Issuer sector of a credit spread curve (NULL for risk-free curves). Allowed: `sovereign`, `financial`, `corporate`. | `financial` |
+| `rating_band` | string (VARCHAR) |  | Rating band of a credit spread curve (NULL for risk-free curves). Allowed: `investment_grade`, `high_yield`. | `investment_grade` |
+| `seniority` | string (VARCHAR) |  | Seniority of a credit spread curve (NULL for risk-free curves). Allowed: `senior`, `non_senior`. | `senior` |
+
+Checks:
+
+- `CRV-001` (error): Risk-free curves have no sector, rating band or seniority; credit spread curves have all three.
+- `CRV-101` (error): A curve id has one curve type, currency, sector, rating band and seniority.
+- `CRV-102` (error): At most one risk-free curve per currency.
+- `CRV-103` (warning): Every currency of deposits, debt issued and on-balance exposures has a risk-free curve (else the NII module uses the scenario's starting-point swap curve).
+
 ## Code lists
 
 ### `stage`
@@ -535,6 +646,41 @@ Origin of a risk parameter.
 | `derived` | Derived by `sora calibrate` from SIM history. |
 | `benchmark` | Supervisory benchmark (e.g. ECB benchmark parameters). |
 | `override` | Expert override (must be documented). |
+
+### `deposit_type`
+
+Kind of deposit received (FINREP F 08.01 split of deposits). `current`, `savings` and `call` are sight deposits in the sense of EBA MN 2025 para 363 (legally redeemable at demand without significant delay, restriction or penalty); `notice` and `term` are not (MN para 366).
+
+| Value | Meaning |
+|---|---|
+| `current` | Current or transactional account, including vostro accounts of other banks (overnight deposits). |
+| `savings` | Savings account redeemable at demand without a notice period or penalty. |
+| `call` | Call money and other deposits repayable at demand (e.g. interbank call deposits). |
+| `notice` | Deposit redeemable with a notice period (`notice_period_days`), without a fixed maturity. |
+| `term` | Deposit with an agreed maturity (`maturity_date`), including interbank term deposits. |
+
+### `debt_instrument_type`
+
+Kind of debt security issued (own funds and eligible liabilities features, EBA NII template rows).
+
+| Value | Meaning |
+|---|---|
+| `covered_bond` | Covered bond (Directive (EU) 2019/2162). |
+| `asset_backed` | Asset-backed security issued by the institution (retained securitisation notes excluded). |
+| `certificate_of_deposit` | Certificate of deposit or commercial paper (short-term wholesale paper). |
+| `senior_unsecured` | Senior preferred unsecured bond or note. |
+| `senior_non_preferred` | Senior non-preferred bond (CRR Art. 72b(2), BRRD Art. 108(2)). |
+| `subordinated` | Subordinated debt, including Tier 2 instruments. |
+| `additional_tier1` | Additional Tier 1 instrument (CRR Art. 52). Classified as equity or liability; excluded from NII (EBA MN 2025 para 398). |
+
+### `curve_type`
+
+Kind of interest rate curve in `sim_rate_curve`.
+
+| Value | Meaning |
+|---|---|
+| `risk_free` | Risk-free (reference) rate curve of a currency, as used to manage interest rate risk in the banking book (EBA MN 2025 para 351). Swap rates, money-market rates up to 1 year. |
+| `credit_spread` | Credit spread over the risk-free curve for a sector, rating band and seniority. |
 
 ### `scenario`
 

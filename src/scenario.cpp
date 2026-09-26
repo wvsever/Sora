@@ -77,7 +77,34 @@ void load_sector_config(ryml::ConstNodeRef root, const fs::path& base_dir, Scena
     }
 }
 
+// `nii` (net interest income); defaults as in NiiConfig. An empty mapping (`nii:`) enables the module.
+void load_nii_config(ryml::ConstNodeRef root, ScenarioConfig& c) {
+    if (!root.has_child(ryml::to_csubstr("nii"))) return;
+    auto n = root["nii"];
+    c.nii.enabled = true;
+    if (!n.is_map()) return;
+    if (n.has_child(ryml::to_csubstr("own_rating"))) {
+        c.nii.own_rating = str(n["own_rating"]);
+        if (!idiosyncratic_shock_bps(c.nii.own_rating))
+            throw Error("scenario: nii.own_rating '" + c.nii.own_rating + "' is not an S&P rating of EBA MN Box 23");
+    }
+    if (n.has_child(ryml::to_csubstr("new_business_months"))) {
+        c.nii.new_business_months = num<int>(n["new_business_months"]);
+        if (c.nii.new_business_months < 1) throw Error("scenario: nii.new_business_months must be at least 1");
+    }
+}
+
 }  // namespace
+
+std::optional<int> idiosyncratic_shock_bps(const std::string& rating) {
+    static const std::map<std::string, int> table = {
+        {"AAA", 25}, {"AA+", 30}, {"AA", 35}, {"AA-", 40}, {"A+", 45}, {"A", 50}, {"A-", 60}, {"BBB+", 70},
+        {"BBB", 80}, {"BBB-", 95}, {"BB+", 110}, {"BB", 125}, {"BB-", 145}, {"B+", 175}, {"B", 175}, {"B-", 175},
+        {"CCC+", 225}, {"CCC", 225}, {"CCC-", 225}, {"CC+", 225}, {"CC", 225}, {"CC-", 225}};
+    const auto it = table.find(rating);
+    if (it == table.end()) return std::nullopt;
+    return it->second;
+}
 
 ScenarioConfig load_scenario(const fs::path& yaml, const fs::path& base_dir) {
     std::string text = read_file(yaml);
@@ -155,6 +182,7 @@ ScenarioConfig load_scenario(const fs::path& yaml, const fs::path& base_dir) {
     }
     load_benchmark_config(root, base_dir, c);
     load_sector_config(root, base_dir, c);
+    load_nii_config(root, c);
     return c;
 }
 

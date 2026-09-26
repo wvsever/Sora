@@ -1,6 +1,6 @@
 {
   "reference_date": "2026-06-30",
-  "sim_mapping_release": "cppbank@708bc6895468",
+  "sim_mapping_release": "cppbank@9239197062b7",
   "scenario": "test_eba2025",
   "segments": 153,
   "exposures": 52872,
@@ -492,6 +492,74 @@
         "prov_stock_s3": 24226381.34,
         "prov_stock_poci": 3599963.97,
         "impairment": 3987825.02
+      }
+    }
+  },
+  "nii": {
+    "own_rating": "A",
+    "idiosyncratic_shock": 0.005,
+    "new_business_months": 12,
+    "positions": {
+      "assets": 47423,
+      "non_performing": 4125,
+      "deposits": 85692,
+      "sight_deposits": 30754,
+      "debt_issued": 990
+    },
+    "fallbacks": {
+      "missing_rate": 0,
+      "floating_without_frequency": 0,
+      "term_fallback": 0,
+      "new_business_fallback_cells": 85
+    },
+    "starting_point": {
+      "interest_income": 1115850314.66,
+      "interest_expense": 878923000.71,
+      "nii": 236927313.95,
+      "volume_performing": 30696131656.84,
+      "volume_non_performing": 233375652.38,
+      "provisions_non_performing": 139987522.32,
+      "npe_provisions_credit": 124478885.83
+    },
+    "totals": {
+      "baseline/1": {
+        "interest_income": 1046773968.39,
+        "interest_expense": 817878894.3,
+        "nii": 228895074.1
+      },
+      "baseline/2": {
+        "interest_income": 1008399432.56,
+        "interest_expense": 783723951.03,
+        "nii": 224675481.53
+      },
+      "baseline/3": {
+        "interest_income": 1021618975.48,
+        "interest_expense": 795162971.61,
+        "nii": 226456003.88
+      },
+      "adverse/1": {
+        "interest_income": 1248105670.49,
+        "interest_expense": 1098320321.07,
+        "nii": 149785349.41,
+        "npe_provision_increase": 29176609.74,
+        "nii_cap": 236702798.08,
+        "nii_capped": 149785349.41
+      },
+      "adverse/2": {
+        "interest_income": 1213367998.83,
+        "interest_expense": 1102718921.78,
+        "nii": 110649077.05,
+        "npe_provision_increase": 80029323.72,
+        "nii_cap": 236311483.21,
+        "nii_capped": 110649077.05
+      },
+      "adverse/3": {
+        "interest_income": 1201189279.09,
+        "interest_expense": 1074094592.97,
+        "nii": 127094686.13,
+        "npe_provision_increase": 136850893.86,
+        "nii_cap": 235874237.61,
+        "nii_capped": 127094686.13
       }
     }
   }

@@ -187,6 +187,7 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
     if (run.projection && run.projection->sectoral) write_sector_parameters(s, *run.projection, dir / "sector_parameters.csv");
     if (run.rea) write_rea_csv(s, *run.rea, dir / "rea.csv");
     if (run.off_balance) write_off_balance(d, s, *run.off_balance, dir);
+    if (run.nii) write_nii(*run.nii, d, dir / "nii.csv");
 
     {
         auto f = open(dir / "summary.json");
@@ -227,6 +228,10 @@ void write_outputs(const RunOutput& run, const fs::path& dir) {
         if (run.off_balance) {
             f << ",\n  \"off_balance\": ";
             write_off_balance_summary(f, *run.off_balance);
+        }
+        if (run.nii) {
+            f << ",\n  \"nii\": ";
+            write_nii_summary(f, *run.nii);
         }
         f << "\n}\n";
     }

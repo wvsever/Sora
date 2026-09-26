@@ -27,10 +27,11 @@ A small, stress-test-oriented model. The 54-table test dataset is a source layou
 | `sim_guarantee` | Protection item | Form, guarantor, amount, protected exposure |
 | `sim_stage_history` | Exposure × period | Stage, gross carrying amount, allowance (for calibration) |
 | `sim_default_history` | Defaulted exposure | Default date, EAD at default, recoveries, costs, write-offs (for LGD) |
-| `sim_cashflow` | Exposure × date | Contractual flows (NII module) |
-| `sim_deposit` | Contract | Funding module |
+| `sim_cashflow` | Exposure × date | Contractual flows (NII module; not yet in the schema) |
+| `sim_deposit` | Contract | Deposits received: type (sight / notice / term), rate and repricing, DGS and operational flags (NII and funding modules) |
+| `sim_debt_issued` | Instrument | Debt securities issued: type, carrying and nominal amount, coupon and repricing (NII module) |
 | `sim_risk_parameter` | Exposure or segment × scenario × year | Customer PD/TR/LGD/LR/CCF (`09_risk_parameters.md`) |
-| `sim_market_data` | Curve / FX point | Curves and FX at the reference date |
+| `sim_fx_rate`, `sim_rate_curve` | Currency × date; curve × tenor | FX rates; risk-free and credit spread curves at the reference date (NII module, `13_nii.md`) |
 
 The exact column list is defined in the schema, not in this plan.
 

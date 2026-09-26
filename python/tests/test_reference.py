@@ -168,7 +168,7 @@ def test_golden_results_are_reproducible(reference_sim, tmp_path):
     ref.run(reference_sim, REPO / "tests" / "scenarios" / "test_eba2025.yaml", tmp_path, REPO)
     golden = REPO / "tests" / "golden" / "20260630"
     for name in ("segments.csv", "parameters.csv", "projection.csv", "collateral.csv", "cr_sector.csv",
-                 "off_balance.csv", "cr_scen_off_bs.csv", "benchmarks.csv", "sector_parameters.csv"):
+                 "off_balance.csv", "cr_scen_off_bs.csv", "benchmarks.csv", "sector_parameters.csv", "nii.csv"):
         assert (tmp_path / name).read_text() == (golden / name).read_text(), name
     a, b = json.loads((tmp_path / "summary.json").read_text()), json.loads((golden / "summary.json").read_text())
     a.pop("sim_mapping_release"), b.pop("sim_mapping_release")
@@ -197,6 +197,60 @@ def test_golden_invariants():
     for r in csv.DictReader(open(golden / "parameters.csv")):
         assert float(r["pd12m_s1"]) + float(r["tr1_2"]) <= 1 + 1e-9
         assert float(r["pd12m_s2"]) + float(r["tr2_1"]) <= 1 + 1e-9
+
+
+def test_nii_calendar_and_curves():
+    """NII helpers: month arithmetic clamps to the month end; linear interpolation, flat beyond the curve."""
+    day = ref.to_day(ref.date(2024, 1, 31))
+    assert ref.add_months(day, 1) == ref.to_day(ref.date(2024, 2, 29))
+    assert ref.add_months(day, 13) == ref.to_day(ref.date(2025, 2, 28))
+    assert ref.add_months(day, -2) == ref.to_day(ref.date(2023, 11, 30))
+    curve = [(0.25, 0.01), (1.0, 0.02), (10.0, 0.04)]
+    assert ref.interp(curve, 0.1) == 0.01 and ref.interp(curve, 30) == 0.04
+    assert approx(ref.interp(curve, 5.5), 0.03)
+    assert [ref.tenor_months(t) for t in ("1M", "3M", "1Y", "30Y")] == [1, 3, 12, 360]
+
+
+def test_nii_template_rows():
+    """CSV_NII_CALC rows: assets by instrument and counterparty sector, deposits by sector and sight/term."""
+    assert ref.asset_row("loan", "household", "house_purchase") == 5
+    assert ref.asset_row("finance_lease", "household", None) == 6
+    assert ref.asset_row("debt_security", "household", None) == 11
+    assert ref.asset_row("debt_security", "other_financial", None) == 9
+    assert ref.asset_row("loan", "central_bank", None) == 1
+    assert ref.deposit_row("central_bank", True) == ref.deposit_row("central_bank", False) == 22
+    assert ref.deposit_row("household", True) == 28 and ref.deposit_row("household", False) == 29
+    assert ref.deposit_row("credit_institution", True) == 24 and ref.deposit_row("other_financial", False) == 30
+    assert ref.deposit_row("non_financial_corporation", True) == 26
+    assert {r for r, (side, _, _) in ref.NII_ROWS.items() if side == "asset"} == set(range(1, 12))
+
+
+def test_nii_golden_invariants():
+    """Static balance sheet: every cell keeps its t0 volume in all years and scenarios; performing interest is the sum
+    of its reference-rate and margin parts; the summary totals add up nii.csv; the adverse cap is applied."""
+    golden = REPO / "tests" / "golden" / "20260630"
+    rows = list(csv.DictReader(open(golden / "nii.csv")))
+    t0 = {(r["template_row"], r["currency"], r["rate_type"], r["status"]): r["volume"] for r in rows if r["year"] == "0"}
+    by_year = {}
+    for r in rows:
+        assert r["volume"] == t0[(r["template_row"], r["currency"], r["rate_type"], r["status"])]
+        if r["status"] == "performing":
+            assert abs(float(r["interest"]) - float(r["interest_reference"]) - float(r["interest_margin"])) <= 0.011
+        else:
+            assert r["interest_reference"] == r["interest_margin"] == "" and float(r["provisions"]) >= 0
+        side = by_year.setdefault((r["scenario"], r["year"]), {"asset": 0.0, "liability": 0.0})
+        side[r["side"]] += float(r["interest"])
+    nii = json.loads((golden / "summary.json").read_text())["nii"]
+    sp = nii["starting_point"]
+    assert abs(by_year[("actual", "0")]["asset"] - sp["interest_income"]) < 1
+    assert abs(by_year[("actual", "0")]["liability"] - sp["interest_expense"]) < 1
+    for key, tot in nii["totals"].items():
+        scen, year = key.split("/")
+        assert abs(by_year[(scen, year)]["asset"] - tot["interest_income"]) < 1
+        assert abs(by_year[(scen, year)]["liability"] - tot["interest_expense"]) < 1
+        if scen == "adverse":
+            assert tot["nii_cap"] <= sp["nii"] + 0.01 and tot["nii_capped"] == min(tot["nii"], tot["nii_cap"])
+    assert nii["positions"]["sight_deposits"] <= nii["positions"]["deposits"]
 
 
 def test_off_balance_ccf_precedence():

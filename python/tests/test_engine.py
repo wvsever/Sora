@@ -259,7 +259,7 @@ def test_results_do_not_depend_on_workers(reference_sim, tmp_path):
     for w in (1, 3, 8):
         run(reference_sim, tmp_path / f"w{w}", "--workers", str(w), "--parameters", str(tmp_path / "p.csv"))
         outputs[w] = {f.name: f.read_bytes() for f in sorted((tmp_path / f"w{w}").iterdir())}
-    assert "projection.csv" in outputs[1] and "cr_scen.csv" in outputs[1]
+    assert "projection.csv" in outputs[1] and "cr_scen.csv" in outputs[1] and "nii.csv" in outputs[1]
     assert outputs[1] == outputs[3] == outputs[8]
 
     write_params(tmp_path / "bad.csv", [{"level": "exposure", "key": e, "scenario": "actual", "year": 0, "lgd_s2": "1.5"}
@@ -269,6 +269,49 @@ def test_results_do_not_depend_on_workers(reference_sim, tmp_path):
     assert errors[1].returncode == errors[4].returncode == 1
     lines = {w: [x for x in r.stderr.splitlines() if "PAR-010" in x] for w, r in errors.items()}
     assert len(lines[1]) == 10 and lines[1] == lines[4]
+
+
+def test_nii_matches_golden(base_run):
+    """nii.csv equals the golden file (amounts to 1 cent, rates to 1e-9) and summary.json "nii" the golden summary."""
+    key = ("scenario", "year", "template_row", "currency", "rate_type", "status")
+    g, a = read(GOLDEN / "nii.csv", *key), read(base_run / "nii.csv", *key)
+    assert g.keys() == a.keys()
+    for k in g:
+        for col, gv in g[k].items():
+            av = a[k][col]
+            try:
+                tol = 1e-9 if col in ("eir", "margin_new_business") else 0.01
+                assert abs(float(gv) - float(av)) <= tol, (k, col, av, gv)
+            except ValueError:
+                assert gv == av, (k, col)
+    golden = json.loads((GOLDEN / "summary.json").read_text())["nii"]
+    summary = json.loads((base_run / "summary.json").read_text())["nii"]
+    assert summary["positions"] == golden["positions"] and summary["fallbacks"] == golden["fallbacks"]
+    for block in ("starting_point", *(f"totals/{k}" for k in golden["totals"])):
+        gv = golden["starting_point"] if block == "starting_point" else golden["totals"][block[7:]]
+        av = summary["starting_point"] if block == "starting_point" else summary["totals"][block[7:]]
+        assert gv.keys() == av.keys()
+        assert all(abs(gv[k] - av[k]) <= 0.01 for k in gv), block
+
+
+def test_nii_is_opt_in_and_leaves_credit_results_unchanged(reference_sim, base_run, tmp_path):
+    """Without the scenario key `nii` there is no nii.csv, no summary block, and every other output is identical."""
+    text = SCENARIO.read_text()
+    start = text.index("\nnii:")
+    end = text.index("\nsegmentation:")
+    scenario = tmp_path / "no_nii.yaml"
+    scenario.write_text(text[:start] + text[end:])
+    r = subprocess.run([str(ENGINE), "run", str(reference_sim), "--scenario", str(scenario), "-o", str(tmp_path / "out"),
+                        "--base", str(REPO)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert not (tmp_path / "out" / "nii.csv").exists() and "NII-000" not in r.stderr
+    for f in base_run.iterdir():
+        if f.name in ("nii.csv", "summary.json", "diagnostics.json"):
+            continue
+        assert (tmp_path / "out" / f.name).read_bytes() == f.read_bytes(), f.name
+    with_nii = json.loads((base_run / "summary.json").read_text())
+    without = json.loads((tmp_path / "out" / "summary.json").read_text())
+    assert "nii" not in without and {k: v for k, v in with_nii.items() if k != "nii"} == without
 
 
 def test_off_balance_matches_golden_and_cr_scen_off_bs(base_run):

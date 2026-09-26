@@ -108,3 +108,6 @@ What the source must contain to fill the required SIM columns (full definitions:
 | `sim_stage_history` | Month-end stage and allowance per contract, ≥ 12 months (≥ 5 years recommended) |
 | `sim_credit_event`, `sim_recovery_flow` | Defaults, cures, write-offs, recoveries (for LGD calibration) |
 | `sim_fx_rate` | Closing FX rates at the reference date |
+| `sim_deposit` (NII) | Deposits received: id, entity, depositor, type (current / savings / call / notice / term), currency, principal, rate, fixed or floating with index and reset frequency, origination and maturity dates |
+| `sim_debt_issued` (NII) | Debt securities issued: id, entity, instrument type, currency, carrying amount net of own holdings, coupon, index and reset frequency, issue and maturity dates |
+| `sim_rate_curve` (NII, recommended) | Risk-free curve per currency at the reference date (and credit spread curves), tenors in months |

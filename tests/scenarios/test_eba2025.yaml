@@ -30,6 +30,9 @@ benchmark_parameters:                       # ECB credit-risk benchmarks (EBA MN
 sector_satellites:                          # sectoral (GVA) satellites for NFC exposures by NACE sector (MN 2027 para 114)
   file: tests/params/synthetic_sector_satellites.csv   # SYNTHETIC coefficients
   gva_fallback: [EU]                        # sector GVA deviation from GDP for countries without GVA paths (non-EU)
+nii:                                        # net interest income, static balance sheet (EBA MN 2025 section 4, plans/13_nii.md)
+  own_rating: A                             # SYNTHETIC S&P rating of the bank: Box 23 idiosyncratic shock (adverse), 50 bps
+  new_business_months: 12                   # margin of new business: positions originated in the last 12 months (para 353)
 segmentation:
   top_countries: 10
 calibration:

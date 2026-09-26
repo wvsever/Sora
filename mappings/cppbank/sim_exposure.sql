@@ -42,6 +42,11 @@ loans AS (
         l.interest_rate_index                            AS reference_rate,
         CAST(l.interest_spread AS DECIMAL(18,9))         AS interest_spread,
         CAST(l.next_repricing_date AS DATE)              AS next_repricing_date,
+        -- Floating central bank reserves have no index in the export: remunerated at the policy rate, which changes
+        -- at monetary policy meetings (about every six weeks): monthly resets.
+        coalesce(l.repricing_frequency_months,
+                 CASE WHEN l.interest_rate_type = 'floating' AND l.product_code LIKE 'CB_RESERVE%' THEN 1 END)
+                                                         AS repricing_frequency_months,
         l.amortisation_type,
         l.is_credit_impaired,
         l.concession_type IS NOT NULL                    AS is_forborne,
@@ -82,6 +87,7 @@ commitments AS (
         NULL,
         NULL,
         NULL,
+        NULL,
         c.declared_stage IN ('stage3', 'poci'),
         NULL,
         NULL,
@@ -99,7 +105,7 @@ leases AS (
         CAST(s.commencement_date AS DATE), CAST(s.contractual_maturity_date AS DATE),
         CAST(s.gross_carrying_amount AS DECIMAL(18,2)), CAST(s.accrued_interest AS DECIMAL(18,2)),
         NULL, NULL, CAST(s.impairment_allowance AS DECIMAL(18,2)), NULL,
-        'fixed', CAST(s.discount_rate AS DECIMAL(18,9)), NULL, NULL, NULL, NULL,
+        'fixed', CAST(s.discount_rate AS DECIMAL(18,9)), NULL, NULL, NULL, NULL, NULL,
         s.declared_stage IN ('stage3', 'poci'), NULL, NULL, NULL, NULL, NULL, NULL, NULL
     FROM src.contract_lease s
     WHERE s.role = 'lessor' AND s.is_finance_lease
@@ -111,7 +117,8 @@ securities AS (
         CAST(s.issue_date AS DATE), CAST(s.contractual_maturity_date AS DATE),
         CAST(s.gross_carrying_amount AS DECIMAL(18,2)), CAST(s.accrued_interest AS DECIMAL(18,2)),
         NULL, NULL, CAST(s.impairment_allowance AS DECIMAL(18,2)), CAST(s.write_off_cumulative AS DECIMAL(18,2)),
-        s.interest_rate_type, CAST(s.coupon_rate AS DECIMAL(18,9)), NULL, NULL, NULL, NULL,
+        s.interest_rate_type, CAST(s.coupon_rate AS DECIMAL(18,9)), s.interest_rate_index,
+        CAST(s.interest_spread AS DECIMAL(18,9)), CAST(s.next_repricing_date AS DATE), s.repricing_frequency_months, NULL,
         s.declared_stage IN ('stage3', 'poci'), NULL, NULL, NULL, NULL, NULL, NULL, NULL
     FROM src.contract_security_position s
     WHERE s.instrument_class = 'debt' AND NOT coalesce(s.is_short_position, false)
@@ -159,6 +166,7 @@ SELECT
     reference_rate,
     interest_spread,
     next_repricing_date,
+    repricing_frequency_months,
     amortisation_type,
     coalesce(d.days_past_due, 0)                                     AS days_past_due,
     -- The export has no default flag: stage 3, more than 90 days past due, or in probation after default.

@@ -8,7 +8,8 @@ sim_version: 1.0.0-draft
 description: |
   The Sora Input Model (SIM) is the canonical input of the Sora stress engine. It describes a bank's
   credit portfolio at one reference date: counterparties, credit exposures, collateral, guarantees,
-  and the history needed to calibrate stress parameters.
+  and the history needed to calibrate stress parameters; and, for the net interest income (NII) module,
+  its interest-bearing liabilities (deposits, debt issued) and the interest rate curves.
 
   Customers produce SIM tables from their own systems with mapping SQL, usually run by
   `sora-tools map` on exported source files. Sora never reads customer source layouts directly.
@@ -182,6 +183,35 @@ enums:
       benchmark: Supervisory benchmark (e.g. ECB benchmark parameters).
       override: Expert override (must be documented).
 
+  deposit_type:
+    description: >-
+      Kind of deposit received (FINREP F 08.01 split of deposits). `current`, `savings` and `call` are sight
+      deposits in the sense of EBA MN 2025 para 363 (legally redeemable at demand without significant delay,
+      restriction or penalty); `notice` and `term` are not (MN para 366).
+    values:
+      current: Current or transactional account, including vostro accounts of other banks (overnight deposits).
+      savings: Savings account redeemable at demand without a notice period or penalty.
+      call: Call money and other deposits repayable at demand (e.g. interbank call deposits).
+      notice: Deposit redeemable with a notice period (`notice_period_days`), without a fixed maturity.
+      term: Deposit with an agreed maturity (`maturity_date`), including interbank term deposits.
+
+  debt_instrument_type:
+    description: Kind of debt security issued (own funds and eligible liabilities features, EBA NII template rows).
+    values:
+      covered_bond: Covered bond (Directive (EU) 2019/2162).
+      asset_backed: Asset-backed security issued by the institution (retained securitisation notes excluded).
+      certificate_of_deposit: Certificate of deposit or commercial paper (short-term wholesale paper).
+      senior_unsecured: Senior preferred unsecured bond or note.
+      senior_non_preferred: Senior non-preferred bond (CRR Art. 72b(2), BRRD Art. 108(2)).
+      subordinated: Subordinated debt, including Tier 2 instruments.
+      additional_tier1: Additional Tier 1 instrument (CRR Art. 52). Classified as equity or liability; excluded from NII (EBA MN 2025 para 398).
+
+  curve_type:
+    description: Kind of interest rate curve in `sim_rate_curve`.
+    values:
+      risk_free: Risk-free (reference) rate curve of a currency, as used to manage interest rate risk in the banking book (EBA MN 2025 para 351). Swap rates, money-market rates up to 1 year.
+      credit_spread: Credit spread over the risk-free curve for a sector, rating band and seniority.
+
   scenario:
     description: Scenario identifier for parameters and results.
     values:
@@ -202,6 +232,9 @@ tables:
   - sim_recovery_flow
   - sim_fx_rate
   - sim_risk_parameter
+  - sim_deposit
+  - sim_debt_issued
+  - sim_rate_curve
 
 manifest:
   file: sim_manifest.json
