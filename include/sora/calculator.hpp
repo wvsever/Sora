@@ -14,7 +14,9 @@
 // - Optional replay cache on disk, keyed by calculator name/version and request fingerprint: a rerun with
 //   identical inputs replays stored responses and needs no calculator (capabilities are cached too). Writing it
 //   is best effort.
-// - Streaming (IrbStream): records are produced and consumed per batch, within a bounded window of batches.
+// - Streaming (CallStream): records are produced and consumed per batch, within a bounded window of batches.
+// - Calculations: IRB (POST /v1/credit-risk/irb) and credit risk parameters (POST /v1/parameters/credit), with the
+//   same batching, retries, keys, jobs, validation and replay cache.
 
 #include <cstdint>
 #include <filesystem>
@@ -104,15 +106,64 @@ std::string encode_irb_request(const RequestContext& ctx, const std::vector<IrbR
 // A request ready to send: `key` = idempotency_key(ctx.run_id, "irb", body without requestId) = context.requestId.
 // The records are encoded once; the key is hashed from the parts of that encoding, then requestId is inserted.
 // `body` is byte-identical to encode_irb_request(ctx, records, first, count, key).
-struct IrbRequest {
+struct PreparedRequest {
     std::string key, body;
 };
+using IrbRequest = PreparedRequest;
 IrbRequest make_irb_request(const RequestContext& ctx, const std::vector<IrbRecord>& records, std::size_t first,
                             std::size_t count);
 // Validates an IrbResponse against the request and decodes it. Throws CalculatorError on any violation.
 std::vector<IrbResult> decode_irb_response(std::string_view json, const std::vector<IrbRecord>& records,
                                            std::size_t first, std::size_t count, const std::string& request_id,
                                            const Capabilities& caps, const std::string& param_set);
+
+// One ParameterRecord (/v1/parameters/credit). Attributes are model features named as SIM columns.
+struct ParameterAttribute {
+    enum class Kind { String, Boolean, Integer };
+    std::string name;
+    Kind kind = Kind::String;
+    std::string text;   // the string, "true"/"false", or the integer's digits
+};
+
+struct ParameterRecord {
+    std::string record_id, level = "exposure", segment, stage;   // segment and stage are left out when empty
+    std::vector<ParameterAttribute> attributes;                   // any order; encoded sorted by name
+};
+
+// What a parameter request asks for (ParameterRequest.parameters and .years); the same for every batch of a run.
+struct ParameterSpec {
+    std::vector<std::string> parameters;
+    std::vector<int> years = {0};
+};
+
+struct ParameterValue {
+    std::string parameter;
+    int year = 0;
+    Nano value = 0;       // Probability, in [0, 1]
+    std::string source;   // model | benchmark | override; empty when the calculator does not say
+};
+
+struct ParameterResult {
+    std::string record_id;
+    bool ok = false;
+    std::vector<ParameterValue> values;   // ok records: only those returned (a missing value is never filled in)
+    std::vector<Message> errors;          // rejected records
+};
+
+// Request body (canonical JSON) for records[first, first + count); `request_id` empty leaves context.requestId out.
+std::string encode_parameter_request(const RequestContext& ctx, const ParameterSpec& spec,
+                                     const std::vector<ParameterRecord>& records, std::size_t first, std::size_t count,
+                                     const std::string& request_id);
+// key = idempotency_key(ctx.run_id, "parameters-credit", body without requestId); body = the request with that key.
+PreparedRequest make_parameter_request(const RequestContext& ctx, const ParameterSpec& spec,
+                                       const std::vector<ParameterRecord>& records, std::size_t first,
+                                       std::size_t count);
+// Validates a ParameterResponse (meta as for IRB; one result per record, in order; values of requested parameters
+// and years only, each at most once, decimal strings in [0, 1]) and decodes it. Throws CalculatorError.
+std::vector<ParameterResult> decode_parameter_response(std::string_view json, const ParameterSpec& spec,
+                                                       const std::vector<ParameterRecord>& records, std::size_t first,
+                                                       std::size_t count, const std::string& request_id,
+                                                       const Capabilities& caps, const std::string& param_set);
 
 // ---------------------------------------------------------------------------------------------- transport
 
@@ -159,18 +210,21 @@ struct IrbCall {
     std::vector<IrbRecord> records;
 };
 
-// Streaming IRB calls: records are produced per batch and consumed with their results per batch, so only a
-// bounded window of batches (twice the number of worker threads) is in memory at any time.
-struct IrbStream {
+// Streaming calls: records are produced per batch and consumed with their results per batch, so only a bounded
+// window of batches (twice the number of worker threads) is in memory at any time.
+template <class Record, class Result>
+struct CallStream {
     std::vector<RequestContext> contexts;   // one per call (run id and parameter set are set by the client)
     std::vector<std::size_t> counts;        // records per call
     // Appends records [first, first + count) of `call` to `out` (empty on entry). Called concurrently from the
     // worker threads; must depend only on its arguments, so a rerun produces the same bytes.
-    std::function<void(std::size_t call, std::size_t first, std::size_t count, std::vector<IrbRecord>& out)> fill;
+    std::function<void(std::size_t call, std::size_t first, std::size_t count, std::vector<Record>& out)> fill;
     // Receives the results of records [first, first + results.size()) of `call`. Called one batch at a time, in
     // call and record order (the records themselves are released as soon as the response is decoded).
-    std::function<void(std::size_t call, std::size_t first, std::vector<IrbResult>& results)> sink;
+    std::function<void(std::size_t call, std::size_t first, std::vector<Result>& results)> sink;
 };
+using IrbStream = CallStream<IrbRecord, IrbResult>;
+using ParameterStream = CallStream<ParameterRecord, ParameterResult>;
 
 struct ClientStats {
     std::size_t requests = 0, retries = 0, jobs = 0, cache_hits = 0, batches = 0;
@@ -195,6 +249,10 @@ public:
     void irb(const IrbStream& stream);
     // Results per call, in record order (all records in memory; for tests and small inputs).
     std::vector<std::vector<IrbResult>> irb(const std::vector<IrbCall>& calls);
+    // POST /v1/parameters/credit, batched like irb(); connect("parameters-credit") first.
+    void parameters(const ParameterSpec& spec, const ParameterStream& stream);
+    std::vector<ParameterResult> parameters(const ParameterSpec& spec, const RequestContext& context,
+                                            const std::vector<ParameterRecord>& records);
 
     ClientStats stats() const;
 
@@ -203,8 +261,13 @@ private:
     // One HTTP call with retries (`attempts` 0 = options.max_attempts).
     Response call(Transport& t, const std::string& method, const std::string& path, const std::string& body,
                   const std::string& key, int attempts = 0);
-    std::string run_batch(Transport& t, const Batch& b, const std::string& body, const std::string& key);
-    // Best effort: a failure is counted in stats_ (and reported as CALC-004 by the REA projection), never thrown.
+    std::string run_batch(Transport& t, const Batch& b, const std::string& calculation, const std::string& path,
+                          const std::string& body, const std::string& key);
+    // The batching, worker pool, replay cache and in-order delivery shared by all calculations (calculator.cpp).
+    template <class Record, class Result, class Encode, class Decode>
+    void run_stream(const std::string& calculation, const std::string& path, const CallStream<Record, Result>& stream,
+                    const Encode& encode, const Decode& decode);
+    // Best effort: a failure is counted in stats_ (and reported as CALC-004 / CALC-024), never thrown.
     void cache_write(const std::filesystem::path& file, const std::string& data);
 
     ClientOptions opt_;

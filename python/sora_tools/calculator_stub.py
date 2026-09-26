@@ -11,7 +11,13 @@ Modes:
            429 or 503, records whose id ends with "-REJECT" are rejected, and optional latency.
 
 In any mode, ``reject`` (a regular expression, ``--reject``) rejects every record whose recordId it matches
-(``re.search``), e.g. ``--reject '7\\|adverse\\|3$'`` for Sora's ``exposure_id|scenario|year`` record ids.
+(``re.search``), e.g. ``--reject '7\\|adverse\\|3$'`` for Sora's ``exposure_id|scenario|year`` record ids, and
+``omit`` (parameter names, ``--omit lgd_s2,ccf``) leaves those parameters out of every /v1/parameters/credit
+result (a calculator that does not model them), so the client's handling of missing values can be tested.
+
+Risk parameters (/v1/parameters/credit) are deterministic in every mode: ``fixed`` returns the base value of each
+parameter; ``formula`` scales it by the record's stage and ``eba_sector`` / ``is_sme`` attributes and, for
+projection years, by a scenario multiplier (an attribute named like the parameter replaces the base value).
 
 Run: ``sora-tools calculator-stub --mode formula --port 8080``
 """
@@ -173,12 +179,27 @@ _BASE = {"pd12m_s1": 0.005, "pd12m_s2": 0.08, "tr1_2": 0.05, "tr2_1": 0.25, "tr3
 _STRESSABLE = {"pd12m_s1", "pd12m_s2", "tr1_2", "pd_lifetime", "pd_reg"}   # grow with stress; others constant
 
 
+_SECTOR_FACTOR = {"household": 0.8, "non_financial_corporation": 1.2, "general_government": 0.5, "central_bank": 0.5,
+                  "credit_institution": 0.7, "other_financial": 1.0}
+_STAGE_FACTOR = {"stage1": 1.0, "stage2": 1.5, "stage3": 1.0, "poci": 1.0}
+
+
+def _record_factor(r: dict, p: str) -> float:
+    """Deterministic scaling of a base value by the record's attributes (PDs and transition rates only)."""
+    if not p.startswith(("pd", "tr")):
+        return 1.0
+    attrs = r.get("attributes") or {}
+    f = _SECTOR_FACTOR.get(attrs.get("eba_sector"), 1.0) * _STAGE_FACTOR.get(r.get("stage"), 1.0)
+    return f * (1.1 if attrs.get("is_sme") is True else 1.0)
+
+
 def params_formula(r: dict, request: dict) -> dict:
     scenario = request["context"].get("scenario", "actual")
     values = []
     for year in request["years"]:
         for p in request["parameters"]:
-            base = float(r.get("attributes", {}).get(p, _BASE[p]))
+            attrs = r.get("attributes") or {}
+            base = float(attrs[p]) if p in attrs else _BASE[p] * _record_factor(r, p)
             mult = 1.0
             if year > 0 and p in _STRESSABLE:
                 mult = 1 + (0.4 if scenario == "adverse" else 0.05) * year
@@ -216,11 +237,15 @@ PATHS = {"/v1/credit-risk/irb": "irb", "/v1/credit-risk/sa": "sa",
 
 
 class CalculatorStub:
-    def __init__(self, mode: str = "formula", latency: float = 0.0, reject: str | None = None):
+    def __init__(self, mode: str = "formula", latency: float = 0.0, reject: str | None = None,
+                 omit: str | list[str] | None = None):
         if mode not in ("fixed", "formula", "faults"):
             raise ValueError(mode)
         self.mode, self.latency = mode, latency
         self.reject = re.compile(reject) if reject else None
+        if isinstance(omit, str):
+            omit = [x.strip() for x in omit.split(",") if x.strip()]
+        self.omit = set(omit or [])
         self.lock = threading.Lock()
         self.responses: dict[str, tuple[int, dict]] = {}    # idempotency cache
         self.fault_seen: set[str] = set()
@@ -274,6 +299,8 @@ class CalculatorStub:
                     out = floor_formula(r, ctx)
                 else:
                     out = params_formula(r, request)
+                if calc == "parameters-credit" and self.omit:
+                    out = {**out, "values": [v for v in out["values"] if v["parameter"] not in self.omit]}
                 results.append({"recordId": rid, "status": "ok", **out})
             except (ValueError, KeyError, InvalidOperation) as e:
                 results.append({"recordId": rid, "status": "rejected",
@@ -379,16 +406,16 @@ def make_handler(stub: CalculatorStub) -> Callable:
 
 
 def serve(mode: str = "formula", host: str = "127.0.0.1", port: int = 8080, latency: float = 0.0,
-          reject: str | None = None):
+          reject: str | None = None, omit: str | list[str] | None = None):
     """Start the stub server (blocking unless used via :func:`start_background`)."""
-    stub = CalculatorStub(mode, latency, reject)
+    stub = CalculatorStub(mode, latency, reject, omit)
     server = ThreadingHTTPServer((host, port), make_handler(stub))
     server.stub = stub
     return server
 
 
 def start_background(mode: str = "formula", latency: float = 0.0, reject: str | None = None,
-                     port: int = 0) -> ThreadingHTTPServer:
-    server = serve(mode, port=port, latency=latency, reject=reject)
+                     port: int = 0, omit: str | list[str] | None = None) -> ThreadingHTTPServer:
+    server = serve(mode, port=port, latency=latency, reject=reject, omit=omit)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server

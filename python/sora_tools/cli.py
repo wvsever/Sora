@@ -90,7 +90,7 @@ def cmd_vera_params(args) -> int:
 
 def cmd_calculator_stub(args) -> int:
     from .calculator_stub import serve
-    server = serve(args.mode, args.host, args.port, args.latency, args.reject)
+    server = serve(args.mode, args.host, args.port, args.latency, args.reject, args.omit)
     print(f"Sora calculator stub ({args.mode}) on http://{args.host}:{server.server_address[1]}")
     try:
         server.serve_forever()
@@ -208,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--port", type=int, default=8080)
     c.add_argument("--latency", type=float, default=0.0, help="seconds added to every request")
     c.add_argument("--reject", help="regular expression: reject every record whose recordId it matches")
+    c.add_argument("--omit", help="comma-separated parameter names never returned by /v1/parameters/credit")
     c.set_defaults(func=cmd_calculator_stub)
 
     from .satellites import register as register_satellites

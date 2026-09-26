@@ -63,7 +63,8 @@ SCENARIO_PATH_KEYS = (("macro_path",), ("satellites",), ("starting_parameters",)
 OUTPUT_FILES = {
     "segments.csv": "Segments and starting-point stocks: exposure and provisions per stage (EUR).",
     "parameters.csv": "Starting-point and projected parameters per segment, scenario and year, with source "
-                      "(derived/external/mixed/benchmark) and calibration_levels.",
+                      "(derived/external/mixed/benchmark) and calibration_levels; with --calculator-parameters also "
+                      "exposure rows (actual/0) with the fields taken from the calculator (source calculator).",
     "projection.csv": "Stage flows, exposures, provisions per component (EBA Boxes 3-9) and impairment per "
                       "segment, scenario and year.",
     "collateral.csv": "Static-balance-sheet LTV per segment, scenario, year and t0 stage.",
@@ -73,6 +74,8 @@ OUTPUT_FILES = {
     "cr_scen_off_bs.csv": "EBA CSV_CR_SCEN_OFF_BS template.",
     "cr_sector.csv": "EBA CSV_CR_SECTOR template (NFC by NACE section).",
     "rea.csv": "IRB REA and expected loss per segment, scenario and year (with --calculator).",
+    "calculator_parameters.csv": "Credit parameters returned per exposure by the calculator's /v1/parameters/credit "
+                                 "(with --calculator-parameters): status, values, and which were used.",
     "summary.json": "Totals per scenario and year, starting point, benchmark and off-balance summaries.",
     "diagnostics.json": "Engine findings (id, severity, count, message).",
 }

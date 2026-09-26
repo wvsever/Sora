@@ -15,6 +15,7 @@
 #include <set>
 
 #include "sora/calculator.hpp"
+#include "sora/credit_parameters.hpp"
 #include "sora/json_text.hpp"
 #include "sora/rea.hpp"
 
@@ -22,7 +23,8 @@ using namespace sora;
 using namespace sora::calc;
 using json = nlohmann::json;
 namespace fs = std::filesystem;
-
+
+
 namespace {
 // POSIX setenv/unsetenv do not exist on Windows; _putenv_s with an empty value removes the variable there.
 void set_env(const std::string& name, const char* value) {
@@ -140,6 +142,34 @@ json ok_response(const json& request, const std::string& version = "1.0") {
             {"results", results}};
 }
 
+// /v1/parameters/credit: every requested parameter and year, except `omit`; value = 0.0<k> for the k-th requested
+// parameter (x 2 for stage2 records); records ending in "-R" are rejected.
+json params_response(const json& request, const std::set<std::string>& omit = {}) {
+    json results = json::array();
+    for (const auto& r : request["records"]) {
+        const std::string id = r["recordId"];
+        if (id.size() > 2 && id.substr(id.size() - 2) == "-R") {
+            results.push_back({{"recordId", id}, {"status", "rejected"}, {"errors", {{{"code", "P-1"}, {"message", "no model"}}}}});
+            continue;
+        }
+        json values = json::array();
+        const Nano factor = r.contains("stage") && r["stage"] == "stage2" ? 2 : 1;
+        for (const auto& y : request["years"]) {
+            Nano k = 0;
+            for (const auto& p : request["parameters"]) {
+                ++k;
+                if (omit.count(p.get<std::string>())) continue;
+                values.push_back({{"year", y}, {"parameter", p}, {"value", format_decimal(k * factor * 10'000'000, 9)},
+                                  {"source", "model"}});
+            }
+        }
+        results.push_back({{"recordId", id}, {"status", "ok"}, {"values", values}});
+    }
+    return {{"meta", {{"requestId", request["context"]["requestId"]}, {"calculator", {{"name", "stub"}, {"version", "1.0"}}},
+                      {"paramSet", request["context"]["paramSet"]}}},
+            {"results", results}};
+}
+
 }  // namespace
 
 TEST_CASE("IRB requests are canonical JSON with decimal strings") {
@@ -244,6 +274,8 @@ struct Stub {
     bool down = false;
     int caps_fail = 0;           // the next N GET /v1/capabilities fail
     std::string param_set = "EU_CRR3_2025-01-01";
+    std::vector<std::string> calculations = {"irb", "parameters-credit"};
+    std::set<std::string> omit;                // parameters never returned by /v1/parameters/credit
     std::map<std::string, std::string> jobs;   // job id -> result body
     std::map<std::string, int> polls;
 
@@ -261,7 +293,7 @@ struct Stub {
             }
             r.status = 200;
             r.body = json{{"calculator", {{"name", "stub"}, {"version", "1.0"}}}, {"apiVersion", "0.1.0"},
-                          {"calculations", {"irb"}}, {"paramSets", {param_set}},
+                          {"calculations", calculations}, {"paramSets", {param_set}},
                           {"limits", {{"maxRecordsPerRequest", 10}, {"maxRecordsPerSyncRequest", 3}, {"maxConcurrentRequests", 4}}}}.dump();
             return r;
         }
@@ -275,9 +307,12 @@ struct Stub {
             if (path == "/v1/credit-risk/irb") {
                 r.status = 200;
                 r.body = ok_response(j).dump();
+            } else if (path == "/v1/parameters/credit") {
+                r.status = 200;
+                r.body = params_response(j, omit).dump();
             } else if (path == "/v1/jobs") {
                 const std::string id = "job-" + key;
-                jobs[id] = ok_response(j["request"]).dump();
+                jobs[id] = (j["calculation"] == "irb" ? ok_response(j["request"]) : params_response(j["request"], omit)).dump();
                 r.status = 202;
                 r.body = json{{"jobId", id}, {"status", "queued"}}.dump();
             }
@@ -655,4 +690,243 @@ TEST_CASE("streaming: records are produced per batch, results delivered in order
         fill(call, first, count, out);
     };
     CHECK_THROWS_WITH(client.irb(s), "fill failed");
+}
+
+// ============================================================================================== credit parameters
+
+namespace {
+
+ParameterRecord param_record(const std::string& id, const std::string& stage = "stage1") {
+    ParameterRecord r;
+    r.record_id = id;
+    r.segment = "LOANS|NFC_SME|BE";
+    r.stage = stage;
+    using Kind = ParameterAttribute::Kind;
+    r.attributes = {{"is_sme", Kind::Boolean, "true"}, {"eba_sector", Kind::String, "non_financial_corporation"},
+                    {"rating", Kind::Integer, "7"}};
+    return r;
+}
+
+RequestContext param_context() {
+    auto c = context();
+    c.scenario = "actual";
+    c.year = 0;
+    return c;
+}
+
+ParameterSpec spec(std::vector<std::string> p = {"pd12m_s1", "lgd_s1", "ccf"}) {
+    ParameterSpec s;
+    s.parameters = std::move(p);
+    return s;
+}
+
+}  // namespace
+
+TEST_CASE("parameter requests are canonical JSON, keyed like IRB requests") {
+    const std::vector<ParameterRecord> recs = {param_record("A"), param_record("B", "stage2")};
+    const auto body = encode_parameter_request(param_context(), spec(), recs, 0, 2, "key-1");
+    CHECK(body == encode_parameter_request(param_context(), spec(), recs, 0, 2, "key-1"));
+    const auto j = json::parse(body);
+    CHECK(j.dump() == body);   // sorted keys, no whitespace
+    CHECK(j["context"]["requestId"] == "key-1");
+    CHECK(j["context"]["scenario"] == "actual");
+    CHECK(j["context"]["projectionYear"] == 0);
+    CHECK(j["context"]["inputFingerprint"] == "sha256:" + sha256_hex(j["records"].dump()));
+    CHECK(j["parameters"] == json({"pd12m_s1", "lgd_s1", "ccf"}));
+    CHECK(j["years"] == json({0}));
+    const auto& r = j["records"][1];
+    CHECK(r["recordId"] == "B");
+    CHECK(r["level"] == "exposure");
+    CHECK(r["segment"] == "LOANS|NFC_SME|BE");
+    CHECK(r["stage"] == "stage2");
+    CHECK(r["attributes"]["is_sme"] == true);
+    CHECK(r["attributes"]["rating"] == 7);
+    CHECK(r["attributes"]["eba_sector"] == "non_financial_corporation");
+    auto bare = param_record("C");
+    bare.segment.clear();
+    bare.stage.clear();
+    bare.attributes.clear();
+    const auto jb = json::parse(encode_parameter_request(param_context(), spec(), {bare}, 0, 1, ""));
+    CHECK_FALSE(jb["context"].contains("requestId"));
+    CHECK(jb["records"][0] == json({{"level", "exposure"}, {"recordId", "C"}}));
+    const auto req = make_parameter_request(param_context(), spec(), recs, 0, 2);
+    CHECK(req.key == idempotency_key("run-1", "parameters-credit", encode_parameter_request(param_context(), spec(), recs, 0, 2, "")));
+    CHECK(req.body == encode_parameter_request(param_context(), spec(), recs, 0, 2, req.key));
+    CHECK(req.key != make_parameter_request(param_context(), spec({"pd12m_s1"}), recs, 0, 2).key);
+    CHECK_THROWS_AS(encode_parameter_request(param_context(), spec(), recs, 1, 2, ""), CalculatorError);
+}
+
+TEST_CASE("parameter responses are validated against the request") {
+    const std::vector<ParameterRecord> recs = {param_record("A"), param_record("B-R"), param_record("C", "stage2")};
+    const auto sp = spec();
+    const auto req = json::parse(encode_parameter_request(param_context(), sp, recs, 0, 3, "key-1"));
+    const auto good = params_response(req);
+    const auto decode = [&](const json& j) {
+        return decode_parameter_response(j.dump(), sp, recs, 0, 3, "key-1", caps(), "EU_CRR3_2025-01-01");
+    };
+    const auto res = decode(good);
+    REQUIRE(res.size() == 3);
+    CHECK(res[0].ok);
+    REQUIRE(res[0].values.size() == 3);
+    CHECK(res[0].values[0].parameter == "pd12m_s1");
+    CHECK(res[0].values[0].value == 10'000'000);
+    CHECK(res[0].values[2].value == 30'000'000);
+    CHECK(res[0].values[0].source == "model");
+    CHECK_FALSE(res[1].ok);
+    CHECK(res[1].errors.at(0).code == "P-1");
+    CHECK(res[2].values[1].value == 40'000'000);
+    // Values left out are allowed (reported as missing by the caller, never filled in).
+    auto partial = good;
+    partial["results"][0]["values"].erase(1);
+    partial["results"][2].erase("values");
+    const auto pr = decode(partial);
+    CHECK(pr[0].values.size() == 2);
+    CHECK(pr[2].ok);
+    CHECK(pr[2].values.empty());
+
+    const auto rejects = [&](const json& bad) { CHECK_THROWS_AS(decode(bad), CalculatorError); };
+    json b = good;
+    b["results"][0]["values"][0]["year"] = 1;
+    rejects(b);                                              // year not requested
+    b = good;
+    b["results"][0]["values"][0]["parameter"] = "lgd_s2";
+    rejects(b);                                              // parameter not requested
+    b = good;
+    b["results"][0]["values"][1] = b["results"][0]["values"][0];
+    rejects(b);                                              // returned twice
+    b = good;
+    b["results"][0]["values"][0]["value"] = "1.000000001";
+    rejects(b);                                              // outside [0, 1]
+    b = good;
+    b["results"][0]["values"][0]["value"] = 0.01;
+    rejects(b);                                              // JSON number
+    b = good;
+    b["results"][0]["values"][0]["source"] = "guess";
+    rejects(b);
+    b = good;
+    b["results"][0]["values"] = "none";
+    rejects(b);
+    b = good;
+    b["results"].erase(2);
+    rejects(b);                                              // one result per record
+    b = good;
+    std::swap(b["results"][0], b["results"][2]);
+    rejects(b);                                              // in order
+    b = good;
+    b["meta"]["calculator"]["version"] = "2.0";
+    rejects(b);
+    b = good;
+    b["meta"]["paramSet"] = "OTHER";
+    rejects(b);
+}
+
+TEST_CASE("client: parameters are batched, retried, sent as jobs and checked against the capabilities") {
+    std::vector<ParameterRecord> recs;
+    for (int i = 0; i < 10; ++i) recs.push_back(param_record("E" + std::to_string(i) + (i == 4 ? "-R" : ""), i % 2 ? "stage2" : "stage1"));
+    const auto sp = spec();
+    Stub stub;
+    stub.fail_first = 1;   // one 503 per key
+    {
+        Client client(fast_options(), [&] { return std::make_unique<StubTransport>(stub); });
+        client.connect("parameters-credit");
+        const auto res = client.parameters(sp, param_context(), recs);
+        REQUIRE(res.size() == 10);
+        for (std::size_t i = 0; i < 10; ++i) {
+            CHECK(res[i].record_id == recs[i].record_id);
+            CHECK(res[i].ok == (i != 4));
+        }
+        CHECK(res[3].values[0].value == 20'000'000);   // stage2
+        CHECK(client.stats().batches == 4);             // sync limit 3: 3+3+2+2
+        CHECK(client.stats().retries == 4);
+        std::set<std::string> keys;
+        for (const auto& [path, key] : stub.calls) if (path == "/v1/parameters/credit") keys.insert(key);
+        CHECK(keys.size() == 4);
+    }
+    // Batches above the sync limit go through /v1/jobs with calculation parameters-credit.
+    Stub jobs;
+    auto opt = fast_options();
+    opt.max_batch = 10;
+    Client jc(opt, [&] { return std::make_unique<StubTransport>(jobs); });
+    jc.connect("parameters-credit");
+    const auto jres = jc.parameters(sp, param_context(), recs);
+    CHECK(jc.stats().jobs == 1);
+    CHECK(jres[9].values[2].value == 60'000'000);
+    // A calculator without parameters-credit fails fast.
+    Stub no_params;
+    no_params.calculations = {"irb"};
+    Client nc(fast_options(), [&] { return std::make_unique<StubTransport>(no_params); });
+    CHECK_THROWS_WITH_AS(nc.connect("parameters-credit"), doctest::Contains("does not support the calculation parameters-credit"),
+                         CalculatorError);
+    Client irb_only(fast_options(), [&] { return std::make_unique<StubTransport>(no_params); });
+    irb_only.connect("irb");
+    CHECK_THROWS_AS(irb_only.parameters(sp, param_context(), recs), CalculatorError);
+    CHECK_THROWS_AS(jc.parameters(spec({}), param_context(), recs), CalculatorError);   // nothing requested
+}
+
+TEST_CASE("client: parameter responses replay from the cache when the calculator is down") {
+    const fs::path dir = fs::temp_directory_path() / ("sora_calc_params_" + std::to_string(std::random_device{}()));
+    fs::remove_all(dir);
+    auto opt = fast_options();
+    opt.cache_dir = dir;
+    opt.max_attempts = 2;
+    std::vector<ParameterRecord> recs;
+    for (int i = 0; i < 7; ++i) recs.push_back(param_record("E" + std::to_string(i)));
+    Stub stub;
+    std::vector<ParameterResult> first;
+    {
+        Client c(opt, [&] { return std::make_unique<StubTransport>(stub); });
+        c.connect("parameters-credit");
+        first = c.parameters(spec(), param_context(), recs);
+    }
+    CHECK(fs::is_directory(dir / "stub_1.0" / "parameters-credit"));
+    stub.down = true;
+    Client offline(opt, [&] { return std::make_unique<StubTransport>(stub); });
+    offline.connect("parameters-credit");
+    CHECK(offline.stats().offline);
+    const auto again = offline.parameters(spec(), param_context(), recs);
+    CHECK(offline.stats().cache_hits == offline.stats().batches);
+    for (std::size_t i = 0; i < recs.size(); ++i) {
+        REQUIRE(again[i].values.size() == first[i].values.size());
+        for (std::size_t k = 0; k < again[i].values.size(); ++k) CHECK(again[i].values[k].value == first[i].values[k].value);
+    }
+    // Another parameter list is another request: a cache miss, an error offline.
+    CHECK_THROWS_WITH_AS(offline.parameters(spec({"pd12m_s1"}), param_context(), recs), doctest::Contains("not in the replay cache"),
+                         CalculatorError);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("calculator parameter lists") {
+    CHECK(parse_calculator_parameters("pd12m_s1, lgd_s1,ccf") == std::vector<std::string>{"pd12m_s1", "lgd_s1", "ccf"});
+    const auto all = parse_calculator_parameters("all");
+    REQUIRE(all.size() == kCalculatorParamCount);
+    CHECK(all.front() == "pd12m_s1");
+    CHECK(all.back() == "lgd_reg");
+    CHECK_THROWS_WITH_AS(parse_calculator_parameters("pd12m_s1,pd_lifetime"), doctest::Contains("unknown parameter 'pd_lifetime'"), Error);
+    CHECK_THROWS_WITH_AS(parse_calculator_parameters("ccf,ccf"), doctest::Contains("given twice"), Error);
+    CHECK_THROWS_AS(parse_calculator_parameters(""), Error);
+    CHECK_THROWS_AS(parse_calculator_parameters("pd12m_s1,"), Error);
+}
+
+TEST_CASE("calculator values fill only the fields an exposure row does not supply") {
+    ExternalParameters ext;
+    CHECK(ext.empty());
+    OptParams file;
+    file.v[0] = 0.5;   // pd12m_s1, as if from an exposure row of the parameter file
+    CHECK(ext.fill_exposure(3, file) == 1U);
+    OptParams calc;
+    calc.v[0] = 0.01;   // pd12m_s1: the exposure already has it
+    calc.v[6] = 0.2;    // lgd_s1
+    CHECK(ext.fill_exposure(3, calc) == (1U << 6));
+    Params p{};
+    CHECK(ext.apply_exposure(3, {0, 0}, p) == 2);
+    CHECK(p.pd12m_s1 == 0.5);
+    CHECK(p.lgd_s1 == 0.2);
+    CHECK(ext.has_exposure(3));
+    CHECK_FALSE(ext.has_exposure(4));
+    CHECK(ext.fill_exposure(4, OptParams{}) == 0U);
+    CHECK_FALSE(ext.has_exposure(4));
+    ExternalParameters extras_only;
+    extras_only.set_exposure_extras(7, {0.4, std::nullopt, std::nullopt});
+    CHECK_FALSE(extras_only.empty());
+    CHECK(extras_only.exposure_extras().at(7).ccf == 0.4);
 }

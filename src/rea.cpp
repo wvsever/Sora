@@ -123,6 +123,15 @@ public:
                        }
                    });
     }
+    // Starting-point pd_reg/lgd_reg of an exposure from the calculator (/v1/parameters/credit): only stored where
+    // the source has no exposure-level value, so fields the loaded rows already set stay.
+    void add_exposure(std::size_t exposure, std::optional<Nano> pd, std::optional<Nano> lgd) {
+        if (!pd && !lgd) return;
+        auto& v = by_exposure_[exposure][0];
+        if (!v.pd) v.pd = pd;
+        if (!v.lgd) v.lgd = lgd;
+        ++rows_;
+    }
     bool empty() const { return rows_ == 0; }
     // Most specific value per field: exposure, then segment levels (specific to general). A projection point
     // without a value falls back to the starting point (regulatory parameters are through the cycle).
@@ -167,6 +176,10 @@ ReaResult project_rea(Duck& duck, const ReaInputs& in, const calc::ClientOptions
     const auto extras = load_counterparty_extras(duck, d);
     RegParams reg;
     reg.load(duck, in.parameter_source, d);
+    if (in.external)
+        for (const auto& [i, x] : in.external->exposure_extras())
+            reg.add_exposure(i, x.pd_reg ? std::optional<Nano>(calc::to_nano(*x.pd_reg)) : std::nullopt,
+                             x.lgd_reg ? std::optional<Nano>(calc::to_nano(*x.lgd_reg)) : std::nullopt);
 
     // Exposures sent, in exposure order (the same records in every call). Records are generated per batch from
     // this list and released once their results are aggregated, so memory does not grow with 7 x N records.

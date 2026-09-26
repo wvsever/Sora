@@ -50,6 +50,10 @@ build/release/sora run build/sim/20260630 --scenario tests/scenarios/test_eba202
     --calculator http://127.0.0.1:8080 --calculator-cache build/calculator-cache
 #   TLS: --calculator-ca <file>, mTLS: --calculator-cert <file> --calculator-key <file>,
 #   bearer token from $SORA_CALCULATOR_TOKEN (never on the command line)
+#   --calculator-parameters all (or e.g. pd12m_s1,lgd_s1,ccf): starting-point credit parameters per exposure from
+#   POST /v1/parameters/credit as a customer parameter source, below the --parameters exposure rows; adds
+#   calculator_parameters.csv, exposure rows (source calculator) in parameters.csv and summary.json
+#   "calculator_parameters". --calculator-rea off skips the IRB REA (parameters only)
 #   --workers N engine threads (default: all cores; results are identical for any N), --threads N DuckDB threads
 
 # Scaling benchmarks (plans/07_benchmarking.md): 10x/100x replicas of the reference SIM, results in benchmarks/RESULTS.md
@@ -147,7 +151,7 @@ The primary target is the EBA EU-wide stress test credit-risk methodology: the 2
 
 - **Mapping with SQL on exports:** customers export source tables to files. Mapping SQL, written by hand or with an AI agent, runs on those files with embedded DuckDB. There is no database access.
 - **MCP server (`sora-mcp`):** lets an agent read the model description, profile sources, test mappings, validate, reconcile, run, explain and compare results (`describe`, `profile_source`, `test_mapping`, `validate_sim`, `reconcile`, `run_scenario`, `explain_result`, `diff_runs`). It runs locally over stdio (`pip install -e "python[mcp]"`), reads only under configured roots, returns metadata only by default (raw values need a customer setting and are capped), runs the engine without a shell, audits every call, and requires human approval for production mappings (`status: production` in `mapping.yaml` or a production path; `sora-mcp approve`). The same explanations are available as `sora-tools explain` and `sora-tools diff-runs`. See `python/README.md`.
-- **Regulatory calculator over REST:** PD/LGD models, IRB, SA and the output floor are computed by an external calculator implementing `schemas/calculator/openapi.yaml`. A stub server (`sora-tools calculator-stub`) and contract tests are used for testing. `sora run --calculator <url>` projects IRB REA and expected loss per segment, scenario and year (`rea.csv`), with batching, retries, idempotency keys and an on-disk replay cache. See `plans/11_integrations.md`.
+- **Regulatory calculator over REST:** PD/LGD models, IRB, SA and the output floor are computed by an external calculator implementing `schemas/calculator/openapi.yaml`. A stub server (`sora-tools calculator-stub`) and contract tests are used for testing. `sora run --calculator <url>` projects IRB REA and expected loss per segment, scenario and year (`rea.csv`), with batching, retries, idempotency keys and an on-disk replay cache. `--calculator-parameters <list>` takes the starting-point PD / TR / LGD / LR, CCF and regulatory PD/LGD per exposure from the calculator's `/v1/parameters/credit` (missing values are counted, never filled in). See `plans/11_integrations.md`.
 
 ## Example scenario
 

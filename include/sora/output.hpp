@@ -3,6 +3,7 @@
 
 #include <filesystem>
 
+#include "sora/credit_parameters.hpp"
 #include "sora/off_balance.hpp"
 #include "sora/projection.hpp"
 #include "sora/rea.hpp"
@@ -20,6 +21,9 @@ struct RunOutput {
     const Diagnostics& diagnostics;
     const ReaResult* rea = nullptr;   // IRB REA from the calculator (--calculator): rea.csv, summary "rea"
     const OffBalanceResult* off_balance = nullptr;   // off_balance.csv, cr_scen_off_bs.csv, summary "off_balance"
+    // Credit parameters from the calculator (--calculator-parameters): exposure rows in parameters.csv,
+    // calculator_parameters.csv, summary "calculator_parameters"
+    const CreditParameterResult* calculator_parameters = nullptr;
 };
 
 void write_outputs(const RunOutput& run, const std::filesystem::path& dir);

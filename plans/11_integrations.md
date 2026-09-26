@@ -133,7 +133,7 @@ Contract rules (normative, in the spec):
 
 `include/sora/calculator.hpp`, `src/calculator.cpp`. HTTP with cpp-httplib, JSON with nlohmann/json (both vendored in `third_party/`), TLS with OpenSSL.
 
-- **Capabilities first.** `GET /v1/capabilities` at run start, retried like a batch (below). The run fails before any record is sent if the calculator does not list the calculation (`irb`) or the parameter set (`EU_CRR3_2025-01-01`). An unreachable calculator fails after all attempts, unless the replay cache holds its capabilities (see below).
+- **Capabilities first.** `GET /v1/capabilities` at run start, retried like a batch (below). The run fails before any record is sent if the calculator does not list the calculation (`irb`, or `parameters-credit` for `--calculator-parameters`) or the parameter set (`EU_CRR3_2025-01-01`). An unreachable calculator fails after all attempts, unless the replay cache holds its capabilities (see below).
 - **Batching.** Each call (one scenario point) is split into balanced batches of at most `maxRecordsPerSyncRequest` records, sent to the synchronous endpoint. `--calculator-batch <n>` sets a larger batch size (capped by `maxRecordsPerRequest`); batches above the sync limit are sent as jobs (`POST /v1/jobs`, then `GET /v1/jobs/{id}` polled with a growing interval, then `GET /v1/jobs/{id}/result`; job timeout 1 hour).
 - **Parallelism.** All batches of all scenario points share one pool of `maxConcurrentRequests` worker threads (1 if not stated), each with its own connection. Results are delivered in batch order, so output does not depend on timing.
 - **Streaming.** Records are generated per batch from the exposure list, encoded once and released when the response is decoded; response results are decoded while parsing (no full JSON tree). At most 2 × the worker threads batches are in memory, so memory does not grow with records × scenario points (1x reference with the stub: peak RSS about 190 MB, was 360–375 MB).
@@ -142,8 +142,9 @@ Contract rules (normative, in the spec):
 - **Exact decimals.** Sora holds amounts as cents and probabilities as integers scaled by 10^9, and writes them as decimal strings: amounts with 2 decimals, probabilities with 9, maturity in years with 4, turnover in EUR million with 8 (exact, from cents). Responses are parsed from the decimal strings straight into scaled integers (half-to-even rounding beyond the target scale), never through a binary float. REA and EL are summed in cents, and `rea.csv` prints those sums.
 - **Canonical JSON.** Object keys are sorted and there is no whitespace, so the same records always give the same bytes, key and fingerprint. `context.inputFingerprint` is `sha256:<hex>` of the records array. The body is written in one pass (the same bytes as nlohmann/json's `dump()`, so the keys and cache entries of earlier versions stay valid); the key is hashed from that body around the `requestId` member, which is then filled in. Strings are escaped by the shared escaper `include/sora/json_text.hpp` (also used for `summary.json` and `diagnostics.json`).
 - **Response validation.** `meta.requestId` echoes the key. `meta.calculator` name and version equal the capabilities, and `meta.paramSet` equals the request's. There is exactly one result per record, with `recordId` echoed in request order. `status` is `ok` or `rejected`. For `ok`: `rea` and `expectedLoss` are present, match the Decimal pattern and are not negative; `riskWeight` is not negative; `pdApplied`/`lgdApplied` are in [0, 1]. Any violation fails the run, and nothing is cached.
-- **Replay cache** (`--calculator-cache <dir>`). Validated responses are stored as `<dir>/<calculator name>_<version>/irb/<sha256 of request body>.json` (written to a temporary file, then renamed). Capabilities are stored under `<dir>/capabilities/`, keyed by URL. A rerun with identical inputs and the same calculator version reads every batch from the cache. If every attempt at the capabilities fails (no response or a retryable status), the run continues offline from the cached capabilities, and a batch missing from the cache fails the run. A new calculator version, or any changed input, is a cache miss. The cache is best effort: an entry that cannot be written (read-only or full disk) is counted and reported (`CALC-004`), and the run continues.
+- **Replay cache** (`--calculator-cache <dir>`). Validated responses are stored as `<dir>/<calculator name>_<version>/<calculation>/<sha256 of request body>.json` (`irb`, `parameters-credit`) (written to a temporary file, then renamed). Capabilities are stored under `<dir>/capabilities/`, keyed by URL. A rerun with identical inputs and the same calculator version reads every batch from the cache. If every attempt at the capabilities fails (no response or a retryable status), the run continues offline from the cached capabilities, and a batch missing from the cache fails the run. A new calculator version, or any changed input, is a cache miss. The cache is best effort: an entry that cannot be written (read-only or full disk) is counted and reported (`CALC-004`), and the run continues.
 - **Security.** `https://` URLs verify the server certificate against the system store or `--calculator-ca <file>`. mTLS uses `--calculator-cert <file> --calculator-key <file>`. An OAuth2 bearer token is read from the `SORA_CALCULATOR_TOKEN` environment variable only, never from the command line. Plain `http://` is for the local stub: with a token set, the run refuses an `http://` URL unless the host is loopback (`localhost`, 127.0.0.0/8, `::1`). The `--calculator*` options are accepted by `sora run` only.
+- **Calculations.** IRB and credit parameters share the client (`Client::run_stream`: batching, worker pool, bounded window, retries, jobs with `calculation` `irb` / `parameters-credit`, validation, replay cache); only the encoding and the response decoder differ. Parameter requests are canonical JSON (nlohmann `dump()`, sorted keys) with the same key and fingerprint rules.
 - **Diagnostics.** `CALC-000` (info) summarises batches, HTTP requests, retries, jobs and cache hits. `CALC-001` (info): offline replay, with the last capabilities error. `CALC-004` (warning): replay cache entries not written, with the first error. `CALC-002` (warning): PiT proxy used (below). `CALC-003` (info): exposures not sent (POCI, zero EAD). `CALC-010` (warning): records rejected, with count and examples. Rejected records are left out of `rea.csv` amounts but counted in `records_rejected`, and the run continues. `CALC-011` (error): every record rejected. The run then stops without writing results.
 
 ### IRB REA projection (`sora run --calculator <url>`)
@@ -177,6 +178,46 @@ Contract rules (normative, in the spec):
 
 Specialised lending, equity, purchased receivables, SA exposures and the output floor are not mapped yet.
 
+### Credit parameters (`sora run --calculator <url> --calculator-parameters <list|all>`)
+
+`src/credit_parameters.cpp`. The customer's parameter models as a run-time source of starting-point parameters
+(`plans/09_risk_parameters.md`). It runs before the calibration and projection and feeds the customer-parameter path.
+
+- **Options.** `--calculator-parameters` takes a comma-separated list of `pd12m_s1, pd12m_s2, tr1_2, tr2_1, tr3_1,
+  tr3_2, lgd_s1, lgd_s2, lgd_s3, lrlt_s2, ccf, pd_reg, lgd_reg`, or `all` (other contract names such as
+  `pd_lifetime` are not used by the engine and are refused). The IRB REA still runs with `--calculator`;
+  `--calculator-rea off` skips it (a calculator that offers only `parameters-credit`). Both need `--calculator`, and
+  all `--calculator*` options (TLS, mTLS, token, cache, batch size) apply to both calculations.
+- **Records.** One per exposure the run projects, in exposure order: in-scope on-balance exposures with a stage (POCI
+  included) and the off-balance items of the scenario's `off_balance` types. `recordId` = `exposure_id`, `level` =
+  `exposure`, `segment` = the segment key (on-balance), `stage`, and `attributes` named as SIM columns:
+  `country_of_risk`, `currency`, `eba_sector`, `exposure_type`, `household_purpose`, `is_cre`, `is_sme`,
+  `measurement_category` (unknown values left out). One call: scenario `actual`, projection year 0, `years = [0]`, no
+  macro path. A different parameter list is a different request (other keys, other cache entries).
+- **Validation.** On top of the envelope checks of the IRB path: every value is for a requested parameter and year,
+  at most once, a Decimal string in [0, 1] (read exactly to 9 decimals, half to even beyond), `source` is `model`,
+  `benchmark` or `override` when given. `values` may leave parameters out. Any violation fails the run.
+- **Precedence** (field by field, starting point): exposure row of the parameter source (`--parameters` or
+  `sim_risk_parameter`) > calculator > segment rows of the source > Sora's own value. The IFRS 9 fields become
+  exposure-level starting points (`ExternalParameters::fill_exposure`), projected with the segment's satellite like any
+  exposure row; `ccf` feeds the off-balance CCF (before the source's segment rows and the regulatory fallback CCF);
+  `pd_reg` / `lgd_reg` feed the IRB records (before the segment rows; they replace the PiT proxy, `CALC-002`).
+- **Never fabricated.** A rejected record, or a requested parameter without a value, leaves the field to the next
+  source. Both are counted and reported; the run stops only if every record is rejected.
+- **Outputs.** `calculator_parameters.csv` (`exposure_id, status, <requested parameters>, applied`: every value
+  received, and which were used), `parameters.csv` exposure rows (`level = exposure`, actual/0, the IFRS 9 fields taken
+  from the calculator, the others empty, `source = calculator`), and `summary.json` `calculator_parameters`
+  (calculator, version, parameter set, records ok/rejected, per parameter `received` / `applied` / `file` /
+  `missing`, values by the calculator's `source`). Without `--calculator-parameters` the outputs are unchanged.
+- **Offline / replay.** As for IRB: capabilities and batches from `--calculator-cache` when every capabilities attempt
+  fails; a batch not in the cache fails the run. A rerun with the same inputs, list and calculator version replays
+  every batch.
+- **Diagnostics.** `CALC-020` (info): calculator, batches, requests, retries, jobs, cache hits, values received and
+  applied. `CALC-021` (info): offline replay. `CALC-022` (warning): requested values not returned, per parameter.
+  `CALC-023` (info): values not used because the source has an exposure row with the field. `CALC-024` (warning):
+  replay cache entries not written. `CALC-025` (warning): records rejected, with examples. `CALC-026` (error): every
+  record rejected; no results written.
+
 ### What stays inside Sora
 
 - The IFRS 9 impairment projection (EBA Boxes 3–9). This is the core of the product.
@@ -197,7 +238,7 @@ Also delivered:
 
 - Contract tests: the stub and any real calculator can be run against `python/tests/contract/` (`SORA_CALCULATOR_URL=… pytest python/tests/contract -m "not stub_only"`), which checks the OpenAPI schema, idempotency, determinism and record echo. You can use it to verify your calculator adaptation.
 - An in-memory stub in the C++ test suite (`tests/cpp/test_calculator.cpp`), so unit tests need no network: batching, retries, jobs, replay cache, validation.
-- Engine integration tests against the stub in all three modes (`python/tests/test_calculator_engine.py`, ctest `sora_calculator`). `--reject <regex>` (or `start_background(reject=...)`) makes the stub reject records whose `recordId` matches, e.g. `7\|adverse\|3$`.
+- Engine integration tests against the stub in all three modes (`python/tests/test_calculator_engine.py` for IRB, `python/tests/test_calculator_parameters_engine.py` for credit parameters; ctest `sora_calculator`). `--reject <regex>` (or `start_background(reject=...)`) makes the stub reject records whose `recordId` matches, e.g. `7\|adverse\|3$`; `--omit lgd_s2,ccf` (`omit=`) leaves parameters out of every `/v1/parameters/credit` result. The stub's parameters are deterministic: `fixed` returns a base value per parameter, `formula` scales PDs and transition rates by the record's stage, `eba_sector` and `is_sme`.
 
 ## 3. Phasing
 
@@ -205,6 +246,6 @@ Also delivered:
 |---|---|
 | 0–1 | OpenAPI contract v0.1, stub server (`fixed`, `faults`), contract tests |
 | 1–3 | SIM schema v1, export spec, reference mapping, `sora-tools map` / `sora-tools validate`; `Impairment` internal |
-| 4–5 | REST client (batching, retries, replay cache) and IRB REA projection (done); `/v1/parameters/credit` integration; stub `formula` mode |
+| 4–5 | REST client (batching, retries, replay cache) and IRB REA projection (done); `/v1/parameters/credit` integration (done: `--calculator-parameters`); stub `formula` mode (done) |
 | 5b | `sora-mcp` (describe, profile_source, test_mapping, validate_sim, reconcile, run_scenario, explain_result, diff_runs): done |
 | 6–7 | IRB, SA and output floor through the calculator; Parquet bodies |
