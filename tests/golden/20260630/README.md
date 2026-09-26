@@ -14,8 +14,9 @@ Expected outputs for the C++ engine, produced by the independent reference imple
 | `collateral.csv` | Static-balance-sheet LTV per segment, scenario (actual year 0, baseline and adverse 1..3) and t0 stage: secured exposure, real-estate collateral value under the property price paths, LTV (`plans/03_scenario_engine.md`, Collateral repricing and LTV) |
 | `summary.json` | Totals |
 
-The results are **synthetic and not realistic** (see `tests/data/DATASET_ISSUES.md`, DS-016). They exist to
-check that the engine computes the same numbers.
+The results are **synthetic**. Since the dataset was regenerated with realistic stage transitions (DS-016 fixed,
+see `tests/data/DATASET_ISSUES.md`), the magnitudes are plausible, but they still exist to check that the engine
+computes the same numbers, not to be read as a stress-test outcome.
 
 Regenerate after an intended change, and review the diff:
 

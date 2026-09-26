@@ -32,8 +32,12 @@ def test_reference_mapping_reconciles_with_source(reference_sim, testdata):
     assert _sum(reference_sim, "sim_exposure", "loss_allowance", off_types) == src_prov
     counts = {r[0]: r[1] for r in duckdb.sql(
         f"SELECT exposure_type, count(*) FROM read_parquet('{reference_sim}/sim_exposure/**/*.parquet') GROUP BY 1").fetchall()}
-    assert counts["loan"] == 45_611
-    assert counts["loan_commitment"] + counts["financial_guarantee"] + counts["other_commitment"] == 14_782
+    # Every source contract reaches the SIM (compared with the source row counts, not a pinned number).
+    def src_rows(table):
+        return duckdb.sql(f"""SELECT count(*) FROM read_csv('{testdata}/accounting/{table}/**/*.csv',
+                              all_varchar=true, union_by_name=true, hive_partitioning=false)""").fetchone()[0]
+    assert counts["loan"] == src_rows("contract_loan")
+    assert counts["loan_commitment"] + counts["financial_guarantee"] + counts["other_commitment"] ==         src_rows("contract_commitment")
 
 
 def test_manifest_written(reference_sim):

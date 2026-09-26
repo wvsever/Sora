@@ -72,10 +72,13 @@ def test_external_starting_point_round_trip(reference_sim, tmp_path):
     assert all(r["source"] == "external" for k, r in params.items() if k[1] == "actual")
     g, a = read(GOLDEN / "projection.csv", "segment", "scenario", "year"), read(tmp_path / "out" / "projection.csv", "segment", "scenario", "year")
     for k in g:
+        # A parameter rounded to 9 decimals is off by at most 5e-10, so a money result can be off by up to
+        # 5e-10 x the segment's exposure per parameter it depends on; allow 1e-9 x exposure.
+        exposure = sum(abs(float(v)) for c, v in g[k].items() if c.startswith("exp_"))
         for c in g[k]:
             if c not in ("segment", "scenario", "year"):
                 gv, av = float(g[k][c]), float(a[k][c])
-                assert abs(gv - av) <= 0.05 + 1e-6 * abs(gv), (k, c, gv, av)
+                assert abs(gv - av) <= 0.05 + 1e-6 * abs(gv) + 1e-9 * exposure, (k, c, gv, av)
 
 
 def test_segment_hierarchy_and_projection_overrides(reference_sim, base_run, tmp_path):
@@ -114,7 +117,7 @@ def test_exposure_level_parameters(reference_sim, base_run, tmp_path):
     new = read(tmp_path / "out" / "projection.csv", "segment", "scenario", "year")
     changed = {k[0] for k in base if base[k] != new[k]}
     assert len(changed) == 1 and "HH_HOUSE" in next(iter(changed))
-    assert len(seg_rows) == 152
+    assert len(seg_rows) == len(list(csv.DictReader(open(GOLDEN / "segments.csv"))))
 
 
 def test_invalid_parameters_are_rejected(reference_sim, tmp_path):

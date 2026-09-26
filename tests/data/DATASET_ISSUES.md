@@ -12,7 +12,7 @@ Severity:
 Status: `open` until the generator is fixed. When it is, remove the workaround and mark the issue `fixed (generator vX)`.
 
 
-Statuses below were measured on a book regenerated with `tools/New-SoraDataset.ps1 -Seed 27 -Scale 1.0 -HistoryMonths 60` (generator branch `integ/sorads-gen`, Vera `feat/sorads-WIRE`). `tests/data/20260630.7z` itself is not regenerated yet, so the Sora workarounds stay until it is.
+Statuses below were measured on the regenerated dataset: `tests/data/20260630.7z` is now built with `tools/New-SoraDataset.ps1 -Seed 27 -Scale 1.0 -HistoryMonths 60 -Package` (cppbankrawaccgen `1589b14`), and `tests/golden/20260630` was regenerated from it with `tools/reference/sora_reference.py`. The mapping workarounds listed per issue remain in `mappings/cppbank/` and can be removed one by one; each is harmless on the fixed data.
 
 | ID | Severity | Area | Issue | Evidence | Sora workaround | Status |
 |---|---|---|---|---|---|---|
